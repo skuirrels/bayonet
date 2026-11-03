@@ -21,6 +21,7 @@ pub fn detect(kind: SdkKind, root: Option<&Path>) -> Vec<Sdk> {
         SdkKind::TypeScript => typescript(root),
         SdkKind::Jdk => jdk(),
         SdkKind::Maven => maven(),
+        SdkKind::Dotnet => crate::dotnet::detect(root),
     };
     if let Some(root) = root {
         pinned_first(&mut out, kind, root);
@@ -35,7 +36,7 @@ fn tool_of(kind: SdkKind) -> Option<Tool> {
         SdkKind::Go => Some(Tool::Go),
         SdkKind::Jdk => Some(Tool::Java),
         SdkKind::Maven => Some(Tool::Maven),
-        SdkKind::PackageManager | SdkKind::Rust | SdkKind::TypeScript => None,
+        SdkKind::PackageManager | SdkKind::Rust | SdkKind::TypeScript | SdkKind::Dotnet => None,
     }
 }
 

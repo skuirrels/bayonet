@@ -79,6 +79,7 @@ async fn missing_binary_is_reported_with_install_hint() {
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     };
     let (mgr, events) = manager(dir.path(), LanguageRegistry::from_configs(vec![lang("nope", "nope", server)]));
     let path = dir.path().join("a.nope");
@@ -249,6 +250,7 @@ async fn typescript_language_server_end_to_end() {
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     };
     let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![lang("typescript", "ts", server)]));
     let doc = DocId::next();
@@ -295,6 +297,7 @@ fn npm_server(tools: &Path, name: &str, bin: &str, init: Option<serde_json::Valu
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     }
 }
 
@@ -463,4 +466,104 @@ async fn angular_language_server_end_to_end() {
         assert_eq!(found, [(app_html.clone(), 0)]);
     }
     tokio::time::timeout(Duration::from_secs(10), mgr.shutdown_all()).await.unwrap();
+}
+
+/// Copies `fixtures/dotnet` without build output, so a test can restore and edit it.
+fn copy_dotnet_fixture(to: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap().flatten() {
+            let name = entry.file_name();
+            if name == "bin" || name == "obj" {
+                continue;
+            }
+            let (src, dst) = (entry.path(), to.join(&name));
+            if src.is_dir() { copy(&src, &dst) } else { std::fs::copy(&src, &dst).map(|_| ()).unwrap() }
+        }
+    }
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet"), to);
+}
+
+/// Roslyn's language server on the fixture solution. Needs the .NET 10 SDK and
+/// `roslyn-language-server` on `PATH`, or its path in `OPENIDEA_TEST_ROSLYN`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let program = root.join("src/Fixture.Cli/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &program, &LanguageId::new("csharp"), 1, &source);
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+
+    // `Greet` in `greeter.Greet(...)` (line 3) is declared on IGreeter, in another project.
+    let greet = Pos::new(3, 28);
+    let hover = retry("hover", Duration::from_secs(180), || {
+        let mgr = mgr.clone();
+        async move { mgr.hover(doc, greet, Default::default()).await.ok().flatten() }
+    })
+    .await;
+    assert!(hover.contents.value.contains("Greet"), "{}", hover.contents.value);
+    let defs = retry("definition", Duration::from_secs(60), || {
+        let mgr = mgr.clone();
+        async move { mgr.goto(doc, greet, GotoKind::Definition).await.ok().filter(|d| !d.is_empty()) }
+    })
+    .await;
+    assert_eq!(defs[0].path, root.join("src/Fixture.Core/Greeter.cs"));
+    assert_eq!(defs[0].range.start.line, 4);
+
+    // Member completion on the interface.
+    let at = Pos::new(4, 0);
+    mgr.did_change(doc, 2, &[AppliedChange { range: Range::point(at), text: "greeter.\n".into() }], &|| unreachable!());
+    retry("completion", Duration::from_secs(60), || {
+        let mgr = mgr.clone();
+        async move {
+            let list = mgr.completion(doc, Pos::new(4, 8), Some(".".into()), Default::default()).await.ok()?;
+            list.items.iter().any(|i| i.label == "Greet").then_some(())
+        }
+    })
+    .await;
+
+    // The incomplete statement is a compile error. The editor shows pushed
+    // diagnostics only (the client does not advertise pull), so wait for a push.
+    let diagnostics = retry("diagnostics", Duration::from_secs(60), || {
+        let pushed = events.lock().iter().rev().find_map(|e| match e {
+            IdeEvent::Diagnostics { path, items, .. } if path.0 == program && !items.is_empty() => Some(items.clone()),
+            _ => None,
+        });
+        // The first result can predate the edit; wait for the edited line's error.
+        async move { pushed.filter(|items| items.iter().any(|d| d.range.start.line == 4)) }
+    })
+    .await;
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.severity == ide_core::Severity::Error && d.code.as_deref().is_some_and(|c| c.starts_with("CS"))),
+        "{diagnostics:?}"
+    );
+
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }

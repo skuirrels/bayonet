@@ -211,6 +211,7 @@ fn server_cfg(name: &str) -> LanguageServerConfig {
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     }
 }
 
@@ -2323,4 +2324,53 @@ async fn external_projects_are_capability_gated_and_follow_lifecycle() {
         .await;
         h.mgr.shutdown_all().await;
     }
+}
+
+/// A pull-only server (`pull-diagnostics`, Roslyn): diagnostics are pulled after open,
+/// after edits and on `workspace/diagnostic/refresh`, without `diagnosticProvider`.
+#[tokio::test(flavor = "multi_thread")]
+async fn pull_only_servers_are_pulled_after_open_edits_and_refresh() {
+    let h = harness_configured("mock", "mk", &[("mock", incremental_caps())], |cfg| cfg.pull_diagnostics = true);
+    let s = h.launcher.state("mock");
+    // One error per line containing `bad`, from the text the server holds.
+    *s.responder.lock() = Some(Arc::new(|state, method, params| {
+        (method == "textDocument/diagnostic").then_some(())?;
+        let uri = params["textDocument"]["uri"].as_str()?;
+        let text = state.docs.lock().get(uri).cloned().unwrap_or_default();
+        let items: Vec<Value> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("bad"))
+            .map(|(i, _)| {
+                json!({ "range": {"start":{"line":i,"character":0},"end":{"line":i,"character":3}}, "severity": 1, "message": "bad" })
+            })
+            .collect();
+        Some(json!({ "kind": "full", "items": items }))
+    }));
+    let latest = |path: &Path| {
+        h.events.lock().iter().rev().find_map(|e| match e {
+            IdeEvent::Diagnostics { path: p, items, .. } if p.0 == path => Some(items.len()),
+            _ => None,
+        })
+    };
+
+    let (doc, path) = h.open("a.mk", "ok\nbad\n");
+    eventually(|| latest(&path) == Some(1)).await;
+
+    h.mgr.did_change(doc, 2, &[change(rng(0, 0, 0, 2), "bad")], &|| unreachable!());
+    eventually(|| latest(&path) == Some(2)).await;
+
+    let pulls = s.requested("textDocument/diagnostic").len();
+    let _: Value = s.peer().request("workspace/diagnostic/refresh", Value::Null, None).await.unwrap();
+    eventually(|| s.requested("textDocument/diagnostic").len() > pulls).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn servers_that_push_are_never_pulled() {
+    let h = harness(&[("mock", incremental_caps())]);
+    let (doc, _) = h.open("a.mk", "bad\n");
+    h.wait_status("mock", ServerStatus::Ready).await;
+    h.mgr.did_change(doc, 2, &[change(rng(0, 0, 0, 0), "x")], &|| unreachable!());
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(h.launcher.state("mock").requested("textDocument/diagnostic").is_empty());
 }

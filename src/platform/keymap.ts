@@ -19,6 +19,8 @@ import { eclipseMacos } from "./keymaps/eclipse-macos";
 import { eclipseWindows } from "./keymaps/eclipse-windows";
 import { vscodeMacos } from "./keymaps/vscode-macos";
 import { vscodeWindows } from "./keymaps/vscode-windows";
+import { visualStudioMacos } from "./keymaps/visualstudio-macos";
+import { visualStudioWindows } from "./keymaps/visualstudio-windows";
 import { usePlatform } from "./platformInfo";
 import { isImeKey } from "./ime";
 
@@ -27,12 +29,14 @@ export type Keymap = Record<string, string[]>;
 /** macOS spells the primary modifier ⌘ (`Meta`); Windows and Linux use Ctrl. */
 export const isMacHost = () => usePlatform.getState().os === "macos";
 
-/** The preset used when settings name none (or an unknown one): IDEA's keymap for this OS. */
+/** The preset used when settings name none (or an unknown one): Visual Studio's keymap for this OS. */
 export function defaultPreset(): string {
-  return isMacHost() ? "intellij-macos" : "intellij-windows";
+  return isMacHost() ? "visualstudio-macos" : "visualstudio-windows";
 }
 
 export const PRESETS: Record<string, Keymap> = {
+  "visualstudio-windows": visualStudioWindows,
+  "visualstudio-macos": visualStudioMacos,
   "intellij-macos": intellijMacos,
   "intellij-windows": intellijWindows,
   "vscode-macos": vscodeMacos,
@@ -43,6 +47,8 @@ export const PRESETS: Record<string, Keymap> = {
 
 /** Display names of the presets, in menu order. */
 export const PRESET_TITLES: Record<string, string> = {
+  "visualstudio-windows": "Visual Studio",
+  "visualstudio-macos": "Visual Studio (macOS)",
   "intellij-macos": "macOS",
   "intellij-windows": "Windows",
   "vscode-macos": "VS Code (macOS)",

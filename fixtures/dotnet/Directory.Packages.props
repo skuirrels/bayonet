@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.14" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="NUnit" Version="5.0.0" />
+    <PackageVersion Include="NUnit.Analyzers" Version="4.15.0" />
+    <PackageVersion Include="NUnit3TestAdapter" Version="6.3.1" />
+    <PackageVersion Include="MSTest" Version="4.5.2" />
+  </ItemGroup>
+</Project>

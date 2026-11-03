@@ -2,7 +2,7 @@
 //! the host, so the document layer stays authoritative), its diagnostics are
 //! collected and the file is closed again.
 //!
-//! Servers that advertise `diagnosticProvider` are asked directly
+//! Servers that advertise `diagnosticProvider`, or are marked `pull-diagnostics`, are asked directly
 //! (`textDocument/diagnostic`). The others are waited on: the first
 //! `publishDiagnostics` for the file after it was opened, then a short quiet
 //! period so follow-up publishes (syntax first, semantics later) are caught.
@@ -161,7 +161,8 @@ impl LspManager {
             return Ok(None);
         }
         let per_server = targets.iter().map(|t| async {
-            let raw = if t.caps().has("diagnosticProvider") {
+            let pulls = t.caps().has("diagnosticProvider") || t.server.effective_config().pull_diagnostics;
+            let raw = if pulls {
                 self.pull_diagnostics(t, &snap.uri, cancel, opts.timeout).await
             } else {
                 wait_for_publish(&t.server, &snap.path, since, opts, cancel).await
@@ -188,7 +189,7 @@ impl LspManager {
         }
     }
 
-    async fn pull_diagnostics(
+    pub(crate) async fn pull_diagnostics(
         &self,
         t: &Target,
         uri: &lsp::Uri,

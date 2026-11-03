@@ -63,6 +63,14 @@ pub(crate) fn rust_bin(root: &Path, s: &Settings) -> Option<(PathBuf, Option<Str
     Some((bin, toolchain))
 }
 
+/// Language servers that run on .NET and load projects through its SDK.
+const DOTNET_SERVERS: [&str; 3] = ["roslyn-language-server", "csharp-ls", "fsautocomplete"];
+
+/// The configured .NET install directory.
+pub(crate) fn dotnet_root(root: &Path, s: &Settings) -> Option<PathBuf> {
+    setting_path(root, &s.languages.dotnet.root)
+}
+
 /// The configured GOROOT, else the Go the project pins for mise / asdf.
 pub(crate) fn goroot(root: &Path, s: &Settings) -> Option<PathBuf> {
     setting_path(root, &s.languages.go.goroot)
@@ -409,6 +417,20 @@ pub fn configure_server(cfg: &mut LanguageServerConfig, root: &Path, server_root
         }
     }
 
+    if DOTNET_SERVERS.contains(&name) {
+        if let Some(dir) = dotnet_root(root, s) {
+            path_dirs.push(dir.clone());
+            cfg.env.insert("DOTNET_ROOT".into(), dir.to_string_lossy().into_owned());
+        }
+        // The SDK commands these servers run (restore, MSBuild evaluation) stay quiet
+        // and send nothing home unless the user's own environment says otherwise.
+        for key in ["DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO"] {
+            if std::env::var_os(key).is_none() {
+                cfg.env.entry(key.into()).or_insert_with(|| "1".into());
+            }
+        }
+    }
+
     if name == "jdtls" {
         // The jdtls launcher forwards `--jvm-arg=` values to the JVM it starts.
         let args = s.languages.java.jdtls_vm_args.split_whitespace().map(|a| format!("--jvm-arg={a}"));
@@ -505,6 +527,7 @@ fn custom_server(name: &str, ls: &LanguageServerSettings) -> LanguageServerConfi
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     }
 }
 

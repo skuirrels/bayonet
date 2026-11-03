@@ -158,9 +158,9 @@ impl Default for Settings {
     }
 }
 
-/// IDEA's keymap for the OS (`src/platform/keymaps/`).
+/// Visual Studio's keymap for the OS (`src/platform/keymaps/`).
 fn default_keymap() -> &'static str {
-    if cfg!(target_os = "macos") { "intellij-macos" } else { "intellij-windows" }
+    if cfg!(target_os = "macos") { "visualstudio-macos" } else { "visualstudio-windows" }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
@@ -498,6 +498,15 @@ pub struct LanguagesSettings {
     pub go: GoSettings,
     pub typescript: TypeScriptSettings,
     pub java: JavaSettings,
+    pub dotnet: DotnetSettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DotnetSettings {
+    /// .NET install directory (`DOTNET_ROOT`) for language servers and terminals;
+    /// empty = the `dotnet` on `PATH`. The SDK within it comes from `global.json`.
+    pub root: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]

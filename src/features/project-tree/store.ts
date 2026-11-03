@@ -62,9 +62,10 @@ function storedOptions(): ViewOptions {
 }
 
 /** IDEA's Project view panes ("Project ▾" in the tool window header). */
-export type ViewMode = "project" | "projectFiles" | "openFiles" | "changedFiles" | "scratches";
+export type ViewMode = "solution" | "project" | "projectFiles" | "openFiles" | "changedFiles" | "scratches";
 
 export const VIEW_MODES: ReadonlyArray<[ViewMode, string]> = [
+  ["solution", "Solution"],
   ["project", "Project"],
   ["projectFiles", "Project Files"],
   ["openFiles", "Open Files"],
@@ -151,6 +152,22 @@ function readMode(): ViewMode {
   return VIEW_MODES.find(([id]) => id === m)?.[0] ?? "project";
 }
 
+/**
+ * Switches to `mode` when the user has never chosen a pane (a .NET solution
+ * opens in "Solution"); not remembered, so other projects keep the default.
+ */
+export function suggestViewMode(mode: ViewMode) {
+  if (readJson<string>(MODE_KEY) !== null || get().mode === mode) return;
+  const s = get();
+  modeExpanded.set(s.mode, s.expanded);
+  set({ mode, expanded: modeExpanded.get(mode) ?? initialExpanded(s.root, mode), selected: new Set(), lead: null });
+}
+
+/** Contributed roots of the Solution pane. */
+const solutionRoots = (roots: readonly ProjectViewRootContribution[]) => roots.filter((r) => r.scope === "solution");
+/** Contributed roots of every other pane. */
+const otherRoots = (roots: readonly ProjectViewRootContribution[]) => roots.filter((r) => r.scope !== "solution");
+
 const get = () => useProjectTree.getState();
 const set = (patch: Partial<ProjectTreeState>) => useProjectTree.setState(patch);
 
@@ -193,7 +210,9 @@ export function selectModel(s: ProjectTreeState): TreeModel {
   const placeholder: Placeholder | null =
     s.editing?.kind === "new" ? { parent: s.editing.parent, kind: s.editing.nodeKind } : null;
   const extras = useProjectViewRoots.getState().roots;
-  const contributed = projectViewRoots(extras);
+  const all = projectViewRoots(extras);
+  const contributed = otherRoots(all);
+  const solution = solutionRoots(all);
   const memberRoots = s.members?.map((path) => ({
     path,
     label: path.slice(path.lastIndexOf("/") + 1),
@@ -207,6 +226,9 @@ export function selectModel(s: ProjectTreeState): TreeModel {
   let model = EMPTY_MODEL;
   if (s.root) {
     if (s.mode === "projectFiles") model = project();
+    // Without a solution the pane shows the project, so it is never empty.
+    else if (s.mode === "solution" && solution.length)
+      model = withExtraRoots(EMPTY_MODEL, solution, s.listings, s.options, placeholder);
     else if (s.mode === "scratches")
       model = withExtraRoots(
         EMPTY_MODEL,
@@ -281,6 +303,10 @@ const autoExpanded = new Set<string>();
 /** "Project" restores the persisted expansion; other panes start with their roots open. */
 function initialExpanded(root: string | null, mode: ViewMode, members = get().members): Set<string> {
   if (!root || isFilteredMode(mode)) return new Set();
+  if (mode === "solution") {
+    const groups = solutionRoots(projectViewRoots(useProjectViewRoots.getState().roots));
+    if (groups.length) return new Set(groups.map((r) => `${GROUP_PREFIX}${r.id}`));
+  }
   if (mode === "scratches")
     return new Set(
       projectViewRoots(useProjectViewRoots.getState().roots).flatMap((r) =>
@@ -494,7 +520,7 @@ export function revealPath(path: string, focus = false) {
 
 /** The contributed folder (scratches, a library root…) containing `path`, if any. */
 export function extraRootOf(path: string): string | null {
-  for (const r of extraFolders(projectViewRoots(useProjectViewRoots.getState().roots)))
+  for (const r of extraFolders(otherRoots(projectViewRoots(useProjectViewRoots.getState().roots))))
     if (r.path !== undefined && isSameOrInside(path, r.path)) return r.path;
   return null;
 }
@@ -520,7 +546,7 @@ export function modeShows(path: string): boolean {
 /** Whether `path` lies in read-only library sources. */
 export function isReadOnlyPath(path: string): boolean {
   if (isGroupKey(path) || isLibKey(path)) return true;
-  return extraFolders(projectViewRoots(useProjectViewRoots.getState().roots)).some(
+  return extraFolders(otherRoots(projectViewRoots(useProjectViewRoots.getState().roots))).some(
     (r) => r.readOnly && r.path !== undefined && isSameOrInside(path, r.path),
   );
 }

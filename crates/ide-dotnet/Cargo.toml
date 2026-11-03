@@ -1,0 +1,16 @@
+[package]
+name = "ide-dotnet"
+description = ".NET solution model: .sln, .slnx and .slnf files for the Solution Explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ide-core.workspace = true
+quick-xml = "0.42"
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

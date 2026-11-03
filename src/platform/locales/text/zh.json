@@ -860,6 +860,7 @@
   "Glob patterns (e.g. **/dist, *.log) hidden from the project tree and skipped by search and indexing.": "从项目树中隐藏并在搜索和索引时跳过的 Glob 模式（例如 **/dist、*.log）。",
   "Global Encoding": "全局编码",
   "Go SDK used by gopls and the go run / test configurations.": "gopls 以及 go run / test 配置使用的 Go SDK。",
+  "DOTNET_ROOT for the C# and F# language servers. The SDK within it comes from the project's global.json.": "C# 和 F# 语言服务器使用的 DOTNET_ROOT。其中的 SDK 由项目的 global.json 决定。",
   "Go To": "转到",
   "Go to Child Commit": "转到子提交",
   "Go to Class…": "转到类…",
@@ -2298,7 +2299,7 @@
   "Warn when committing in detached HEAD or during rebase": "在分离的 HEAD 中或变基期间提交时发出警告",
   "Warning": "警告",
   "Welcome": "欢迎",
-  "Welcome to OpenIDEA": "欢迎使用 OpenIDEA",
+  "Welcome to DotnetIDEA": "欢迎使用 DotnetIDEA",
   "What's New": "新功能",
   "When caret is moved": "移动光标时",
   "When files are created": "创建文件时",
@@ -2676,7 +2677,7 @@
   "Create Git repository": "创建 Git 仓库",
   "Export Settings": "导出设置",
   "Export Settings…": "导出设置…",
-  "OpenIDEA settings": "OpenIDEA 设置",
+  "DotnetIDEA settings": "DotnetIDEA 设置",
   "Settings exported": "设置已导出",
   "Cannot export settings": "无法导出设置",
   "Import Settings": "导入设置",
@@ -5322,5 +5323,9 @@
   "No debug output available": "暂无可用的调试输出",
   "The attached process may not provide standard output to the debugger.": "附加的进程可能不会向调试器提供标准输出。",
   "Show in Debug Tool Window": "在调试工具窗口中显示",
-  "Suspended": "已暂停"
+  "Suspended": "已暂停",
+  "Solution '{name}'": "解决方案 '{name}'",
+  "{n} projects": "{n} 个项目",
+  "1 project": "1 个项目",
+  "Reload Solution": "重新加载解决方案"
 }

@@ -827,14 +827,19 @@ export interface ProjectViewRootEntry {
   detail?: string;
   /** Library sources: shown read-only (no new / rename / move / delete). */
   readOnly?: boolean;
+  /** `path` is a single file (a solution item), not a folder to list. */
+  file?: boolean;
 }
 
 export interface ProjectViewRootContribution extends ProjectViewRootEntry {
   id: string;
   /** Lower first. */
   order?: number;
-  /** Which project view mode lists it besides "Project" ("Scratches and Consoles"). */
-  scope?: "scratches";
+  /**
+   * Which project view mode lists it besides "Project" ("Scratches and Consoles");
+   * "solution" roots show only in the Solution pane.
+   */
+  scope?: "scratches" | "solution";
 }
 
 export const useProjectViewRoots = create<{ roots: Map<string, ProjectViewRootContribution> }>(() => ({

@@ -805,6 +805,10 @@ export const commands = {
 	 *  with paths mapped into this project.
 	 */
 	coverageImport: (path: IpcPath) => typedError<CoverageSuite, IdeError>(__TAURI_INVOKE("coverage_import", { path })),
+	/**  Solution files at the project root, `.slnx` before `.sln` before `.slnf`. */
+	dotnetSolutions: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_solutions")),
+	/**  The solution at `path`: its folders, projects and solution items. */
+	dotnetSolution: (path: IpcPath) => typedError<Solution, IdeError>(__TAURI_INVOKE("dotnet_solution", { path })),
 	/**  The browsers installed on this machine. */
 	webBrowsers: () => typedError<Browser[], IdeError>(__TAURI_INVOKE("web_browsers")),
 	/**  The built-in server's URL for `path` (started on first use). */
@@ -2646,6 +2650,14 @@ export type DocumentLink = {
 	tooltip: string | null,
 };
 
+export type DotnetSettings = {
+	/**
+	 *  .NET install directory (`DOTNET_ROOT`) for language servers and terminals;
+	 *  empty = the `dotnet` on `PATH`. The SDK within it comes from `global.json`.
+	 */
+	root?: string,
+};
+
 export type DuplicateGroup = {
 	tokens: number,
 	/**  Lines of the first fragment. */
@@ -3940,6 +3952,7 @@ export type LanguagesSettings = {
 	go?: GoSettings,
 	typescript?: TypeScriptSettings,
 	java?: JavaSettings,
+	dotnet?: DotnetSettings,
 };
 
 /**  What a freshly opened window should do once its frontend is up. */
@@ -4780,6 +4793,8 @@ export type ProjectInfo_Serialize = {
 	workspace?: Workspace_Serialize | null,
 };
 
+export type ProjectLanguage = "csharp" | "fsharp" | "visualbasic" | "sql" | "other";
+
 export type ProjectRoots = {
 	/**  Effective roots, sorted by path. */
 	roots: SourceFolder[],
@@ -5340,7 +5355,9 @@ export type SdkKind = "python" | "node" |
 /**  JDK homes. */
 "jdk" | 
 /**  Maven homes. */
-"maven";
+"maven" | 
+/**  .NET SDKs, one per install and version. */
+"dotnet";
 
 /**
  *  IDEA's search context: matches anywhere, only in, or outside comments and
@@ -5618,6 +5635,29 @@ export type SmartKeysSettings = {
 	/**  Backspace › Unindent: `autoindent` (proper indent position) | `nearest` indent position | `none`. */
 	backspaceUnindent?: string,
 };
+
+export type Solution = {
+	path: IpcPath,
+	/**  File name without the extension, as Visual Studio shows it. */
+	name: string,
+	format: SolutionFormat,
+	/**  Top level: folders first, then projects, then files, each by name. */
+	items: SolutionItem[],
+};
+
+export type SolutionFormat = 
+/**  The classic text format. */
+"sln" | 
+/**  The XML format (SDK 9.0.200 and later). */
+"slnx" | 
+/**  A solution filter: a subset of another solution's projects. */
+"slnf";
+
+export type SolutionItem = { kind: "folder"; name: string; items: SolutionItem[] } | { kind: "project"; name: string; path: IpcPath; language: ProjectLanguage; 
+/**  The project file is not on disk. */
+missing: boolean } | 
+/**  A solution item: a file listed in a solution folder. */
+{ kind: "file"; path: IpcPath };
 
 export type SourceFolder = {
 	/**  Project-relative, `/`-separated; `""` = the project root. */

@@ -8,6 +8,7 @@
 mod angular;
 pub mod apply;
 mod discover;
+mod dotnet;
 mod exec;
 pub mod go;
 pub mod godot;
@@ -42,6 +43,8 @@ pub enum SdkKind {
     Jdk,
     /// Maven homes.
     Maven,
+    /// .NET SDKs, one per install and version.
+    Dotnet,
 }
 
 /// One installed interpreter / toolchain.

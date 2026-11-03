@@ -101,9 +101,9 @@ describe("menu config", () => {
   it("carries keymap shortcuts as display text", () => {
     const mac = buildMenuConfig("macos");
     expect(mac.shortcuts["file.save"]).toBe("⌘S");
-    expect(mac.shortcuts["navigate.gotoFile"]).toBe("⇧⌘O");
-    expect(mac.shortcuts["navigate.searchEverywhere"]).toBe("⇧⇧");
-    expect(buildMenuConfig("windows").shortcuts["navigate.gotoFile"]).toBe("Shift+Meta+O");
+    expect(mac.shortcuts["navigate.gotoFile"]).toBe("⇧⌘T");
+    expect(mac.shortcuts["navigate.searchEverywhere"]).toBe("⌘T");
+    expect(buildMenuConfig("windows").shortcuts["navigate.gotoFile"]).toBe("Shift+Meta+T");
   });
 
   it("follows user keymap overrides", () => {
@@ -112,7 +112,7 @@ describe("menu config", () => {
   });
 
   it("sends localised labels with platform-specific variants", async () => {
-    expect(buildMenuConfig("macos").labels["menu.app.quit"]).toBe("Quit OpenIDEA");
+    expect(buildMenuConfig("macos").labels["menu.app.quit"]).toBe("Quit DotnetIDEA");
     expect(buildMenuConfig("windows").labels["menu.app.quit"]).toBe("Exit");
     expect(buildMenuConfig("windows").labels["menu.help.showLog"]).toBe("Show Log in Explorer");
     await setLocale("zh");

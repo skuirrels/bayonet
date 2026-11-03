@@ -37,6 +37,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@nextest
+      # .NET integration tests read fixtures/dotnet and call the dotnet CLI.
+      - uses: actions/setup-dotnet@v4
+        with: { global-json-file: fixtures/dotnet/global.json }
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
@@ -55,6 +58,24 @@ jobs:
       - name: Bindings are up to date
         if: runner.os == 'Linux'
         run: git diff --exit-code src/bindings.ts
+
+  # The .NET fixture solution must build and its tests pass on every OS, or the
+  # IDE's .NET tests are testing against a broken project.
+  dotnet-fixture:
+    name: .NET fixture (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { global-json-file: fixtures/dotnet/global.json }
+      - run: dotnet test --solution DotnetFixture.slnx
+        working-directory: fixtures/dotnet
+      - run: dotnet build DotnetFixture.sln
+        working-directory: fixtures/dotnet
 
   # The remote development server ships as a static Linux binary (release.yml):
   # keep that build working.

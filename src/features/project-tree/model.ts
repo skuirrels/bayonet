@@ -247,6 +247,8 @@ export interface ExtraRoot {
   children?: readonly ExtraRoot[];
   detail?: string;
   readOnly?: boolean;
+  /** `path` is a single file (a solution item), not a folder to list. */
+  file?: boolean;
 }
 
 /** Key prefix of group nodes that show no folder ("External Libraries", an SDK). */
@@ -297,6 +299,27 @@ export function withExtraRoots(
   };
   const add = (extra: ExtraRoot, parentKey: string | null, readOnly: boolean): ProjectNode | null => {
     const ro = readOnly || !!extra.readOnly;
+    if (extra.file && extra.path !== undefined) {
+      if (out.byKey.has(extra.path)) return null;
+      const node: ProjectNode = {
+        key: extra.path,
+        path: extra.path,
+        chain: [],
+        label: extra.label,
+        dir: false,
+        root: !parentKey,
+        entry: null,
+        ignored: false,
+        excluded: false,
+        symlink: false,
+        icon: extra.icon || undefined,
+        detail: extra.detail,
+      };
+      if (ro) node.readOnly = true;
+      out.byKey.set(node.key, node);
+      if (!out.keyOfPath.has(extra.path)) out.keyOfPath.set(extra.path, node.key);
+      return node;
+    }
     if (extra.path !== undefined && !extra.children) {
       const path = extra.path;
       // Library folders of a group are keyed in their own namespace; other
@@ -386,9 +409,11 @@ export function withReadOnlyFolders(model: TreeModel, folders: readonly string[]
 /** Folder roots of contributed entries (groups flattened), in display order. */
 export function extraFolders(extras: readonly ExtraRoot[], readOnly = false): ExtraRoot[] {
   return extras.flatMap((e) =>
-    e.path !== undefined && !e.children
-      ? [{ ...e, readOnly: readOnly || !!e.readOnly }]
-      : extraFolders(e.children ?? [], readOnly || !!e.readOnly),
+    e.file
+      ? []
+      : e.path !== undefined && !e.children
+        ? [{ ...e, readOnly: readOnly || !!e.readOnly }]
+        : extraFolders(e.children ?? [], readOnly || !!e.readOnly),
   );
 }
 

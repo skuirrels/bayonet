@@ -288,12 +288,16 @@ describe("Settings dialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Show Scheme Actions" }));
     fireEvent.click(await screen.findByText("Duplicate…"));
     const named = await screen.findByRole("dialog", { name: "Duplicate Keymap" });
-    expect(within(named).getByRole("textbox")).toHaveValue("macOS copy");
+    expect(within(named).getByRole("textbox")).toHaveValue("Visual Studio (macOS) copy");
     fireEvent.click(within(named).getByRole("button", { name: "OK" }));
     const staged = useSettingsDialog.getState().staged;
-    expect(staged["global|keymap"]?.value).toBe("custom.macos-copy");
+    expect(staged["global|keymap"]?.value).toBe("custom.visual-studio-macos-copy");
     expect(staged["global|customKeymaps"]?.value).toEqual({
-      "custom.macos-copy": { name: "macOS copy", parent: "intellij-macos", overrides: {} },
+      "custom.visual-studio-macos-copy": {
+        name: "Visual Studio (macOS) copy",
+        parent: "visualstudio-macos",
+        overrides: {},
+      },
     });
     fireEvent.doubleClick(within(dialog).getByText("Dup Target"));
     const recorder = await screen.findByRole("dialog", { name: /Keyboard Shortcut: Dup Target/ });
@@ -308,9 +312,9 @@ describe("Settings dialog", () => {
     fireEvent.click(within(recorder).getByRole("button", { name: "OK" }));
     const after = useSettingsDialog.getState().staged;
     expect(after["global|customKeymaps"]?.value).toEqual({
-      "custom.macos-copy": {
-        name: "macOS copy",
-        parent: "intellij-macos",
+      "custom.visual-studio-macos-copy": {
+        name: "Visual Studio (macOS) copy",
+        parent: "visualstudio-macos",
         overrides: { "t.dup": ["Ctrl+Alt+Shift+Meta+F9"] },
       },
     });
@@ -318,7 +322,7 @@ describe("Settings dialog", () => {
     await act(async () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "OK" }));
     });
-    expect(useKeymap.getState().preset).toBe("intellij-macos");
+    expect(useKeymap.getState().preset).toBe("visualstudio-macos");
     expect(useKeymap.getState().overrides).toEqual({ "t.dup": ["Ctrl+Alt+Shift+Meta+F9"] });
   });
 

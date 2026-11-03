@@ -790,7 +790,9 @@ impl Tools {
                 Method::Npm { packages } => self.install_npm(packages, cancel, emit)?,
                 Method::Go { module } => self.install_go(spec, module, cancel, emit)?,
                 Method::Gem { gem } => self.install_gem(spec, gem, cancel, emit)?,
-                Method::DotnetTool { package } => self.install_dotnet_tool(spec, package, cancel, emit)?,
+                Method::DotnetTool { package, prerelease } => {
+                    self.install_dotnet_tool(spec, package, prerelease, cancel, emit)?
+                }
                 Method::PipVenv { package } => self.install_venv(spec, package, cancel, emit)?,
                 Method::PipUser { package, .. } => self.install_pip_user(package, cancel, emit)?,
                 Method::PipTarget { package, .. } => self.install_pip_target(spec, package, cancel, emit)?,
@@ -913,6 +915,7 @@ impl Tools {
         &self,
         spec: &ToolSpec,
         package: &str,
+        prerelease: bool,
         cancel: &CancellationToken,
         emit: Emit,
     ) -> IdeResult<()> {
@@ -923,6 +926,9 @@ impl Tools {
         let dotnet = self.which("dotnet").expect("checked");
         let mut c = self.command(&dotnet);
         c.args(["tool", "install", package, "--tool-path"]).arg(&tool);
+        if prerelease {
+            c.arg("--prerelease");
+        }
         let result = run_streamed(c, cancel, emit).and_then(|_| {
             // The tool's apphost looks for .NET in the default location only; a
             // Homebrew / user-local SDK must be named through DOTNET_ROOT.

@@ -36,6 +36,7 @@ fn server(name: &str) -> LanguageServerConfig {
         max_java: None,
         launch_error: None,
         tsserver_project: false,
+        pull_diagnostics: false,
     }
 }
 
@@ -1033,4 +1034,30 @@ fn go_modules_configure_gopls_in_place_and_commands_with_explicit_run_overrides(
     let mut cleared = server("gopls");
     configure_server(&mut cleared, tmp.path(), tmp.path(), &Settings::default());
     assert_eq!(cleared.settings.unwrap()["env"], json!({}));
+}
+
+#[test]
+fn dotnet_servers_get_the_chosen_install_and_quiet_sdk_commands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let install = tmp.path().join("dotnet");
+    std::fs::create_dir_all(&install).unwrap();
+    let mut settings = Settings::default();
+    settings.languages.dotnet.root = install.to_string_lossy().into_owned();
+    let mut roslyn = server("roslyn-language-server");
+    configure_server(&mut roslyn, tmp.path(), tmp.path(), &settings);
+    assert_eq!(roslyn.env["DOTNET_ROOT"], install.to_string_lossy());
+    assert!(std::env::split_paths(&roslyn.env["PATH"]).next().is_some_and(|p| p == install));
+    if std::env::var_os("DOTNET_CLI_TELEMETRY_OPTOUT").is_none() {
+        assert_eq!(roslyn.env["DOTNET_CLI_TELEMETRY_OPTOUT"], "1");
+    }
+
+    // Without a choice the server finds `dotnet` on PATH itself.
+    let mut default = server("fsautocomplete");
+    configure_server(&mut default, tmp.path(), tmp.path(), &Settings::default());
+    assert!(!default.env.contains_key("DOTNET_ROOT") && !default.env.contains_key("PATH"));
+
+    // Other servers are left alone.
+    let mut gopls = server("gopls");
+    configure_server(&mut gopls, tmp.path(), tmp.path(), &settings);
+    assert!(!gopls.env.contains_key("DOTNET_ROOT"));
 }

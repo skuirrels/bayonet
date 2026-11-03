@@ -48,7 +48,7 @@ pub fn client_capabilities() -> Value {
             "semanticTokens": { "refreshSupport": true },
             "codeLens": { "refreshSupport": true },
             "inlayHint": { "refreshSupport": true },
-            "diagnostics": { "refreshSupport": false },
+            "diagnostics": { "refreshSupport": true },
             "textDocumentContent": { "dynamicRegistration": true }
         },
         "textDocument": {

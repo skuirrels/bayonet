@@ -281,7 +281,11 @@ impl Handler for ClientHandler {
                 mgr.sink().emit(IdeEvent::LspRefresh { server: self.server.id, kind });
                 Ok(Value::Null)
             }
-            "workspace/diagnostic/refresh" | "workspace/inlineValue/refresh" => Ok(Value::Null),
+            "workspace/diagnostic/refresh" => {
+                mgr.schedule_pull_all(&self.server);
+                Ok(Value::Null)
+            }
+            "workspace/inlineValue/refresh" => Ok(Value::Null),
             other => Err((codes::METHOD_NOT_FOUND, format!("unsupported method {other}"))),
         }
     }

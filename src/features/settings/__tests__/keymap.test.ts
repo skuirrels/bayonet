@@ -320,7 +320,7 @@ describe("applyKeymapSettings", () => {
 
     applyKeymapSettings("no-such-preset", null);
     expect(useKeymap.getState()).toMatchObject({ preset: defaultPreset(), overrides: {} });
-    expect(bindingsFor("navigate.gotoFile")).toEqual(["Meta+Shift+O"]);
+    expect(bindingsFor("navigate.gotoFile")).toEqual(["Meta+Shift+T", "Meta+1 Meta+F"]);
   });
 
   it("suspends the dispatcher while recording", async () => {

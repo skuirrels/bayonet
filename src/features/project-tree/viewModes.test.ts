@@ -186,6 +186,54 @@ describe("project view modes", () => {
     expect(localStorage.getItem("openidea.projectTree.mode")).toBe(JSON.stringify("scratches"));
   });
 
+  it("shows the solution in the Solution pane only, and the project without one", async () => {
+    expect(labels()).toEqual(["proj", "External Libraries", "Scratches"]);
+    setViewMode("solution");
+    expect(labels()).toEqual(["proj", "External Libraries", "Scratches"]);
+    const dispose = registerProjectViewRoot({
+      id: "solution",
+      label: "Solution 'App'",
+      icon: "module",
+      scope: "solution",
+      children: [
+        { label: "src", icon: "folder", children: [{ label: "App", icon: "file-csharp", path: "/p/src" }] },
+        { label: "README.md", icon: "", path: "/p/README.md", file: true },
+      ],
+    });
+    try {
+      expect(labels()).toEqual(["Solution 'App'"]);
+      const [solution] = currentModel().roots;
+      const kids = currentModel().children.get(solution!.key)!;
+      expect(kids.map((n) => [n.label, n.dir])).toEqual([
+        ["src", true],
+        ["README.md", false],
+      ]);
+      const [app] = currentModel().children.get(kids[0]!.key)!;
+      expect(app).toMatchObject({ label: "App", path: "/p/src" });
+      expect(app!.readOnly).toBeFalsy();
+      await loadDir("/p/src");
+      expect(
+        currentModel()
+          .children.get(app!.key)!
+          .map((n) => n.label),
+      ).toEqual(["App.kt"]);
+      expect(isReadOnlyPath("/p/src/App.kt")).toBe(false);
+      setViewMode("project");
+      expect(labels()).toEqual(["proj", "External Libraries", "Scratches"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("opens a solution in the Solution pane until the user picks one", () => {
+    store.suggestViewMode("solution");
+    expect(useProjectTree.getState().mode).toBe("solution");
+    expect(localStorage.getItem("openidea.projectTree.mode")).toBeNull();
+    setViewMode("projectFiles");
+    store.suggestViewMode("solution");
+    expect(useProjectTree.getState().mode).toBe("projectFiles");
+  });
+
   it("keeps each pane's expansion", () => {
     store.setExpanded(new Set(["/p", "/p/src"]));
     setViewMode("projectFiles");

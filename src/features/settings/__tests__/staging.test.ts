@@ -167,7 +167,7 @@ describe("validateSettings", () => {
       fontFamily: "JetBrains Mono",
     });
     expect(v.files.exclude).toEqual(["**/a"]);
-    expect(v.keymap).toBe("intellij-macos");
+    expect(v.keymap).toBe("visualstudio-macos");
     expect(v.keymapOverrides).toEqual({ "file.save": ["Ctrl+S"] });
     expect(v.general).toEqual(DEFAULT_SETTINGS.general);
   });

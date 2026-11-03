@@ -47,8 +47,9 @@ pub enum Method {
     /// `gem install` into `<tools>/<name>/gems`, launched through `GEM_HOME` wrappers in `bin/`.
     Gem { gem: &'static str },
     /// `dotnet tool install --tool-path <tools>/<name>/tool <package>`, launched
-    /// through `DOTNET_ROOT` wrappers in `bin/`.
-    DotnetTool { package: &'static str },
+    /// through `DOTNET_ROOT` wrappers in `bin/`. `prerelease` adds `--prerelease`, for
+    /// packages that only publish previews (roslyn-language-server).
+    DotnetTool { package: &'static str, prerelease: bool },
     /// Platform archive download into `<tools>/<name>/`.
     Release { source: ReleaseSource, assets: &'static [AssetRule], locate: &'static [&'static str] },
 }
@@ -884,11 +885,22 @@ pub static TOOLS: &[ToolSpec] = &[
         needs: &[],
     },
     ToolSpec {
+        name: "roslyn-language-server",
+        display: "Roslyn (C#)",
+        kind: LanguageServer,
+        commands: &["roslyn-language-server"],
+        method: Method::DotnetTool { package: "roslyn-language-server", prerelease: true },
+        fallback: None,
+        version: V,
+        homepage: "https://github.com/dotnet/roslyn",
+        needs: &[],
+    },
+    ToolSpec {
         name: "csharp-ls",
         display: "csharp-ls",
         kind: LanguageServer,
         commands: &["csharp-ls"],
-        method: Method::DotnetTool { package: "csharp-ls" },
+        method: Method::DotnetTool { package: "csharp-ls", prerelease: false },
         fallback: None,
         version: V,
         homepage: "https://github.com/razzmatazz/csharp-language-server",
@@ -899,7 +911,7 @@ pub static TOOLS: &[ToolSpec] = &[
         display: "FsAutoComplete (F#)",
         kind: LanguageServer,
         commands: &["fsautocomplete"],
-        method: Method::DotnetTool { package: "fsautocomplete" },
+        method: Method::DotnetTool { package: "fsautocomplete", prerelease: false },
         fallback: None,
         version: V,
         homepage: "https://github.com/ionide/FsAutoComplete",

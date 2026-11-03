@@ -157,7 +157,7 @@ describe("build feature", () => {
       expect(getAction(id), id).toBeDefined();
       expect(isActionEnabled(getAction(id)!)).toBe(true);
     }
-    expect(bindingsFor("build.buildProject")).toContain("Meta+F9");
+    expect(bindingsFor("build.buildProject")).toContain("Meta+Shift+B");
     expect(bindingsFor("build.buildModule")).toContain("Meta+Shift+F9");
     const tw = useContributions.getState().toolWindows.get("build");
     expect(tw).toMatchObject({ anchor: "bottom", stripe: "onUse", icon: "toolwindow-build" });

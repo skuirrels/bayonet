@@ -19,6 +19,7 @@ pub mod debug;
 pub mod deploy;
 pub mod doc;
 pub mod docker;
+pub mod dotnet;
 pub mod env;
 pub mod fonts;
 pub mod fs;
@@ -382,6 +383,8 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         coverage::coverage_prepare,
         coverage::coverage_collect,
         coverage::coverage_import,
+        dotnet::dotnet_solutions,
+        dotnet::dotnet_solution,
         web::web_browsers,
         web::web_url,
         web::web_open,

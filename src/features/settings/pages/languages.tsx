@@ -1,9 +1,9 @@
 /**
  * PyCharm's top-level "Python" group (Interpreter), "Project Structure", and
- * Languages & Frameworks › Go / Java / Node.js / Rust / TypeScript. Pages live in
+ * Languages & Frameworks › .NET / Go / Java / Node.js / Rust / TypeScript. Pages live in
  * `../languages/`; settings are `languages.*` / `projectStructure.*`.
  */
-import { GoPage, JavaPage, NodePage, RustPage, TypeScriptPage } from "../languages/LanguagePages";
+import { DotnetPage, GoPage, JavaPage, NodePage, RustPage, TypeScriptPage } from "../languages/LanguagePages";
 import { ProjectStructurePage } from "../languages/ProjectStructurePage";
 import { PythonInterpreterPage } from "../languages/PythonInterpreterPage";
 import { GoBuildTagsPage, GO_BUILD_TAG_SECTIONS } from "../languages/GoBuildTags";
@@ -42,6 +42,16 @@ export const LANGUAGE_PAGES: PageSpec[] = [
     order: 350,
     keywords: ["content root", "sources root", "test sources", "resources", "excluded", "mark directory as"],
     component: ProjectStructurePage,
+  },
+  {
+    id: "languages.dotnet",
+    projectScope: true,
+    defaultScope: "project",
+    title: ".NET",
+    group: LANGUAGES_GROUP,
+    order: 385,
+    keywords: ["dotnet", "dotnet root", "sdk", "global.json", "c#", "csharp", "f#", "fsharp", "roslyn"],
+    component: DotnetPage,
   },
   {
     id: "languages.go",

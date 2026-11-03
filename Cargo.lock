@@ -4182,6 +4182,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ide-dotnet"
+version = "0.1.29"
+dependencies = [
+ "ide-core",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+]
+
+[[package]]
 name = "ide-fonts"
 version = "0.1.29"
 dependencies = [
@@ -4220,6 +4232,7 @@ dependencies = [
  "ide-coverage",
  "ide-dap",
  "ide-db",
+ "ide-dotnet",
  "ide-http",
  "ide-index",
  "ide-jsonrpc",
@@ -6155,6 +6168,7 @@ dependencies = [
  "ide-dap",
  "ide-db",
  "ide-docker",
+ "ide-dotnet",
  "ide-fonts",
  "ide-github",
  "ide-host",

@@ -36,3 +36,6 @@ CLAUDE.md
 
 # Local reference screenshots
 pycharm-screenshots/
+
+# .NET fixture solutions are test data
+!fixtures/dotnet/*.sln

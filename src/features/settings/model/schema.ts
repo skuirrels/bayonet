@@ -131,7 +131,7 @@ export const DEFAULT_SETTINGS: ValidSettings = {
     colorScheme: "theme-default",
     ...EDITOR_EXTRA_DEFAULTS,
   },
-  keymap: "intellij-macos",
+  keymap: "visualstudio-macos",
   files: {
     autoSave: true,
     exclude: ["**/.git", "**/node_modules", "**/target"],

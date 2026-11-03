@@ -12,6 +12,7 @@ authors = ["OpenIDEA contributors"]
 [workspace.dependencies]
 # internal
 ide-core = { path = "crates/ide-core" }
+ide-dotnet = { path = "crates/ide-dotnet" }
 ide-vfs = { path = "crates/ide-vfs" }
 ide-text = { path = "crates/ide-text" }
 ide-language = { path = "crates/ide-language" }

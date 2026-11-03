@@ -1,5 +1,5 @@
 /**
- * Settings › Languages & Frameworks › Go / Java / Node.js / Rust / TypeScript and
+ * Settings › Languages & Frameworks › .NET / Go / Java / Node.js / Rust / TypeScript and
  * Build Tools › Maven: the toolchain each language's server and run configurations
  * use (applied by `ide-sdk` when language servers start and when run configurations load).
  */
@@ -175,6 +175,29 @@ export function RustPage() {
             onChange={(e) => setRustfmtArgs(e.target.value)}
           />
         </Row>
+      </Section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// .NET
+
+export function DotnetPage() {
+  return (
+    <div className={styles.page}>
+      <Section title=".NET Install">
+        <SdkRow
+          k="languages.dotnet.root"
+          label="Install"
+          kind="dotnet"
+          emptyLabel="Default"
+          emptyDetail="dotnet on PATH"
+          directory
+          browseTitle="Select .NET Install Directory"
+          aria-label=".NET install"
+          hint="DOTNET_ROOT for the C# and F# language servers. The SDK within it comes from the project's global.json."
+        />
       </Section>
     </div>
   );

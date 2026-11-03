@@ -39,7 +39,7 @@ describe("host modifier helpers", () => {
 
   it("macOS keeps ⌘", () => {
     usePlatform.setState({ os: "macos" });
-    expect(defaultPreset()).toBe("intellij-macos");
+    expect(defaultPreset()).toBe("visualstudio-macos");
     expect(formatBinding("Meta+Shift+O")).toBe("⇧⌘O");
     expect(hostBinding("Meta+C")).toBe("Meta+C");
     expect(macStroke("Ctrl+C")).toBe("Ctrl+C");
@@ -48,7 +48,7 @@ describe("host modifier helpers", () => {
 
   it("Windows uses Ctrl and spells shortcuts out", () => {
     usePlatform.setState({ os: "windows" });
-    expect(defaultPreset()).toBe("intellij-windows");
+    expect(defaultPreset()).toBe("visualstudio-windows");
     expect(formatBinding("Ctrl+Shift+N")).toBe("Ctrl+Shift+N");
     expect(formatBinding("Ctrl+K Ctrl+I")).toBe("Ctrl+K, Ctrl+I");
     expect(formatBinding("Shift Shift")).toBe("Shift, Shift");

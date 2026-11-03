@@ -29,6 +29,7 @@ import { activate as plugins, activateSettingsPages as pluginsPages } from "./pl
 import { activate as tools, activateSettingsPages as toolsPages } from "./tools";
 import { activate as scratch } from "./scratch";
 import { activate as libraries } from "./libraries";
+import { activate as dotnet } from "./dotnet";
 import { activate as viewers } from "./viewers";
 import { activate as notebook } from "./notebook";
 import { activate as web } from "./web";
@@ -71,6 +72,7 @@ const features: Array<[string, Activate]> = [
   ["tools", tools],
   ["scratch", scratch],
   ["libraries", libraries],
+  ["dotnet", dotnet],
   ["notebook", notebook],
   ["viewers", viewers],
   ["web", web],

@@ -123,6 +123,10 @@ pub struct LanguageServerConfig {
     /// Register source files with tsserver when no project configuration exists.
     #[serde(default)]
     pub tsserver_project: bool,
+    /// The server reports diagnostics only when asked (`textDocument/diagnostic`), never
+    /// through `publishDiagnostics` (Roslyn): pull them for open files after each change.
+    #[serde(default)]
+    pub pull_diagnostics: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

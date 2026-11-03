@@ -7,11 +7,22 @@ indent = { tab-size = 4, insert-spaces = true }
 ui-mode = "C#"
 tree-sitter = "csharp"
 
+# Roslyn's own server, the one behind the VS Code C# extension (MIT). It finds the
+# solution itself: a single .sln/.slnx at the root, else every .csproj below it.
+[[language-servers]]
+name = "roslyn-language-server"
+command = "roslyn-language-server"
+args = ["--stdio", "--autoLoadProjects", "--telemetryLevel", "off", "--logLevel", "Information"]
+root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props"]
+install-hint = "dotnet tool install --global roslyn-language-server --prerelease"
+pull-diagnostics = true
+
 [[language-servers]]
 name = "csharp-ls"
 command = "csharp-ls"
 root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props"]
 install-hint = "dotnet tool install --global csharp-ls"
+fallback = true
 
 [debugger]
 adapter = "netcoredbg"

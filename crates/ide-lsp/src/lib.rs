@@ -15,6 +15,7 @@ mod handler;
 mod inspect;
 pub mod jdtls;
 mod launch;
+mod pull;
 mod scope;
 mod server;
 mod tcp;
@@ -180,6 +181,8 @@ pub struct LspManager {
     virtual_origins: Mutex<HashMap<String, ide_core::ServerId>>,
     /// Contents fetched for virtual URIs.
     virtual_docs: Mutex<HashMap<String, VirtualDocument>>,
+    /// Latest diagnostics pull per document ([`pull`]); an older one is discarded.
+    pulls: Mutex<HashMap<DocId, u64>>,
 }
 
 /// Fetched virtual documents kept before the cache is reset.
@@ -308,6 +311,7 @@ impl LspManager {
             shown_messages: Mutex::new(HashSet::new()),
             virtual_origins: Mutex::new(HashMap::new()),
             virtual_docs: Mutex::new(HashMap::new()),
+            pulls: Mutex::new(HashMap::new()),
         })
     }
 
@@ -763,6 +767,7 @@ impl LspManager {
         for s in &servers {
             self.ensure_started(s);
         }
+        self.schedule_pull(doc);
     }
 
     pub fn did_change(&self, doc: DocId, version: u32, changes: &[AppliedChange], full_text: &dyn Fn() -> String) {
@@ -831,6 +836,8 @@ impl LspManager {
                 tracing::debug!("{}: didChange: {e}", server.name);
             }
         }
+        drop(docs);
+        self.schedule_pull(doc);
     }
 
     pub fn did_save(&self, doc: DocId, text: &str) {
@@ -856,6 +863,7 @@ impl LspManager {
     }
 
     pub fn did_close(&self, doc: DocId) {
+        self.forget_pulls(doc);
         let Some(d) = self.docs.lock().remove(&doc) else { return };
         for a in &d.servers {
             let Some(run) = a.server.running() else { continue };

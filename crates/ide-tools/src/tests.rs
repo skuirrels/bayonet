@@ -531,6 +531,25 @@ exit 0"#,
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "/opt/dotnet");
 }
 
+#[cfg(unix)]
+#[test]
+fn dotnet_tool_install_passes_prerelease_for_preview_only_packages() {
+    let env = Env::new();
+    // Installs only when asked for previews: roslyn-language-server publishes nothing else.
+    env.script(
+        &env.sys,
+        "dotnet",
+        r#"case "$2" in
+install) [ "$6" = --prerelease ] || exit 1; /bin/mkdir -p "$5"; printf '#!/bin/sh\n' > "$5/roslyn-language-server"; /bin/chmod +x "$5/roslyn-language-server" ;;
+list) printf 'Package Id               Version             Commands\n----\nroslyn-language-server   5.13.0-1.26514.10   roslyn-language-server\n' ;;
+esac
+exit 0"#,
+    );
+    let info = env.tools().install("roslyn-language-server", &langs(), &CancellationToken::new(), &|_| {}).unwrap();
+    assert_eq!(info.status, ToolStatus::Installed);
+    assert_eq!(info.version.as_deref(), Some("5.13.0-1.26514.10"));
+}
+
 #[test]
 fn kotlin_debugger_uses_existing_release_recipe_and_language_definition() {
     let spec = registry::find("kotlin-debug-adapter").unwrap();

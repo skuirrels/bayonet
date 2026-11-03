@@ -60,7 +60,7 @@ function Landing() {
   return (
     <div className={styles.landing}>
       <div className={styles.landingTitle}>
-        <T>Welcome to OpenIDEA</T>
+        <T>Welcome to DotnetIDEA</T>
       </div>
       <p className={styles.landingText}>
         {canClone
