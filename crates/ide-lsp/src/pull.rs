@@ -82,7 +82,7 @@ impl LspManager {
             if self.shutting_down.load(Ordering::Acquire) || t.server.suppresses_diagnostics(&snap.path) {
                 continue;
             }
-            let items = match self.pull_diagnostics(&t, &snap.uri, &CancellationToken::new(), PULL_TIMEOUT).await {
+            let items = match self.pull_diagnostics(&t, &snap.ident(), &CancellationToken::new(), PULL_TIMEOUT).await {
                 Ok(items) => items,
                 Err(e) => {
                     tracing::debug!("{}: pull diagnostics for {}: {e}", t.server.name, snap.path.display());

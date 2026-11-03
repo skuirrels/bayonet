@@ -178,6 +178,8 @@ const ICONS = {
   "toolwindow-changes": "toolwindows/changes",
   "toolwindow-database": "openidea/toolwindows/database",
   "toolwindow-agents": "openidea/toolwindows/agents",
+  "toolwindow-nuget": "openidea/toolwindows/nuget",
+  "toolwindow-unit-tests": "openidea/toolwindows/unitTests",
   // Coding agents (logos via Paseo)
   "agent-claude": "openidea/agents/claude",
   "agent-codex": "openidea/agents/codex",

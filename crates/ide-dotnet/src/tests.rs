@@ -158,3 +158,62 @@ fn malformed_files_are_errors_not_empty_solutions() {
     std::fs::write(&slnx, "<Solution><Folder Name=\"/a/\"></Solution>").unwrap();
     assert!(read(&slnx).is_err());
 }
+
+#[test]
+fn fixture_projects_are_classified() {
+    let info = |rel: &str| read_project(&fixture().join(rel)).unwrap();
+    let api = info("src/Fixture.Api/Fixture.Api.csproj");
+    assert_eq!(api.sdks, ["Microsoft.NET.Sdk.Web"]);
+    assert!(api.is_executable());
+    let cli = info("src/Fixture.Cli/Fixture.Cli.csproj");
+    assert_eq!(
+        (cli.output_type.as_deref(), cli.target_frameworks.as_slice()),
+        (Some("Exe"), &["net10.0".to_owned()][..])
+    );
+    assert!(cli.is_executable());
+    let core = info("src/Fixture.Core/Fixture.Core.csproj");
+    assert_eq!(core.target_frameworks, ["net10.0", "netstandard2.0"]);
+    assert!(!core.is_executable() && !core.is_test);
+    // Test projects are executables under Microsoft.Testing.Platform, but not runnable apps.
+    for t in ["MSTests", "NUnitTests", "XunitTests"] {
+        let p = info(&format!("tests/Fixture.Core.{t}/Fixture.Core.{t}.csproj"));
+        assert!(p.is_test && !p.is_executable(), "{t}");
+    }
+}
+
+#[test]
+fn project_sdks_and_test_markers() {
+    let p = project::parse_project(
+        r#"<Project Sdk="Microsoft.NET.Sdk;Aspire.AppHost.Sdk/9.1.0"><Sdk Name="Custom.Sdk" Version="1" />
+        <PropertyGroup><OutputType>WinExe</OutputType><TargetFrameworks>net9.0; net10.0-windows ;</TargetFrameworks>
+        <TargetFramework></TargetFramework></PropertyGroup></Project>"#,
+    )
+    .unwrap();
+    assert_eq!(p.sdks, ["Microsoft.NET.Sdk", "Aspire.AppHost.Sdk", "Custom.Sdk"]);
+    assert_eq!(p.target_frameworks, ["net9.0", "net10.0-windows"]);
+    assert!(p.is_executable());
+    assert!(project::parse_project(r#"<Project Sdk="MSTest.Sdk/3.8.0" />"#).unwrap().is_test);
+    let flagged =
+        project::parse_project("<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+    assert!(flagged.unwrap().is_test);
+    assert!(project::parse_project("<Project><PropertyGroup>").is_err());
+}
+
+#[test]
+fn only_project_launch_profiles_are_kept() {
+    let profiles = project::parse_launch_profiles(
+        r#"{ "profiles": {
+            "https": { "commandName": "Project", "applicationUrl": "https://localhost:7001;http://localhost:5001",
+                       "commandLineArgs": "--seed 1", "environmentVariables": { "ASPNETCORE_ENVIRONMENT": "Development" } },
+            "IIS Express": { "commandName": "IISExpress" },
+            "Container": { "commandName": "Docker" }
+        } }"#,
+    );
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].name, "https");
+    assert_eq!(profiles[0].command_line_args.as_deref(), Some("--seed 1"));
+    assert_eq!(profiles[0].environment_variables["ASPNETCORE_ENVIRONMENT"], "Development");
+    let fixture_profiles = launch_profiles(&fixture().join("src/Fixture.Api"));
+    assert_eq!(fixture_profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["http"]);
+    assert!(project::parse_launch_profiles("not json").is_empty());
+}

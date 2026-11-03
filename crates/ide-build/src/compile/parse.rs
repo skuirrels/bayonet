@@ -22,6 +22,8 @@ pub(crate) enum Format {
     Tsc,
     /// `go build`: `./a.go:12:5: msg`.
     Go,
+    /// MSBuild (`dotnet build`): `/p/A.cs(12,5): error CS1002: ; expected [/p/A.csproj]`.
+    MsBuild,
 }
 
 /// What a printed column counts.
@@ -296,6 +298,73 @@ fn go_line(line: &str) -> Option<RawMessage> {
     (!msg.is_empty()).then(|| RawMessage::new(Severity::Error, msg, ColUnit::Byte).at(path, ln, col))
 }
 
+/// MSBuild's canonical message format: `origin(pos): [subcategory] category code: text [project]`,
+/// where `origin` is a file (`pos` is `line`, `line,col` or `line,col,endLine,endCol`) or a
+/// tool (`MSBUILD : error MSB1009: …`, `/p/A.csproj : error NU1101: …`).
+fn msbuild_line(line: &str) -> Option<RawMessage> {
+    let line = line.trim();
+    let (head, rest) = split_category(line)?;
+    let (origin, pos) = match head.strip_suffix(')').and_then(|h| h.rsplit_once('(')) {
+        Some((origin, pos)) => (origin.trim(), Some(pos)),
+        None => (head.trim(), None),
+    };
+    let rest = rest.trim_start();
+    let (severity, rest) = if let Some(r) = rest.strip_prefix("error") {
+        (Severity::Error, r)
+    } else if let Some(r) = rest.strip_prefix("warning") {
+        (Severity::Warning, r)
+    } else {
+        (Severity::Info, rest.strip_prefix("info")?)
+    };
+    let (code, text) = rest.split_once(':')?;
+    let code = code.trim();
+    if code.contains(' ') {
+        return None;
+    }
+    // The project in brackets says which project the message is for; it is noise in the text.
+    let text = match text.trim().rsplit_once(" [") {
+        Some((t, project)) if project.ends_with(']') && is_project_file(project.trim_end_matches(']')) => t,
+        _ => text.trim(),
+    };
+    let mut m = RawMessage::new(severity, text, ColUnit::Utf16);
+    m.code = (!code.is_empty()).then(|| code.to_owned());
+    let nums: Vec<u32> = pos.map(|p| p.split(',').filter_map(num).collect()).unwrap_or_default();
+    match nums.as_slice() {
+        [] if is_project_file(origin) || looks_like_source_path(origin) => m.path = Some(origin.to_owned()),
+        [] => {}
+        [line, rest @ ..] => {
+            m = m.at(origin, *line, rest.first().copied());
+            if let [_, end_line, end_col] = rest {
+                m.end_line = Some(*end_line);
+                m.end_col = Some(*end_col);
+            }
+        }
+    }
+    Some(m)
+}
+
+/// `head : category …` at the first ` : ` or `): ` that is followed by a category word.
+fn split_category(line: &str) -> Option<(&str, &str)> {
+    let mut from = 0;
+    while let Some(off) = line[from..].find(':') {
+        let at = from + off;
+        let rest = &line[at + 1..];
+        let word = rest.trim_start().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+        if at > 0 && matches!(word, "error" | "warning" | "info") {
+            return Some((&line[..at], rest));
+        }
+        from = at + 1;
+    }
+    None
+}
+
+fn is_project_file(p: &str) -> bool {
+    let lower = p.to_ascii_lowercase();
+    [".csproj", ".fsproj", ".vbproj", ".sqlproj", ".proj", ".sln", ".slnx", ".props", ".targets"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
 /// rustc's JSON diagnostic (`reason: compiler-message`) → message and its rendered text.
 fn cargo_json(v: &Value) -> Option<(Option<RawMessage>, String)> {
     if v.get("reason")?.as_str()? != "compiler-message" {
@@ -410,6 +479,7 @@ impl OutputParser {
             Format::Gradle => javac_header(&line).or_else(|| kotlin_line(&line)),
             Format::Tsc => tsc_line(&line),
             Format::Go => go_line(&line),
+            Format::MsBuild => msbuild_line(&line),
             Format::Cargo => None,
         };
         if let Some(msg) = parsed {
@@ -577,6 +647,33 @@ mod tests {
         assert_eq!(out[0].text, "undefined: foo");
         assert_eq!(out[1].unit, ColUnit::Byte);
         assert_eq!(pos(&out[1]), (Severity::Error, "pkg/util.go", 3, Some(2)));
+    }
+
+    #[test]
+    fn msbuild_messages() {
+        let ms = parse(
+            Format::MsBuild,
+            "  Determining projects to restore...
+/p/src/App/Program.cs(12,5): error CS1002: ; expected [/p/src/App/App.csproj]
+/p/src/App/Program.cs(3,1,3,9): warning CS8019: Unnecessary using directive. [/p/src/App/App.csproj]
+C:\\p\\App\\Program.cs(7): warning CA1822: Member 'Run' does not access instance data [C:\\p\\App\\App.csproj]
+/p/src/App/App.csproj : error NU1101: Unable to find package Nope. No packages exist with this id in source(s): nuget.org
+MSBUILD : error MSB1009: Project file does not exist.
+  App -> /p/src/App/bin/Debug/net10.0/App.dll
+Build succeeded.",
+        );
+        assert_eq!(ms.len(), 5, "{ms:#?}");
+        assert_eq!(pos(&ms[0]), (Severity::Error, "/p/src/App/Program.cs", 12, Some(5)));
+        assert_eq!(ms[0].text, "; expected");
+        assert_eq!(ms[0].code.as_deref(), Some("CS1002"));
+        assert_eq!(ms[0].unit, ColUnit::Utf16);
+        assert_eq!((ms[1].end_line, ms[1].end_col), (Some(3), Some(9)));
+        assert_eq!(ms[1].text, "Unnecessary using directive.");
+        assert_eq!(pos(&ms[2]), (Severity::Warning, "C:\\p\\App\\Program.cs", 7, None));
+        assert_eq!(ms[3].path.as_deref(), Some("/p/src/App/App.csproj"));
+        assert_eq!((ms[3].line, ms[3].code.as_deref()), (None, Some("NU1101")));
+        assert_eq!((ms[4].path.as_deref(), ms[4].code.as_deref()), (None, Some("MSB1009")));
+        assert_eq!(ms[4].text, "Project file does not exist.");
     }
 
     #[test]

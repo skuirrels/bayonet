@@ -35,6 +35,9 @@ pub enum BuildTool {
 pub struct BuildModel {
     pub maven: Option<MavenModel>,
     pub gradle: Option<GradleModel>,
+    /// The `dotnet` host builds run with; `None` = the one on `PATH`.
+    #[serde(skip)]
+    pub dotnet: Option<PathBuf>,
 }
 
 /// Static model of the builds under `root`, merged with the sync results cached in `cache_dir`.
@@ -60,7 +63,7 @@ pub fn load_linked(
         sync::apply_gradle_cache(root, cache_dir, &mut g);
         g
     });
-    BuildModel { maven, gradle }
+    BuildModel { maven, gradle, dotnet: None }
 }
 
 /// A library the project depends on, as `groupId:artifactId:version`.
@@ -189,7 +192,7 @@ mod tests {
             ..Default::default()
         };
         let gradle = gradle::load(root);
-        let model = BuildModel { maven: Some(maven), gradle };
+        let model = BuildModel { maven: Some(maven), gradle, dotnet: None };
         let names: Vec<String> = dependency_coordinates(root, &model)
             .into_iter()
             .map(|c| format!("{}{}:{}:{}", if c.gradle { "G " } else { "M " }, c.group_id, c.artifact_id, c.version))

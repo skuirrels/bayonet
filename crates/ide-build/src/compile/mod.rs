@@ -38,6 +38,7 @@ pub enum BuildSystem {
     Go,
     #[serde(rename = "typescript")]
     TypeScript,
+    Dotnet,
 }
 
 /// One command of a build.
@@ -147,6 +148,8 @@ fn detect_dir(dir: &Path, model: &BuildModel, root: &Path) -> Option<BuildSystem
         Some(BuildSystem::Cargo)
     } else if has(dir, &["go.mod"]) {
         Some(BuildSystem::Go)
+    } else if dotnet_target(dir).is_some() {
+        Some(BuildSystem::Dotnet)
     } else if has(dir, &["tsconfig.json", "package.json"]) {
         Some(BuildSystem::TypeScript)
     } else {
@@ -184,7 +187,9 @@ pub fn plan(root: &Path, model: &BuildModel, kind: BuildKind, file: Option<&Path
     let dir = module_dir.clone().unwrap_or_else(|| root.to_path_buf());
     let system = detect_dir(&dir, model, root)
         .or_else(|| if model.gradle.is_some() { Some(BuildSystem::Gradle) } else { None })
-        .ok_or_else(|| IdeError::not_found("no supported build system (Maven, Gradle, Cargo, Go, TypeScript) found"))?;
+        .ok_or_else(|| {
+            IdeError::not_found("no supported build system (.NET, Maven, Gradle, Cargo, Go, TypeScript) found")
+        })?;
     let module = module_dir.as_deref().filter(|d| *d != root);
     let title = match module {
         Some(d) => format!(
@@ -201,6 +206,7 @@ pub fn plan(root: &Path, model: &BuildModel, kind: BuildKind, file: Option<&Path
         // Go builds the file's package (a module holds many).
         BuildSystem::Go => go_steps(file.and_then(Path::parent).unwrap_or(&dir), kind),
         BuildSystem::TypeScript => ts_steps(&dir, kind),
+        BuildSystem::Dotnet => dotnet_steps(&dir, model, kind)?,
     };
     Ok(BuildPlan { system, title, steps })
 }
@@ -344,6 +350,44 @@ fn ts_steps(dir: &Path, kind: BuildKind) -> Vec<BuildStep> {
     vec![BuildStep::new(program, &["--noEmit", "--pretty", "false", "-p", "."], dir, Format::Tsc)]
 }
 
+/// What `dotnet build` builds in `dir`: its solution (`.slnx` first), else its project file.
+fn dotnet_target(dir: &Path) -> Option<PathBuf> {
+    ide_dotnet::find(dir).into_iter().next().or_else(|| {
+        let mut projects: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && ide_dotnet::is_project_file(p))
+            .collect();
+        projects.sort();
+        projects.into_iter().next()
+    })
+}
+
+fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Vec<BuildStep>> {
+    let target = dotnet_target(dir).ok_or_else(|| IdeError::not_found("no .NET solution or project found"))?;
+    let target = target.file_name().map_or_else(|| target.to_string_lossy(), |n| n.to_string_lossy()).into_owned();
+    let program = model.dotnet.as_ref().map_or_else(|| "dotnet".to_owned(), |p| p.to_string_lossy().into_owned());
+    // Plain console output in English with absolute paths, so the parser can read it.
+    let common = ["-nologo", "-tl:off", "-clp:NoSummary", "-p:GenerateFullPaths=true"];
+    let args: Vec<&str> = match kind {
+        BuildKind::Build => vec!["build", &target],
+        BuildKind::Rebuild => vec!["build", &target, "--no-incremental"],
+        BuildKind::Artifacts => vec!["publish", &target, "-c", "Release"],
+    };
+    let mut step = BuildStep::new(program, &args, dir, Format::MsBuild);
+    step.args.extend(common.iter().map(|a| (*a).to_owned()));
+    step.env.extend(
+        [("DOTNET_CLI_TELEMETRY_OPTOUT", "1"), ("DOTNET_NOLOGO", "1"), ("DOTNET_CLI_UI_LANGUAGE", "en")]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+    );
+    if let Some(root) = model.dotnet.as_ref().and_then(|p| p.parent()) {
+        step.env.insert("DOTNET_ROOT".into(), root.to_string_lossy().into_owned());
+    }
+    Ok(vec![step])
+}
+
 // ---------------------------------------------------------------- running
 
 /// Project paths as the UI knows them: compilers may print the canonical path
@@ -474,6 +518,13 @@ fn progress_of(line: &str) -> Option<(String, Option<f32>)> {
     }
     if let Some(task) = line.strip_prefix("> Task ") {
         return Some((format!("Running {}", task.split_whitespace().next().unwrap_or(task)), None));
+    }
+    // MSBuild: `App -> /p/App/bin/Debug/net10.0/App.dll` once a project is built.
+    if let Some((project, output)) = line.split_once(" -> ")
+        && !project.contains(' ')
+        && Path::new(output).extension().is_some()
+    {
+        return Some((format!("Built {project}"), None));
     }
     if let Some(krate) = line.strip_prefix("Compiling ") {
         return Some((format!("Compiling {}", krate.split_whitespace().next().unwrap_or(krate)), None));
@@ -727,6 +778,67 @@ mod tests {
         let none = tmp.path().join("none");
         std::fs::create_dir_all(&none).unwrap();
         assert!(plan(&none, &BuildModel::default(), BuildKind::Build, None).is_err());
+    }
+
+    #[test]
+    fn dotnet_builds_the_solution_or_the_files_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("app");
+        write(&root, "App.sln", "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+        write(&root, "App.slnx", "<Solution />");
+        write(&root, "src/Lib/Lib.fsproj", "<Project />");
+        write(&root, "src/Lib/Lib.fs", "module Lib");
+        let model = BuildModel { dotnet: Some(PathBuf::from("/opt/dotnet/dotnet")), ..BuildModel::default() };
+        let p = plan(&root, &model, BuildKind::Build, None).unwrap();
+        assert_eq!(p.system, BuildSystem::Dotnet);
+        assert_eq!(p.steps[0].program, "/opt/dotnet/dotnet");
+        assert_eq!(
+            p.steps[0].args,
+            ["build", "App.slnx", "-nologo", "-tl:off", "-clp:NoSummary", "-p:GenerateFullPaths=true"]
+        );
+        assert_eq!(p.steps[0].env.get("DOTNET_ROOT").map(String::as_str), Some("/opt/dotnet"));
+        assert_eq!(p.steps[0].env.get("DOTNET_CLI_TELEMETRY_OPTOUT").map(String::as_str), Some("1"));
+        let p = plan(&root, &BuildModel::default(), BuildKind::Rebuild, Some(&root.join("src/Lib/Lib.fs"))).unwrap();
+        assert_eq!((p.steps[0].program.as_str(), p.steps[0].cwd.as_path()), ("dotnet", root.join("src/Lib").as_path()));
+        assert_eq!(&p.steps[0].args[..3], ["build", "Lib.fsproj", "--no-incremental"]);
+        assert_eq!(p.title, "app: build module 'Lib'");
+        let p = plan(&root, &BuildModel::default(), BuildKind::Artifacts, None).unwrap();
+        assert_eq!(&p.steps[0].args[..4], ["publish", "App.slnx", "-c", "Release"]);
+        assert_eq!(progress_of("  Lib -> /p/src/Lib/bin/Debug/net10.0/Lib.dll"), Some(("Built Lib".into(), None)));
+    }
+
+    /// Against the machine's own .NET SDK, when there is one: a compile error in the
+    /// fixture's library becomes a message at its position.
+    #[test]
+    fn dotnet_build_reports_compile_errors() {
+        if crate::process::run(
+            "dotnet",
+            &["--version".into()],
+            Path::new("."),
+            &BTreeMap::new(),
+            &CancellationToken::new(),
+            |_, _| {},
+        )
+        .is_err()
+        {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Broken");
+        write(
+            &dir,
+            "Broken.csproj",
+            r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"#,
+        );
+        write(&dir, "Broken.cs", "namespace Broken;\n\npublic class A\n{\n    int x = \"no\";\n}\n");
+        let p = plan(&dir, &BuildModel::default(), BuildKind::Build, None).unwrap();
+        let result = run(&dir, &p, &CancellationToken::new(), &|_| {}).unwrap();
+        assert!(!result.success);
+        let m = result.messages.iter().find(|m| m.code.as_deref() == Some("CS0029")).expect("CS0029");
+        assert_eq!(m.severity, Severity::Error);
+        assert!(m.path.as_ref().is_some_and(|p| p.ends_with("Broken.cs")), "{m:?}");
+        assert_eq!(m.range.map(|r| (r.start.line, r.start.col)), Some((4, 12)));
+        assert!(result.messages.iter().all(|m| !m.text.contains(".csproj]")));
     }
 
     #[test]

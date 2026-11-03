@@ -1,4 +1,5 @@
 import { parseArgs, formatArgs } from "@/platform/commandLine";
+import { parseDotnetRun } from "@/platform/dotnetRun";
 /** Run configuration → DAP launch configuration, per adapter. */
 import { workflowSettings } from "@/platform/workflowSettings";
 import type { LaunchConfig, RunConfig } from "@/platform/ipc";
@@ -283,6 +284,23 @@ function godotLaunch(rc: RunConfig, cwd: string): LaunchConfig {
   return { ...base(rc, "godot", project), extraJson: JSON.stringify({ project, scene: godotScene(rc.args) }) };
 }
 
+/**
+ * `dotnet run` under netcoredbg: the backend builds the project and launches its
+ * output with the launch profile applied (what `dotnet run` would start).
+ */
+function dotnetLaunch(rc: RunConfig, cwd: string): LaunchConfig | null {
+  const run = parseDotnetRun(rc.command, rc.args);
+  if (!run) return null;
+  const dotnet = {
+    project: run.project ? join(cwd, run.project) : cwd,
+    launchProfile: run.launchProfile || null,
+    framework: run.framework || null,
+    configuration: run.configuration || null,
+  };
+  const justMyCode = workflowSettings().debugger.skipLibraryCode;
+  return { ...base(rc, "netcoredbg", cwd), args: run.programArgs, extraJson: JSON.stringify({ dotnet, justMyCode }) };
+}
+
 /** A native program under CodeLLDB or lldb-dap: program, args, cwd, env. */
 function nativeLaunch(rc: RunConfig, cwd: string, adapter: string): LaunchConfig {
   const out: LaunchConfig = { ...base(rc, adapter, cwd), program: resolveCommand(rc.command, cwd), args: [...rc.args] };
@@ -313,6 +331,10 @@ export function launchConfigFor(rc: RunConfig, root: string): LaunchConfig | nul
   if (adapter === "js-debug") return jsDebugLaunch(rc, cwd);
   if (adapter === "delve") return delveLaunch(rc, cwd, root);
   if (adapter === "godot") return godotLaunch(rc, cwd);
+  if (adapter === "netcoredbg") {
+    const dotnet = dotnetLaunch(rc, cwd);
+    if (dotnet) return dotnet;
+  }
   // Adapters without a template (hidden in Edit Configurations): generic arguments.
   return {
     ...base(rc, adapter, cwd),

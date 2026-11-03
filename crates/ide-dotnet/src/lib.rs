@@ -4,8 +4,14 @@
 //! Only the files are read; nothing is evaluated (MSBuild and NuGet belong to the
 //! .NET sidecar), so a solution opens instantly and also when no SDK is installed.
 
+pub mod nuget;
+mod project;
 mod sln;
 mod slnx;
+pub mod templates;
+pub mod testing;
+
+pub use project::{LaunchProfile, ProjectInfo, launch_profiles, read_project};
 
 use ide_core::{IdeError, IdeResult, IpcPath};
 use serde::{Deserialize, Serialize};
@@ -72,6 +78,30 @@ impl ProjectLanguage {
             _ => Self::Other,
         }
     }
+}
+
+impl Solution {
+    /// Paths of the projects that exist, in tree order.
+    pub fn projects(&self) -> Vec<PathBuf> {
+        fn walk(items: &[SolutionItem], out: &mut Vec<PathBuf>) {
+            for item in items {
+                match item {
+                    SolutionItem::Folder { items, .. } => walk(items, out),
+                    SolutionItem::Project { path, missing: false, .. } => out.push(path.as_ref().to_path_buf()),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.items, &mut out);
+        out
+    }
+}
+
+/// Whether `path` names an MSBuild project file of a language the Solution Explorer knows.
+pub fn is_project_file(path: &Path) -> bool {
+    ProjectLanguage::of(path) != ProjectLanguage::Other
+        || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("proj"))
 }
 
 /// The solution formats by extension.

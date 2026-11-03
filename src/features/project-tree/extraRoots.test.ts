@@ -52,6 +52,18 @@ describe("withExtraRoots", () => {
     expect(base.roots).toHaveLength(1);
   });
 
+  it("leaves out the names a root hides until hidden files are shown", () => {
+    const listings = new Map([
+      ["/s/App", [entry("/s/App/bin", "dir"), entry("/s/App/obj", "dir"), entry("/s/App/Program.cs")]],
+    ]);
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    const extras = [{ path: "/s/App", label: "App", icon: "file-csharp", hide: ["bin", "obj"] }];
+    const m = withExtraRoots(base, extras, listings, DEFAULT_TREE_OPTIONS);
+    expect(m.children.get("/s/App")!.map((n) => n.label)).toEqual(["Program.cs"]);
+    const all = withExtraRoots(base, extras, listings, { ...DEFAULT_TREE_OPTIONS, showHidden: true });
+    expect(all.children.get("/s/App")!.map((n) => n.label)).toEqual(["bin", "obj", "Program.cs"]);
+  });
+
   it("returns the model itself without extra roots", () => {
     const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
     expect(withExtraRoots(base, [], new Map(), DEFAULT_TREE_OPTIONS)).toBe(base);

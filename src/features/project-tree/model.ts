@@ -249,6 +249,8 @@ export interface ExtraRoot {
   readOnly?: boolean;
   /** `path` is a single file (a solution item), not a folder to list. */
   file?: boolean;
+  /** Names directly in `path` left out unless hidden files are shown (a project's `bin`, `obj`). */
+  hide?: readonly string[];
 }
 
 /** Key prefix of group nodes that show no folder ("External Libraries", an SDK). */
@@ -345,11 +347,14 @@ export function withExtraRoots(
           k === subRoot.key ? rootNode : ns !== null || ro ? { ...v, key: rekey(k), readOnly: ro || v.readOnly } : v,
         );
       for (const n of nodes.values()) out.byKey.set(n.key, n);
-      for (const [k, v] of sub.children)
+      const hidden = opts.showHidden ? null : new Set(extra.hide ?? []);
+      for (const [k, v] of sub.children) {
+        const kids = k === subRoot.key && hidden?.size ? v.filter((n) => !hidden.has(nameOf(n.chain[0] ?? n.path))) : v;
         out.children.set(
           rekey(k),
-          v.map((n) => nodes.get(n.key) ?? n),
+          kids.map((n) => nodes.get(n.key) ?? n),
         );
+      }
       for (const [p, k] of sub.keyOfPath) if (!out.keyOfPath.has(p)) out.keyOfPath.set(p, rekey(k));
       return rootNode;
     }

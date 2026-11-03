@@ -637,3 +637,35 @@ fn go_default_build_output_is_ignored_by_version_control() {
     let ignore = fs::read_to_string(dir.path().join(".openidea/.gitignore")).unwrap();
     assert!(ignore.lines().any(|l| l == "/bin/"), "{ignore}");
 }
+
+#[test]
+fn dotnet_runs_each_launch_profile_of_executable_projects() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
+    let c = detect(&fixture);
+    let dotnet: Vec<&str> = ids(&c).into_iter().filter(|id| id.starts_with("dotnet:")).collect();
+    assert_eq!(dotnet, ["dotnet:run:Fixture.Api:http", "dotnet:run:Fixture.Cli", "dotnet:test"]);
+    let api = find(&c, "dotnet:run:Fixture.Api:http");
+    assert_eq!((api.name.as_str(), api.kind.as_str()), ("Fixture.Api: http", "dotnet"));
+    assert_eq!(cmdline(api), "dotnet run --project src/Fixture.Api/Fixture.Api.csproj --launch-profile http");
+    assert_eq!(api.debug_adapter.as_deref(), Some("netcoredbg"));
+    assert_eq!(cmdline(find(&c, "dotnet:run:Fixture.Cli")), "dotnet run --project src/Fixture.Cli/Fixture.Cli.csproj");
+    let test = find(&c, "dotnet:test");
+    assert!(test.is_test);
+    assert_eq!(cmdline(test), "dotnet test DotnetFixture.slnx");
+}
+
+#[test]
+fn dotnet_project_without_a_solution() {
+    let dir = project(&[
+        (
+            "Tool.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup></Project>",
+        ),
+        ("Program.cs", "System.Console.WriteLine();"),
+    ]);
+    let c = detect(dir.path());
+    assert_eq!(ids(&c), ["dotnet:run:Tool"]);
+    assert_eq!(cmdline(&c[0]), "dotnet run --project Tool.csproj");
+    let lib = project(&[("Lib.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />")]);
+    assert!(detect(lib.path()).is_empty());
+}

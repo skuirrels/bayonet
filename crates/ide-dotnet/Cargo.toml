@@ -7,10 +7,13 @@ license.workspace = true
 
 [dependencies]
 ide-core.workspace = true
+ide-jsonrpc.workspace = true
 quick-xml = "0.42"
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
+tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "macros"] }

@@ -795,7 +795,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex",
+ "shlex 2.0.1",
 ]
 
 [[package]]
@@ -4080,6 +4080,7 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "ide-core",
+ "ide-dotnet",
  "libc",
  "serde",
  "serde_json",
@@ -4132,12 +4133,14 @@ name = "ide-dap"
 version = "0.1.29"
 dependencies = [
  "ide-core",
+ "ide-dotnet",
  "ide-jsonrpc",
  "ide-language",
  "memchr",
  "parking_lot",
  "serde",
  "serde_json",
+ "shlex 1.3.0",
  "specta",
  "tempfile",
  "tokio",
@@ -4186,11 +4189,13 @@ name = "ide-dotnet"
 version = "0.1.29"
 dependencies = [
  "ide-core",
+ "ide-jsonrpc",
  "quick-xml",
  "serde",
  "serde_json",
  "specta",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -4478,6 +4483,7 @@ dependencies = [
  "encoding_rs",
  "ide-build",
  "ide-core",
+ "ide-dotnet",
  "libc",
  "parking_lot",
  "portable-pty",
@@ -7947,6 +7953,12 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -9074,7 +9086,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

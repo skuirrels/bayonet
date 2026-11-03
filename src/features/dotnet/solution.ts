@@ -27,16 +27,27 @@ function projectCount(items: readonly SolutionItem[]): number {
 function entry(item: SolutionItem): ProjectViewRootEntry {
   switch (item.kind) {
     case "folder":
-      return { label: item.name, icon: "folder", children: item.items.map(entry) };
+      return {
+        label: item.name,
+        icon: "folder",
+        children: item.items.map(entry),
+      };
     case "project":
       return {
         label: item.name,
         icon: PROJECT_ICONS[item.language] ?? "module",
         path: parentOf(item.path),
+        // Build output, as Visual Studio and Rider leave it out of the Solution Explorer.
+        hide: ["bin", "obj"],
         detail: item.missing ? tx("not found") : undefined,
       };
     case "file":
-      return { label: item.path.slice(item.path.lastIndexOf("/") + 1), icon: "", path: item.path, file: true };
+      return {
+        label: item.path.slice(item.path.lastIndexOf("/") + 1),
+        icon: "",
+        path: item.path,
+        file: true,
+      };
   }
 }
 

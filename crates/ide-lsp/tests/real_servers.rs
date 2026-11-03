@@ -567,3 +567,61 @@ async fn roslyn_end_to_end() {
 
     tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }
+
+/// SLN-3: a multi-targeting project has one Roslyn project context per target
+/// framework, and choosing one switches which `#if` branch is live.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_project_contexts_switch_target_frameworks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, _events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let greeter = root.join("src/Fixture.Core/Greeter.cs");
+    let source = std::fs::read_to_string(&greeter).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &greeter, &LanguageId::new("csharp"), 1, &source);
+    let contexts = retry("project contexts", Duration::from_secs(180), || {
+        let mgr = mgr.clone();
+        async move { mgr.project_contexts(doc).await.ok().flatten().filter(|c| c.contexts.len() == 2) }
+    })
+    .await;
+    let labels: Vec<&str> = contexts.contexts.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.iter().any(|l| l.contains("net10.0")), "{labels:?}");
+    assert!(labels.iter().any(|l| l.contains("netstandard2.0")), "{labels:?}");
+
+    // Line 12 (0-based) is `ArgumentException.ThrowIfNullOrWhiteSpace(name);` under `#if NET10_0_OR_GREATER`.
+    let excluded_on_line = |tokens: &ide_lsp::types::SemanticTokens, line: u32| {
+        let excluded = tokens.token_types.iter().position(|t| t == "excludedCode").map(|i| i as u32);
+        tokens.data.chunks(5).any(|q| q[0] == line && Some(q[3]) == excluded)
+    };
+    for (needle, excluded) in [("netstandard2.0", true), ("net10.0", false)] {
+        let context = contexts.contexts.iter().find(|c| c.label.contains(needle)).unwrap().clone();
+        mgr.set_project_context(doc, Some(context.clone()));
+        let tokens = retry(needle, Duration::from_secs(60), || {
+            let mgr = mgr.clone();
+            async move {
+                let tokens = mgr.semantic_tokens(doc).await.ok().flatten()?;
+                (excluded_on_line(&tokens, 12) == excluded).then_some(tokens)
+            }
+        })
+        .await;
+        assert_eq!(excluded_on_line(&tokens, 12), excluded, "{needle}");
+        let now = mgr.project_contexts(doc).await.unwrap().unwrap();
+        assert_eq!(now.contexts[now.active as usize].id, context.id);
+    }
+    tokio::time::timeout(Duration::from_secs(10), mgr.shutdown_all()).await.unwrap();
+}

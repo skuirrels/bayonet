@@ -163,7 +163,7 @@ impl LspManager {
         let per_server = targets.iter().map(|t| async {
             let pulls = t.caps().has("diagnosticProvider") || t.server.effective_config().pull_diagnostics;
             let raw = if pulls {
-                self.pull_diagnostics(t, &snap.uri, cancel, opts.timeout).await
+                self.pull_diagnostics(t, &snap.ident(), cancel, opts.timeout).await
             } else {
                 wait_for_publish(&t.server, &snap.path, since, opts, cancel).await
             };
@@ -192,11 +192,11 @@ impl LspManager {
     pub(crate) async fn pull_diagnostics(
         &self,
         t: &Target,
-        uri: &lsp::Uri,
+        ident: &Value,
         cancel: &CancellationToken,
         timeout: Duration,
     ) -> IdeResult<Vec<lsp::Diagnostic>> {
-        let params = json!({ "textDocument": { "uri": uri } });
+        let params = json!({ "textDocument": ident });
         let report: Value = self.call(t, "textDocument/diagnostic", params, Some(cancel), timeout).await?;
         let items = report.get("items").cloned().unwrap_or(Value::Array(Vec::new()));
         serde_json::from_value(items).map_err(|e| {

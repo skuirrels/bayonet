@@ -98,6 +98,8 @@ struct DocState {
     version: i32,
     text: Arc<DocText>,
     servers: Vec<Attached>,
+    /// The project context chosen for the document (a target framework), if any.
+    context: Option<types::ProjectContext>,
 }
 
 impl DocState {
@@ -135,11 +137,23 @@ struct DocSnap {
     language: LanguageId,
     text: Arc<DocText>,
     servers: Vec<Arc<Server>>,
+    context: Option<types::ProjectContext>,
+}
+
+/// A `textDocument` identifier, with Roslyn's project context when one is chosen
+/// (other servers ignore the extra field).
+fn ident_of(uri: &lsp::Uri, context: Option<&types::ProjectContext>) -> Value {
+    match context {
+        Some(c) => {
+            json!({ "uri": uri, "_vs_projectContext": { "_vs_id": c.id, "_vs_label": c.label, "_vs_kind": c.kind } })
+        }
+        None => json!({ "uri": uri }),
+    }
 }
 
 impl DocSnap {
     fn ident(&self) -> Value {
-        json!({ "uri": self.uri })
+        ident_of(&self.uri, self.context.as_ref())
     }
     fn position(&self, t: &Target, pos: Pos) -> lsp::Position {
         self.text.ide_to_lsp(t.enc(), pos)
@@ -750,6 +764,7 @@ impl LspManager {
             version: version as i32,
             text: Arc::new(DocText::new(text)),
             servers: servers.iter().map(|s| Attached { server: s.clone(), opened_gen: None }).collect(),
+            context: None,
         };
         {
             let mut docs = self.docs.lock();
@@ -887,6 +902,7 @@ impl LspManager {
             language: d.language.clone(),
             text: d.text.clone(),
             servers: d.servers.iter().map(|a| a.server.clone()).collect(),
+            context: d.context.clone(),
         })
     }
 
@@ -1733,6 +1749,70 @@ impl LspManager {
             token_types: legend.0,
             token_modifiers: legend.1,
         }))
+    }
+
+    /// The project contexts of `doc` (Roslyn's target frameworks of a multi-targeting
+    /// project); `None` when no server offers them.
+    pub async fn project_contexts(&self, doc: DocId) -> IdeResult<Option<types::ProjectContexts>> {
+        let snap = self.snapshot(doc)?;
+        // Roslyn answers without advertising `_vs_projectContextProvider`: ask every server
+        // of the document and take the first answer.
+        let targets = self.ready_targets(&snap.servers, |_| true).await;
+        let params = json!({ "_vs_textDocument": { "uri": snap.uri } });
+        let mut list = None;
+        for t in &targets {
+            let r: IdeResult<Option<Value>> =
+                self.call(t, "textDocument/_vs_getProjectContexts", params.clone(), None, DEFAULT_TIMEOUT).await;
+            if let Ok(Some(v)) = r {
+                list = Some(v);
+                break;
+            }
+        }
+        let Some(list) = list else { return Ok(None) };
+        let contexts: Vec<types::ProjectContext> = list
+            .get("_vs_projectContexts")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|c| {
+                        Some(types::ProjectContext {
+                            id: c.get("_vs_id")?.as_str()?.to_owned(),
+                            label: c.get("_vs_label").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                            kind: c.get("_vs_kind").and_then(Value::as_i64).unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if contexts.is_empty() {
+            return Ok(None);
+        }
+        let default = list.get("_vs_defaultIndex").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let chosen = snap.context.as_ref().and_then(|c| contexts.iter().position(|x| x.id == c.id));
+        let active = chosen.unwrap_or(default).min(contexts.len() - 1) as u32;
+        Ok(Some(types::ProjectContexts { contexts, active }))
+    }
+
+    /// Makes requests about `doc` use `context` (`None`: the server's default), and
+    /// refreshes its diagnostics.
+    pub fn set_project_context(&self, doc: DocId, context: Option<types::ProjectContext>) {
+        let servers: Vec<ide_core::ServerId> = {
+            let mut docs = self.docs.lock();
+            let Some(d) = docs.get_mut(&doc) else { return };
+            if d.context == context {
+                return;
+            }
+            d.context = context;
+            d.servers.iter().map(|a| a.server.id).collect()
+        };
+        self.schedule_pull(doc);
+        // Highlighting, hints and lenses depend on the context too: editors ask again.
+        use ide_core::event::LspRefreshKind as Kind;
+        for server in servers {
+            for kind in [Kind::SemanticTokens, Kind::InlayHints, Kind::CodeLens] {
+                self.sink().emit(ide_core::IdeEvent::LspRefresh { server, kind });
+            }
+        }
     }
 
     pub async fn code_lens(&self, doc: DocId) -> IdeResult<Vec<CodeLens>> {

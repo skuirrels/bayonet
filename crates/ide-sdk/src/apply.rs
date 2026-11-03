@@ -71,6 +71,11 @@ pub(crate) fn dotnet_root(root: &Path, s: &Settings) -> Option<PathBuf> {
     setting_path(root, &s.languages.dotnet.root)
 }
 
+/// The `dotnet` host of the configured .NET install; `None` = the one on `PATH`.
+pub fn dotnet_command(root: &Path, s: &Settings) -> Option<PathBuf> {
+    dotnet_root(root, s).map(|dir| dir.join(crate::exe("dotnet"))).filter(|p| p.is_file())
+}
+
 /// The configured GOROOT, else the Go the project pins for mise / asdf.
 pub(crate) fn goroot(root: &Path, s: &Settings) -> Option<PathBuf> {
     setting_path(root, &s.languages.go.goroot)

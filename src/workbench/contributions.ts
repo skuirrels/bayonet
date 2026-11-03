@@ -156,7 +156,9 @@ export interface EditorDocumentLifecycle {
 }
 
 /** Bumped by `notifyEditorDocumentChanged`; selectors reading `isDirty` re-run on it. */
-export const useEditorDocuments = create<{ revision: number }>(() => ({ revision: 0 }));
+export const useEditorDocuments = create<{ revision: number }>(() => ({
+  revision: 0,
+}));
 
 /** A custom editor document's dirty state (or pending edits) may have changed: tab marks and counts refresh. */
 export function notifyEditorDocumentChanged() {
@@ -237,12 +239,16 @@ export interface ServiceProviderContribution {
   reorder?: TreeReorder<ServiceTreeItem>;
 }
 
-export const useServiceProviders = create<{ providers: Map<string, ServiceProviderContribution> }>(() => ({
+export const useServiceProviders = create<{
+  providers: Map<string, ServiceProviderContribution>;
+}>(() => ({
   providers: new Map(),
 }));
 
 export function registerServiceProvider(p: ServiceProviderContribution): () => void {
-  useServiceProviders.setState((s) => ({ providers: new Map(s.providers).set(p.id, p) }));
+  useServiceProviders.setState((s) => ({
+    providers: new Map(s.providers).set(p.id, p),
+  }));
   return () =>
     useServiceProviders.setState((s) => {
       if (s.providers.get(p.id) !== p) return s;
@@ -288,7 +294,10 @@ function register<K extends keyof Contributions>(
   value: Contributions[K] extends Map<string, infer V> ? V : never,
 ) {
   useContributions.setState(
-    (s) => ({ [key]: new Map(s[key] as Map<string, unknown>).set(id, value) }) as Partial<Contributions>,
+    (s) =>
+      ({
+        [key]: new Map(s[key] as Map<string, unknown>).set(id, value),
+      }) as Partial<Contributions>,
   );
   return () =>
     useContributions.setState((s) => {
@@ -310,14 +319,20 @@ export const registerServiceView = (c: ServiceViewContribution) => register("ser
 
 /** The Services tool window, which hosts the service views. */
 export const SERVICES_WINDOW = "services";
-export const useActiveServiceView = create<{ active: string | null; used: ReadonlySet<string> }>(() => ({
+export const useActiveServiceView = create<{
+  active: string | null;
+  used: ReadonlySet<string>;
+}>(() => ({
   active: null,
   used: new Set(),
 }));
 
 /** Selects a service view and opens the Services tool window. */
 export function showServiceView(id: string, focus = false) {
-  useActiveServiceView.setState((s) => ({ active: id, used: s.used.has(id) ? s.used : new Set(s.used).add(id) }));
+  useActiveServiceView.setState((s) => ({
+    active: id,
+    used: s.used.has(id) ? s.used : new Set(s.used).add(id),
+  }));
   toolWindowService().show(SERVICES_WINDOW, focus);
 }
 
@@ -389,7 +404,10 @@ export function registerFileEditorProvider(p: FileEditorProvider): () => void {
 export async function resolveFileEditor(path: string): Promise<FileEditorResolution | null> {
   const providers = [...fileEditorProviders.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
   for (const p of providers) {
-    const acquisitions: Array<{ commit: () => void; rollback: () => Promise<void> }> = [];
+    const acquisitions: Array<{
+      commit: () => void;
+      rollback: () => Promise<void>;
+    }> = [];
     let admitted = false;
     const rollback = async () => {
       if (admitted) return;
@@ -432,15 +450,23 @@ export async function resolveFileEditor(path: string): Promise<FileEditorResolut
 export interface TextEditorWrapperContribution {
   id: string;
   matches(path: string): boolean;
-  component: ComponentType<{ path: string; tabId: string; children: ReactNode }>;
+  component: ComponentType<{
+    path: string;
+    tabId: string;
+    children: ReactNode;
+  }>;
 }
 
-export const useTextEditorWrappers = create<{ wrappers: Map<string, TextEditorWrapperContribution> }>(() => ({
+export const useTextEditorWrappers = create<{
+  wrappers: Map<string, TextEditorWrapperContribution>;
+}>(() => ({
   wrappers: new Map(),
 }));
 
 export function registerTextEditorWrapper(w: TextEditorWrapperContribution): () => void {
-  useTextEditorWrappers.setState((s) => ({ wrappers: new Map(s.wrappers).set(w.id, w) }));
+  useTextEditorWrappers.setState((s) => ({
+    wrappers: new Map(s.wrappers).set(w.id, w),
+  }));
   return () =>
     useTextEditorWrappers.setState((s) => {
       if (s.wrappers.get(w.id) !== w) return s;
@@ -497,7 +523,13 @@ export interface EditorService {
   /** Path of the focused text editor, if any. */
   activePath(): string | null;
   /** Doc id + cursor of the focused text editor. */
-  activeCursor(): { doc: number; path: string; line: number; col: number; offset: number } | null;
+  activeCursor(): {
+    doc: number;
+    path: string;
+    line: number;
+    col: number;
+    offset: number;
+  } | null;
   /** Save all dirty documents; rejects with the failures once every save was tried. */
   saveAll(): Promise<void>;
   /** Includes local edits not yet acknowledged by the backend. */
@@ -616,7 +648,9 @@ export const provideEmbeddedTerminal = (f: EmbeddedTerminalFactory | undefined) 
 export const editorService = (): EditorService => need(services.editor, "editor");
 export const toolWindowService = (): ToolWindowService => need(services.toolWindows, "toolWindows");
 export const notifications = (): NotificationService =>
-  services.notifications ?? { notify: (n) => console.info(`[${n.level}] ${n.title}`) };
+  services.notifications ?? {
+    notify: (n) => console.info(`[${n.level}] ${n.title}`),
+  };
 /** The editor service if one has been provided (for optional integrations). */
 export const maybeEditorService = (): EditorService | undefined => services.editor;
 /** Creates terminal widgets; provided by the terminal feature. */
@@ -687,12 +721,21 @@ export function setFileDecorations(provider: string, decorations: Map<string, Fi
   const folders = new Map<string, FileDecoration>();
   const subtrees = new Map<string, FileDecoration>();
   for (const [path, d] of decorations) {
-    if (d.subtree) subtrees.set(path, { color: d.color, tooltip: d.tooltip, faded: d.faded, error: d.error });
+    if (d.subtree)
+      subtrees.set(path, {
+        color: d.color,
+        tooltip: d.tooltip,
+        faded: d.faded,
+        error: d.error,
+      });
     if (!d.propagate) continue;
     for (let i = path.lastIndexOf("/"); i > 0; i = path.lastIndexOf("/", i - 1)) {
       const dir = path.slice(0, i);
       const prev = folders.get(dir);
-      folders.set(dir, { color: prev?.color ?? d.color, error: prev?.error || d.error });
+      folders.set(dir, {
+        color: prev?.color ?? d.color,
+        error: prev?.error || d.error,
+      });
     }
   }
   useFileDecorations.setState((s) => ({
@@ -774,10 +817,14 @@ export function useSettingsForm(): SettingsForm {
   return form;
 }
 
-export const useSettingsPages = create<{ pages: Map<string, SettingsPageContribution> }>(() => ({ pages: new Map() }));
+export const useSettingsPages = create<{
+  pages: Map<string, SettingsPageContribution>;
+}>(() => ({ pages: new Map() }));
 
 export function registerSettingsPage(page: SettingsPageContribution): () => void {
-  useSettingsPages.setState((s) => ({ pages: new Map(s.pages).set(page.id, page) }));
+  useSettingsPages.setState((s) => ({
+    pages: new Map(s.pages).set(page.id, page),
+  }));
   return () =>
     useSettingsPages.setState((s) => {
       if (s.pages.get(page.id) !== page) return s;
@@ -829,6 +876,8 @@ export interface ProjectViewRootEntry {
   readOnly?: boolean;
   /** `path` is a single file (a solution item), not a folder to list. */
   file?: boolean;
+  /** Names directly in `path` left out unless hidden files are shown (a project's `bin`, `obj`). */
+  hide?: readonly string[];
 }
 
 export interface ProjectViewRootContribution extends ProjectViewRootEntry {
@@ -842,12 +891,16 @@ export interface ProjectViewRootContribution extends ProjectViewRootEntry {
   scope?: "scratches" | "solution";
 }
 
-export const useProjectViewRoots = create<{ roots: Map<string, ProjectViewRootContribution> }>(() => ({
+export const useProjectViewRoots = create<{
+  roots: Map<string, ProjectViewRootContribution>;
+}>(() => ({
   roots: new Map(),
 }));
 
 export function registerProjectViewRoot(root: ProjectViewRootContribution): () => void {
-  useProjectViewRoots.setState((s) => ({ roots: new Map(s.roots).set(root.id, root) }));
+  useProjectViewRoots.setState((s) => ({
+    roots: new Map(s.roots).set(root.id, root),
+  }));
   return () =>
     useProjectViewRoots.setState((s) => {
       if (s.roots.get(root.id) !== root) return s;
@@ -876,6 +929,8 @@ export function projectViewRoots(map: ReadonlyMap<string, ProjectViewRootContrib
 export type ContextMenuId =
   | "editor"
   | "projectView"
+  /** A project view group node (a solution, a solution folder); `paths` are the node keys. */
+  | "projectViewGroup"
   | "editorTab"
   | "editorGutter"
   | "openIn"
@@ -989,12 +1044,16 @@ export interface RunExecutorContribution {
   prepare(config: RunConfig): Promise<ExecutorLaunch | null>;
 }
 
-export const useRunExecutors = create<{ executors: Map<string, RunExecutorContribution> }>(() => ({
+export const useRunExecutors = create<{
+  executors: Map<string, RunExecutorContribution>;
+}>(() => ({
   executors: new Map(),
 }));
 
 export function registerRunExecutor(executor: RunExecutorContribution): () => void {
-  useRunExecutors.setState((s) => ({ executors: new Map(s.executors).set(executor.id, executor) }));
+  useRunExecutors.setState((s) => ({
+    executors: new Map(s.executors).set(executor.id, executor),
+  }));
   return () =>
     useRunExecutors.setState((s) => {
       if (s.executors.get(executor.id) !== executor) return s;
@@ -1055,9 +1114,12 @@ export interface RunConfigTypeContribution {
    * What is launched for `params`; null when the type runs no process itself (Compound).
    * `stop`: a shell command line run on Stop before the process is signalled (`docker stop …`).
    */
-  commandLine(
-    params: Readonly<Record<string, string>>,
-  ): { command: string; args: string[]; cwd?: string | null; stop?: string | null } | null;
+  commandLine(params: Readonly<Record<string, string>>): {
+    command: string;
+    args: string[];
+    cwd?: string | null;
+    stop?: string | null;
+  } | null;
   /** Params that reproduce a configuration made elsewhere (detection, older files); null when it doesn't fit. */
   paramsFrom?(config: RunConfig): Record<string, string> | null;
   /** The type's fields set the working directory (no separate field). */
@@ -1075,12 +1137,16 @@ export interface RunConfigTypeContribution {
   debugAdapter?: string;
 }
 
-export const useRunConfigTypes = create<{ types: Map<string, RunConfigTypeContribution> }>(() => ({
+export const useRunConfigTypes = create<{
+  types: Map<string, RunConfigTypeContribution>;
+}>(() => ({
   types: new Map(),
 }));
 
 export function registerRunConfigType(type: RunConfigTypeContribution): () => void {
-  useRunConfigTypes.setState((s) => ({ types: new Map(s.types).set(type.id, type) }));
+  useRunConfigTypes.setState((s) => ({
+    types: new Map(s.types).set(type.id, type),
+  }));
   return () =>
     useRunConfigTypes.setState((s) => {
       if (s.types.get(type.id) !== type) return s;
@@ -1138,7 +1204,10 @@ export function useOccurrenceNavigator(toolWindow: string, nav: OccurrenceNaviga
     latest.current = nav;
   });
   useEffect(
-    () => registerOccurrenceNavigator(toolWindow, { go: (dir, focus) => latest.current(dir, focus) }),
+    () =>
+      registerOccurrenceNavigator(toolWindow, {
+        go: (dir, focus) => latest.current(dir, focus),
+      }),
     [toolWindow],
   );
 }
@@ -1164,12 +1233,16 @@ export interface EditorBannerContribution {
   useBanner(path: string): EditorBanner | null;
 }
 
-export const useEditorBanners = create<{ banners: Map<string, EditorBannerContribution> }>(() => ({
+export const useEditorBanners = create<{
+  banners: Map<string, EditorBannerContribution>;
+}>(() => ({
   banners: new Map(),
 }));
 
 export function registerEditorBanner(banner: EditorBannerContribution): () => void {
-  useEditorBanners.setState((s) => ({ banners: new Map(s.banners).set(banner.id, banner) }));
+  useEditorBanners.setState((s) => ({
+    banners: new Map(s.banners).set(banner.id, banner),
+  }));
   return () =>
     useEditorBanners.setState((s) => {
       if (s.banners.get(banner.id) !== banner) return s;
@@ -1199,7 +1272,10 @@ export interface LocalChangelist {
   files: LocalChangedFile[];
 }
 
-export const useLocalChanges = create<{ provider: string | null; lists: LocalChangelist[] }>(() => ({
+export const useLocalChanges = create<{
+  provider: string | null;
+  lists: LocalChangelist[];
+}>(() => ({
   provider: null,
   lists: [],
 }));

@@ -219,6 +219,20 @@ pub async fn lsp_semantic_tokens(host: &Host, window: &str, doc: DocId) -> IdeRe
     host.project(window)?.lsp.semantic_tokens(doc).await
 }
 
+pub async fn lsp_project_contexts(host: &Host, window: &str, doc: DocId) -> IdeResult<Option<ProjectContexts>> {
+    host.project(window)?.lsp.project_contexts(doc).await
+}
+
+pub fn lsp_set_project_context(
+    host: &Host,
+    window: &str,
+    doc: DocId,
+    context: Option<ProjectContext>,
+) -> IdeResult<()> {
+    host.project(window)?.lsp.set_project_context(doc, context);
+    Ok(())
+}
+
 pub async fn lsp_code_lens(host: &Host, window: &str, doc: DocId) -> IdeResult<Vec<CodeLens>> {
     host.project(window)?.lsp.code_lens(doc).await
 }
@@ -361,6 +375,10 @@ pub(crate) fn register(d: &mut Dispatcher) {
         |c| async move { lsp_inlay_hints(&c.host, &c.window, c.arg("doc")?, c.arg("range")?).await },
     );
     d.add("lsp_semantic_tokens", |c| async move { lsp_semantic_tokens(&c.host, &c.window, c.arg("doc")?).await });
+    d.add("lsp_project_contexts", |c| async move { lsp_project_contexts(&c.host, &c.window, c.arg("doc")?).await });
+    d.add("lsp_set_project_context", |c| async move {
+        lsp_set_project_context(&c.host, &c.window, c.arg("doc")?, c.arg("context")?)
+    });
     d.add("lsp_code_lens", |c| async move { lsp_code_lens(&c.host, &c.window, c.arg("doc")?).await });
     d.add("lsp_document_links", |c| async move { lsp_document_links(&c.host, &c.window, c.arg("doc")?).await });
     d.add("lsp_call_hierarchy", |c| async move {

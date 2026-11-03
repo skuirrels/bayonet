@@ -265,6 +265,27 @@ pub async fn lsp_semantic_tokens(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn lsp_project_contexts(
+    window: Window,
+    state: State<'_, AppState>,
+    doc: DocId,
+) -> IdeResult<Option<ProjectContexts>> {
+    ide_host::ops::lsp::lsp_project_contexts(&state.host, window.label(), doc).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn lsp_set_project_context(
+    window: Window,
+    state: State<'_, AppState>,
+    doc: DocId,
+    context: Option<ProjectContext>,
+) -> IdeResult<()> {
+    ide_host::ops::lsp::lsp_set_project_context(&state.host, window.label(), doc, context)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn lsp_code_lens(window: Window, state: State<'_, AppState>, doc: DocId) -> IdeResult<Vec<CodeLens>> {
     ide_host::ops::lsp::lsp_code_lens(&state.host, window.label(), doc).await
 }

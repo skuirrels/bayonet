@@ -211,6 +211,46 @@ describe("run config → launch config", () => {
     expect(eq.args).toEqual(["-test.run", "^TestA$"]);
   });
 
+  it("dotnet run under netcoredbg: the backend builds the project with its launch profile", () => {
+    const l = launchConfigFor(
+      rc({
+        kind: "dotnet",
+        command: "dotnet",
+        args: [
+          "run",
+          "--project",
+          "src/App/App.csproj",
+          "--launch-profile",
+          "https",
+          "-f",
+          "net10.0",
+          "--",
+          "--seed",
+          "1",
+        ],
+        env: { K: "v" },
+        debugAdapter: "netcoredbg",
+      }),
+      "/p",
+    )!;
+    expect(l).toMatchObject({
+      adapter: "netcoredbg",
+      program: null,
+      args: ["--seed", "1"],
+      cwd: "/p",
+      env: { K: "v" },
+    });
+    expect(JSON.parse(l.extraJson!)).toMatchObject({
+      dotnet: { project: "/p/src/App/App.csproj", launchProfile: "https", framework: "net10.0", configuration: null },
+    });
+    expect(typeof JSON.parse(l.extraJson!).justMyCode).toBe("boolean");
+    const here = launchConfigFor(
+      rc({ command: "dotnet", args: ["run"], cwd: "app", debugAdapter: "netcoredbg" }),
+      "/p",
+    )!;
+    expect(JSON.parse(here.extraJson!).dotnet.project).toBe("/p/app");
+  });
+
   it("other adapters launch the command as the program", () => {
     const l = launchConfigFor(
       rc({ command: "./bin/app", args: ["a"], env: { K: "v" }, debugAdapter: "netcoredbg" }),

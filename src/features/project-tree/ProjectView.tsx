@@ -26,7 +26,7 @@ import { isTauri } from "@/platform/ipc";
 import type { RootFolder } from "@/platform/languageSettings";
 import { useDetectedRoots, useEffectiveRoots } from "@/platform/projectRoots";
 import { macStroke, strokeOf } from "@/platform/keymap";
-import { OWNS_FILE_DROP, prepareMenuGroups, useFileDecoration } from "@/workbench/contributions";
+import { OWNS_FILE_DROP, menuGroupItems, prepareMenuGroups, useFileDecoration } from "@/workbench/contributions";
 import {
   FILES_DRAG,
   HighlightedText,
@@ -441,7 +441,15 @@ export function ProjectView() {
     }
     const nodes = [...sel].map((k) => m.byKey.get(k)).filter((n): n is ProjectNode => !!n && !n.placeholder);
     const target = nodes.length ? nodes : [node];
-    if (target.every((n) => n.group)) return;
+    if (target.every((n) => n.group)) {
+      // Group nodes have no folder: only what features contribute for them (a solution's Add menu).
+      const items = menuGroupItems("projectViewGroup", {
+        paths: target.map((n) => n.key),
+      });
+      if (items.at(-1)?.kind === "separator") items.pop();
+      if (items.length) showContextMenu(e, items);
+      return;
+    }
     // Contributed groups may read the file first (bounded wait).
     const at = { x: e.clientX, y: e.clientY };
     void prepareMenuGroups("projectView", menuGroupContext(target)).then(() =>
@@ -496,7 +504,11 @@ export function ProjectView() {
         paths = nodes.map((n) => n.path);
         if (!paths.length) return cleanup();
         const filePaths = nodes.filter((n) => !n.dir).map((n) => n.path);
-        if (filePaths.length) files = dragSession({ type: FILES_DRAG, payload: filePaths.join("\n") });
+        if (filePaths.length)
+          files = dragSession({
+            type: FILES_DRAG,
+            payload: filePaths.join("\n"),
+          });
       }
       const target = folderAt(containerRef.current, ev.clientX, ev.clientY);
       const valid = target && !paths.some((p) => target.path === p || isInside(target.path, p));

@@ -355,3 +355,23 @@ pub struct CallHierarchy {
     pub items: Vec<HierarchyItem>,
     pub incomplete: Option<ReferencesIncomplete>,
 }
+
+/// One compilation a document belongs to: Roslyn loads a multi-targeting project once
+/// per target framework, and each is a context with its own symbols and `#if` regions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectContext {
+    pub id: String,
+    /// `Fixture.Core (net10.0)`.
+    pub label: String,
+    /// The server's project kind (C#, Visual Basic, …), passed back as is.
+    pub kind: i64,
+}
+
+/// The contexts of a document and the one requests use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectContexts {
+    pub contexts: Vec<ProjectContext>,
+    pub active: u32,
+}

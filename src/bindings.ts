@@ -402,6 +402,17 @@ export const commands = {
 	tokenTypes: string[],
 	tokenModifiers: string[],
 } | null, IdeError>(__TAURI_INVOKE("lsp_semantic_tokens", { doc })),
+	lspProjectContexts: (doc: DocId) => typedError<{
+	contexts: ProjectContext[],
+	active: number,
+} | null, IdeError>(__TAURI_INVOKE("lsp_project_contexts", { doc })),
+	lspSetProjectContext: (doc: DocId, context: {
+	id: string,
+	/**  `Fixture.Core (net10.0)`. */
+	label: string,
+	/**  The server's project kind (C#, Visual Basic, …), passed back as is. */
+	kind: number,
+} | null) => typedError<null, IdeError>(__TAURI_INVOKE("lsp_set_project_context", { doc, context })),
 	lspCodeLens: (doc: DocId) => typedError<CodeLens[], IdeError>(__TAURI_INVOKE("lsp_code_lens", { doc })),
 	/**  Links in a document (`href`s, Markdown links, `#include`s…) from its language servers. */
 	lspDocumentLinks: (doc: DocId) => typedError<DocumentLink[], IdeError>(__TAURI_INVOKE("lsp_document_links", { doc })),
@@ -809,6 +820,35 @@ export const commands = {
 	dotnetSolutions: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_solutions")),
 	/**  The solution at `path`: its folders, projects and solution items. */
 	dotnetSolution: (path: IpcPath) => typedError<Solution, IdeError>(__TAURI_INVOKE("dotnet_solution", { path })),
+	/**  Searches the package sources of the project's `nuget.config`. */
+	nugetSearch: (query: string, prerelease: boolean, skip: number, take: number) => typedError<PackageSearch, IdeError>(__TAURI_INVOKE("nuget_search", { query, prerelease, skip, take })),
+	/**  Every version of package `id`, newest first. */
+	nugetVersions: (id: string, prerelease: boolean) => typedError<string[], IdeError>(__TAURI_INVOKE("nuget_versions", { id, prerelease })),
+	/**  The packages of every project of the solution; `outdated` adds the latest versions. */
+	nugetInstalled: (outdated: boolean, prerelease: boolean) => typedError<InstalledPackages, IdeError>(__TAURI_INVOKE("nuget_installed", { outdated, prerelease })),
+	/**  Installs or updates package `id` in `projects`. */
+	nugetInstall: (projects: IpcPath[], id: string, version: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_install", { projects, id, version })),
+	/**  Removes package `id` from `projects`. */
+	nugetRemove: (projects: IpcPath[], id: string) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_remove", { projects, id })),
+	/**  The test projects of the solution. */
+	dotnetTestProjects: () => typedError<TestProject[], IdeError>(__TAURI_INVOKE("dotnet_test_projects")),
+	/**
+	 *  Builds, then discovers or runs the tests of `selection` (every test project when
+	 *  empty), streaming events on `on_event`. Cancel with `cancel_request(request)`.
+	 */
+	dotnetTests: (request: RequestId, run: boolean, selection: TestSelection[], onEvent: Channel<TestEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_tests", { request, run, selection, onEvent })),
+	/**  Installed project and solution templates, custom ones included. */
+	dotnetTemplates: () => typedError<ProjectTemplate[], IdeError>(__TAURI_INVOKE("dotnet_templates")),
+	/**  Creates a project from a template, optionally adding it to the solution. */
+	dotnetNewProject: (template: string, name: string, directory: IpcPath, language: string | null, values: TemplateValue[], addToSolution: boolean, solutionFolder: string | null) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("dotnet_new_project", { template, name, directory, language, values, addToSolution, solutionFolder })),
+	/**  Adds existing projects to the solution. */
+	dotnetSolutionAdd: (projects: IpcPath[], solutionFolder: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_solution_add", { projects, solutionFolder })),
+	/**  Removes projects from the solution. */
+	dotnetSolutionRemove: (projects: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_solution_remove", { projects })),
+	/**  The projects a project references. */
+	dotnetProjectReferences: (project: IpcPath) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_project_references", { project })),
+	/**  Adds and removes project references. */
+	dotnetEditReferences: (project: IpcPath, add: IpcPath[], remove: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_edit_references", { project, add, remove })),
 	/**  The browsers installed on this machine. */
 	webBrowsers: () => typedError<Browser[], IdeError>(__TAURI_INVOKE("web_browsers")),
 	/**  The built-in server's URL for `path` (started on first use). */
@@ -1603,7 +1643,7 @@ export type BuildResult = {
 	messages: BuildMessage[],
 };
 
-export type BuildSystem = "maven" | "gradle" | "cargo" | "go" | "typescript";
+export type BuildSystem = "maven" | "gradle" | "cargo" | "go" | "typescript" | "dotnet";
 
 export type BuildTool = "maven" | "gradle";
 
@@ -3141,6 +3181,11 @@ export type Fragment = {
 	text: string,
 };
 
+export type FrameworkPackages = {
+	framework: string,
+	packages: InstalledPackage[],
+};
+
 export type FsConnection = { kind: "sftp"; ssh: string } | { kind: "local" };
 
 /**
@@ -3698,6 +3743,24 @@ export type InstallEvent =
 { type: "line"; text: string } | 
 /**  Download progress; `fraction` is 0..1 when the size is known. */
 { type: "progress"; fraction: number | null; message: string };
+
+export type InstalledPackage = {
+	id: string,
+	/**  The version the project (or `Directory.Packages.props`) asks for: `13.0.3`, `[1.0,2.0)`. */
+	requested: string | null,
+	/**  The version restore picked. */
+	resolved: string | null,
+	/**  Only from an `outdated` listing: the newest version on the sources. */
+	latest: string | null,
+	/**  Implicit references the SDK adds (`NETStandard.Library`); they cannot be removed. */
+	autoReferenced: boolean,
+};
+
+/**  The packages each project references, from `dotnet package list`. */
+export type InstalledPackages = {
+	projects: ProjectPackages[],
+	problems: string[],
+};
 
 /**  Optional parts of the invalidation; the symbol index is always rebuilt. */
 export type InvalidateCachesOptions = {
@@ -4493,6 +4556,23 @@ export type OutputChunk = { kind: "stdout"; text: string } | { kind: "stderr"; t
 /**  System message from the IDE (command line echo, exit code). */
 { kind: "system"; text: string };
 
+/**  One page of search results, per package source. */
+export type PackageSearch = {
+	sources: SourceResults[],
+	/**  Errors that are not one source's: a broken `nuget.config`, say. */
+	problems: string[],
+};
+
+export type PackageSummary = {
+	id: string,
+	/**  Latest version, or for an exact-match search the version of this entry. */
+	version: string,
+	description: string | null,
+	owners: string | null,
+	totalDownloads: number | null,
+	projectUrl: string | null,
+};
+
 /**  A file of a partial commit: which of its changes against HEAD to commit. */
 export type PartialCommitFile = {
 	path: IpcPath,
@@ -4767,6 +4847,24 @@ export type ProfilerInstall = {
 	cwd: IpcPath | null,
 };
 
+/**
+ *  One compilation a document belongs to: Roslyn loads a multi-targeting project once
+ *  per target framework, and each is a context with its own symbols and `#if` regions.
+ */
+export type ProjectContext = {
+	id: string,
+	/**  `Fixture.Core (net10.0)`. */
+	label: string,
+	/**  The server's project kind (C#, Visual Basic, …), passed back as is. */
+	kind: number,
+};
+
+/**  The contexts of a document and the one requests use. */
+export type ProjectContexts = {
+	contexts: ProjectContext[],
+	active: number,
+};
+
 export type ProjectFileSet = 
 /**  "Project Files": everything not excluded. */
 "all" | 
@@ -4795,6 +4893,13 @@ export type ProjectInfo_Serialize = {
 
 export type ProjectLanguage = "csharp" | "fsharp" | "visualbasic" | "sql" | "other";
 
+export type ProjectPackages = {
+	path: IpcPath,
+	frameworks: FrameworkPackages[],
+	/**  The `Directory.Packages.props` that holds this project's versions (central package management). */
+	centralPackages: IpcPath | null,
+};
+
 export type ProjectRoots = {
 	/**  Effective roots, sorted by path. */
 	roots: SourceFolder[],
@@ -4816,6 +4921,24 @@ export type ProjectStructureSettings = {
 	contentRoots?: string[],
 	/**  "Exclude files": `;`-separated name patterns (`*.log;tmp*`) excluded at any depth. */
 	excludeFiles?: string,
+};
+
+export type ProjectTemplate = {
+	/**  The group identity (one entry for all languages and versions of a template). */
+	id: string,
+	name: string,
+	/**  What `dotnet new` takes: `console`, `webapi`. */
+	shortName: string,
+	description: string | null,
+	author: string | null,
+	/**  Classifications: `Common`, `Web`, `Test`. */
+	tags: string[],
+	/**  `C#` first when offered. */
+	languages: string[],
+	/**  `project` or `solution`. */
+	kind: string,
+	/**  The options the dialog shows, for the default language. */
+	parameters: TemplateParameter[],
 };
 
 export type ProxyKind = "http" | "socks";
@@ -5670,6 +5793,14 @@ export type SourceFolder = {
 	detectedFrom: string | null,
 };
 
+export type SourceResults = {
+	/**  The source's name in `nuget.config` (`nuget.org`), else its URL. */
+	source: string,
+	packages: PackageSummary[],
+	/**  Why this source returned nothing: unreachable, unauthorised. */
+	problems: string[],
+};
+
 /**
  *  The Typo inspection's options (IDEA's "Process code / literals / comments");
  *  plain text and Markdown are always checked.
@@ -5953,6 +6084,29 @@ export type SyntaxNode = {
 /**  A long-running background task shown in the status bar. */
 export type TaskId = number;
 
+export type TemplateChoice = {
+	value: string,
+	label: string,
+};
+
+export type TemplateParameter = {
+	name: string,
+	/**  The command-line option: `--framework`. */
+	option: string,
+	label: string,
+	description: string | null,
+	/**  `choice`, `bool`, `string` / `text`, `int`… */
+	dataType: string,
+	defaultValue: string | null,
+	choices: TemplateChoice[],
+};
+
+/**  One template option the user set: `--framework` = `net10.0`. */
+export type TemplateValue = {
+	option: string,
+	value: string,
+};
+
 /**  An integrated terminal session. */
 export type TerminalId = number;
 
@@ -6021,6 +6175,53 @@ export type TestCaseReport = {
 };
 
 export type TestCaseStatus = "passed" | "failed" | "skipped";
+
+/**  What a discovery or run reports as it goes. */
+export type TestEvent = { kind: "phase"; project: IpcPath | null; phase: TestPhase; message: string | null } | 
+/**  New or changed tests of `project`. */
+{ kind: "tests"; project: IpcPath; tests: TestNode[] } | 
+/**  Build or test-process output. */
+{ kind: "output"; project: IpcPath | null; line: string };
+
+/**  One test (an MTP "action" node), as discovered or with its latest result. */
+export type TestNode = {
+	/**  Stable within a project; what `runTests` selects by. */
+	uid: string,
+	displayName: string,
+	/**  Fully qualified type: `Fixture.Core.Tests.GreeterTests`. */
+	typeName: string | null,
+	/**  Method with its parameter types for data-driven tests: `Rejects_blank_names(System.String)`. */
+	method: string | null,
+	file: IpcPath | null,
+	/**  1-based line of the method. */
+	line: number | null,
+	state: TestState,
+	durationMs: number | null,
+	message: string | null,
+	stackTrace: string | null,
+	expected: string | null,
+	actual: string | null,
+	/**  What the test wrote to stdout / stderr. */
+	output: string | null,
+};
+
+export type TestPhase = "building" | "discovering" | "running" | "finished" | "failed";
+
+/**  A test project of the solution. */
+export type TestProject = {
+	path: IpcPath,
+	name: string,
+};
+
+/**  The tests to run in one project; empty `uids` runs all of them. */
+export type TestSelection = {
+	project: IpcPath,
+	uids: string[],
+};
+
+export type TestState = "discovered" | "inProgress" | "passed" | "skipped" | "failed" | 
+/**  The test could not run (an exception outside the assertion). */
+"error" | "timedOut" | "cancelled";
 
 /**  Editor › Color Scheme override of one text attribute. */
 export type TextAttributesOverride = TextAttributesOverride_Serialize | TextAttributesOverride_Deserialize;

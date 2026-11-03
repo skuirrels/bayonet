@@ -12,6 +12,7 @@ pub mod adapter;
 pub mod attach;
 mod cargo;
 pub mod connection;
+mod dotnet;
 pub mod jdwp;
 pub mod kotlin;
 mod kotlin_jdwp;
@@ -608,6 +609,17 @@ impl DebugManager {
             })
             .await?;
             arguments["program"] = json!(program);
+        }
+        if let Some(spec) = arguments.as_object_mut().and_then(|o| o.remove("dotnet")) {
+            let launch = dotnet::DotnetLaunch::from_json(&spec)?;
+            let sink = owner.sink.clone();
+            dotnet::prepare(&launch, &mut arguments, move |line| {
+                sink.emit(ide_core::IdeEvent::Debug {
+                    session: id,
+                    event: ide_core::event::DebugEvent::Output { category: "console".into(), output: line },
+                });
+            })
+            .await?;
         }
         // Attach to a Node process started without `--inspect`: open its inspector first.
         if config.adapter == "js-debug" && config.request == "attach" && arguments.get("port").is_none() {

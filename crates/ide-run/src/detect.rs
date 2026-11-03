@@ -23,6 +23,7 @@ pub(crate) fn detect_excluding(root: &Path, excluded_poms: &[PathBuf]) -> Vec<Ru
     detect_gradle(root, &mut out);
     detect_maven(root, excluded_poms, &mut out);
     detect_go(root, &mut out);
+    detect_dotnet(root, &mut out);
     detect_python(root, &mut out);
     cmake::detect(root, &mut out);
     detect_make(root, &mut out);
@@ -973,6 +974,53 @@ pub(crate) fn just_recipes(src: &str) -> Vec<String> {
         }
     }
     recipes
+}
+
+// ---------------------------------------------------------------- .NET
+
+/// The projects of the solution at `root` (`.slnx` first), else the project files there.
+fn dotnet_projects(root: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
+    if let Some(solution) = ide_dotnet::find(root).into_iter().next() {
+        let projects = ide_dotnet::read(&solution).map(|s| s.projects()).unwrap_or_default();
+        return (Some(solution), projects);
+    }
+    let Ok(entries) = fs::read_dir(root) else { return (None, Vec::new()) };
+    let mut projects: Vec<PathBuf> =
+        entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && ide_dotnet::is_project_file(p)).collect();
+    projects.sort();
+    (None, projects)
+}
+
+/// `dotnet run` per executable project, one per `Project` launch profile when it has
+/// any (what Visual Studio offers in its start button), and `dotnet test` when the
+/// solution holds tests.
+fn detect_dotnet(root: &Path, out: &mut Vec<RunConfig>) {
+    let (solution, projects) = dotnet_projects(root);
+    let mut has_tests = false;
+    for project in &projects {
+        let Ok(info) = ide_dotnet::read_project(project) else { continue };
+        has_tests |= info.is_test;
+        if !info.is_executable() {
+            continue;
+        }
+        let name = project.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let rel = relative(root, project).to_string_lossy().replace('\\', "/");
+        let run = ["run", "--project", rel.as_str()];
+        let profiles = project.parent().map(ide_dotnet::launch_profiles).unwrap_or_default();
+        if profiles.is_empty() {
+            out.push(config(format!("dotnet:run:{name}"), name.clone(), "dotnet", "dotnet", &run).debug("netcoredbg"));
+        }
+        for profile in &profiles {
+            let args: Vec<&str> = run.iter().copied().chain(["--launch-profile", profile.name.as_str()]).collect();
+            let id = format!("dotnet:run:{name}:{}", profile.name);
+            out.push(config(id, format!("{name}: {}", profile.name), "dotnet", "dotnet", &args).debug("netcoredbg"));
+        }
+    }
+    if has_tests {
+        let target = solution.as_deref().map(|s| relative(root, s).to_string_lossy().into_owned());
+        let args: Vec<&str> = std::iter::once("test").chain(target.as_deref()).collect();
+        out.push(config("dotnet:test", "dotnet test", "dotnet", "dotnet", &args).test());
+    }
 }
 
 // ---------------------------------------------------------------- godot
