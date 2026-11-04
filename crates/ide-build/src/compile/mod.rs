@@ -49,6 +49,10 @@ pub struct BuildStep {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     format: Format,
+    /// Project files a .NET build builds, for per-project progress (BLD-3).
+    pub projects: Vec<PathBuf>,
+    /// The binary log this step writes (`-bl`).
+    pub binlog: Option<PathBuf>,
 }
 
 impl BuildStep {
@@ -59,6 +63,8 @@ impl BuildStep {
             cwd: cwd.to_path_buf(),
             env: BTreeMap::new(),
             format,
+            projects: Vec::new(),
+            binlog: None,
         }
     }
 
@@ -78,6 +84,15 @@ pub struct BuildPlan {
     /// Tree root title: `demo` / `Build module 'core'`.
     pub title: String,
     pub steps: Vec<BuildStep>,
+}
+
+/// A project of a .NET build (its tree node in the Build tool window).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildProject {
+    pub name: String,
+    /// The project file.
+    pub path: ide_core::IpcPath,
 }
 
 /// A compiler message in IDE coordinates (0-based line, UTF-16 column).
@@ -113,6 +128,15 @@ pub enum BuildEvent {
     Message {
         message: BuildMessage,
     },
+    /// The projects of a .NET build, before it builds them.
+    Projects {
+        projects: Vec<BuildProject>,
+    },
+    /// A project of `Projects` was built, or failed.
+    ProjectFinished {
+        path: ide_core::IpcPath,
+        success: bool,
+    },
     /// Status bar progress; `fraction` 0..1 or `None` when indeterminate.
     Progress {
         message: String,
@@ -130,6 +154,8 @@ pub struct BuildResult {
     pub warnings: u32,
     pub duration_ms: f64,
     pub messages: Vec<BuildMessage>,
+    /// The MSBuild binary log the build wrote.
+    pub binlog: Option<ide_core::IpcPath>,
 }
 
 // ---------------------------------------------------------------- planning
@@ -365,6 +391,44 @@ fn dotnet_target(dir: &Path) -> Option<PathBuf> {
     })
 }
 
+/// The projects `dotnet build target` builds: the solution's, or the project itself.
+fn dotnet_projects(target: &Path) -> Vec<PathBuf> {
+    if ide_dotnet::is_project_file(target) {
+        return vec![target.to_path_buf()];
+    }
+    let mut projects = ide_dotnet::read(target).map(|s| s.projects()).unwrap_or_default();
+    projects.retain(|p| p.is_file());
+    projects
+}
+
+/// Binary logs kept in a binlog folder; older ones are removed before a build.
+pub const KEPT_BINLOGS: usize = 10;
+
+/// Removes all but the newest `keep - 1` binary logs of `dir`, making room for the next.
+pub fn prune_binlogs(dir: &Path, keep: usize) {
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "binlog"))
+        .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+        .collect();
+    logs.sort_by_key(|l| std::cmp::Reverse(l.0));
+    for (_, p) in logs.into_iter().skip(keep.saturating_sub(1)) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// The project of `projects` an MSBuild `Name -> output` line reports built.
+fn built_project<'a>(line: &str, projects: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    let (name, output) = line.trim().split_once(" -> ")?;
+    if name.contains(' ') || Path::new(output.trim()).extension().is_none() {
+        return None;
+    }
+    projects.iter().find(|p| p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(name)))
+}
+
 fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Vec<BuildStep>> {
     let target = dotnet_target(dir).ok_or_else(|| IdeError::not_found("no .NET solution or project found"))?;
     let target = target.file_name().map_or_else(|| target.to_string_lossy(), |n| n.to_string_lossy()).into_owned();
@@ -378,6 +442,14 @@ fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Ve
     };
     let mut step = BuildStep::new(program, &args, dir, Format::MsBuild);
     step.args.extend(common.iter().map(|a| (*a).to_owned()));
+    step.projects = dotnet_projects(&dir.join(&target));
+    if let Some(binlogs) = &model.dotnet_binlogs {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+        let stem = Path::new(&target).file_stem().map_or_else(|| "build".into(), |s| s.to_string_lossy());
+        let path = binlogs.join(format!("{stem}-{stamp}.binlog"));
+        step.args.push(format!("-bl:{}", path.display()));
+        step.binlog = Some(path);
+    }
     step.env.extend(
         [("DOTNET_CLI_TELEMETRY_OPTOUT", "1"), ("DOTNET_NOLOGO", "1"), ("DOTNET_CLI_UI_LANGUAGE", "en")]
             .map(|(k, v)| (k.to_owned(), v.to_owned())),
@@ -548,10 +620,27 @@ pub fn run(
     let mut seen: HashSet<(Option<PathBuf>, Option<Range>, String)> = HashSet::new();
     let mut success = true;
     let mut last_error_line = String::new();
+    let mut binlog = None;
     for step in &plan.steps {
         let command = step.display();
         on_event(BuildEvent::Step { command: command.clone(), cwd: step.cwd.clone().into() });
         on_event(BuildEvent::Progress { message: command.clone(), fraction: None });
+        if !step.projects.is_empty() {
+            let projects = step
+                .projects
+                .iter()
+                .map(|p| BuildProject {
+                    name: p.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned()),
+                    path: p.clone().into(),
+                })
+                .collect();
+            on_event(BuildEvent::Projects { projects });
+        }
+        if let Some(dir) = step.binlog.as_deref().and_then(Path::parent) {
+            let _ = std::fs::create_dir_all(dir);
+            prune_binlogs(dir, KEPT_BINLOGS);
+        }
+        let mut built: HashSet<&Path> = HashSet::new();
         let mut parser = OutputParser::new(step.format);
         let mut emit = |raws: Vec<RawMessage>, messages: &mut Vec<BuildMessage>| {
             for raw in raws {
@@ -569,7 +658,18 @@ pub fn run(
                 Some(text) => on_event(BuildEvent::Output { text, stderr: stream == Stream::Stderr }),
                 None => {
                     on_event(BuildEvent::Output { text: format!("{line}\n"), stderr: stream == Stream::Stderr });
-                    if let Some((message, fraction)) = progress_of(line) {
+                    if let Some(project) = built_project(&parse::strip_ansi(line), &step.projects) {
+                        if built.insert(project) {
+                            on_event(BuildEvent::ProjectFinished { path: project.clone().into(), success: true });
+                            let name =
+                                project.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+                            let fraction = built.len() as f32 / step.projects.len() as f32;
+                            on_event(BuildEvent::Progress {
+                                message: format!("Built {name}"),
+                                fraction: Some(fraction),
+                            });
+                        }
+                    } else if let Some((message, fraction)) = progress_of(line) {
                         on_event(BuildEvent::Progress { message, fraction });
                     }
                 }
@@ -599,6 +699,19 @@ pub fn run(
             }
         };
         emit(parser.finish(), &mut messages);
+        // Projects with errors that never reported their output failed.
+        for project in step.projects.iter().filter(|p| !built.contains(p.as_path())) {
+            let dir = project.parent().unwrap_or(project);
+            let failed = messages
+                .iter()
+                .any(|m| m.severity == Severity::Error && m.path.as_ref().is_some_and(|p| p.starts_with(dir)));
+            if failed {
+                on_event(BuildEvent::ProjectFinished { path: project.clone().into(), success: false });
+            }
+        }
+        if let Some(log) = step.binlog.as_ref().filter(|p| p.is_file()) {
+            binlog = Some(log.clone().into());
+        }
         let code = if out.success { "0" } else { "non-zero" };
         on_event(BuildEvent::Output { text: format!("\nProcess finished with exit code {code}\n"), stderr: false });
         if !out.success {
@@ -622,6 +735,7 @@ pub fn run(
         warnings: count(Severity::Warning),
         duration_ms: started.elapsed().as_secs_f64() * 1000.0,
         messages,
+        binlog,
     })
 }
 
@@ -839,6 +953,136 @@ mod tests {
         assert!(m.path.as_ref().is_some_and(|p| p.ends_with("Broken.cs")), "{m:?}");
         assert_eq!(m.range.map(|r| (r.start.line, r.start.col)), Some((4, 12)));
         assert!(result.messages.iter().all(|m| !m.text.contains(".csproj]")));
+    }
+
+    #[test]
+    fn msbuild_output_lines_mark_projects_built() {
+        let projects = [PathBuf::from("/s/App/App.csproj"), PathBuf::from("/s/Lib/Lib.fsproj")];
+        assert_eq!(built_project("  app -> /s/App/bin/Debug/net10.0/App.dll", &projects), Some(&projects[0]));
+        assert_eq!(built_project("  Lib -> /s/Lib/bin/Lib.dll", &projects), Some(&projects[1]));
+        assert_eq!(built_project("  Other -> /x/Other.dll", &projects), None);
+        assert_eq!(built_project("  Restored /s/App/App.csproj (in 80 ms).", &projects), None);
+    }
+
+    #[test]
+    fn keeps_the_newest_binary_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            let p = tmp.path().join(format!("App-{i}.binlog"));
+            std::fs::write(&p, "").unwrap();
+            let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000 + i);
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(t).unwrap();
+        }
+        std::fs::write(tmp.path().join("notes.txt"), "").unwrap();
+        prune_binlogs(tmp.path(), 3);
+        let mut left: Vec<String> =
+            std::fs::read_dir(tmp.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into()).collect();
+        left.sort();
+        assert_eq!(left, ["App-3.binlog", "App-4.binlog", "notes.txt"]);
+    }
+
+    fn has_dotnet() -> bool {
+        crate::process::run(
+            "dotnet",
+            &["--version".into()],
+            Path::new("."),
+            &BTreeMap::new(),
+            &CancellationToken::new(),
+            |_, _| {},
+        )
+        .is_ok()
+    }
+
+    /// Against the machine's .NET SDK: per-project results and a readable binary log.
+    #[test]
+    fn dotnet_build_reports_projects_and_writes_a_binlog() {
+        if !has_dotnet() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Sln");
+        let csproj = r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"#;
+        write(
+            &dir,
+            "Sln.slnx",
+            r#"<Solution><Project Path="Good/Good.csproj" /><Project Path="Bad/Bad.csproj" /></Solution>"#,
+        );
+        write(&dir, "Good/Good.csproj", csproj);
+        write(
+            &dir,
+            "Good/Good.cs",
+            "namespace Good;
+public class A { }
+",
+        );
+        write(&dir, "Bad/Bad.csproj", csproj);
+        write(
+            &dir,
+            "Bad/Bad.cs",
+            "namespace Bad;
+public class A { int x = \"no\"; }
+",
+        );
+        let model = BuildModel { dotnet_binlogs: Some(tmp.path().join("logs")), ..BuildModel::default() };
+        let p = plan(&dir, &model, BuildKind::Build, None).unwrap();
+        assert_eq!(p.steps[0].projects.len(), 2);
+        let events = std::sync::Mutex::new(Vec::new());
+        let result = run(&dir, &p, &CancellationToken::new(), &|e| {
+            if let BuildEvent::ProjectFinished { path, success } = e {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                events.lock().unwrap().push((name, success));
+            }
+        })
+        .unwrap();
+        assert!(!result.success);
+        let mut finished = events.into_inner().unwrap();
+        finished.sort();
+        assert_eq!(finished, [("Bad.csproj".to_owned(), false), ("Good.csproj".to_owned(), true)]);
+        let log = ide_dotnet::binlog::read(result.binlog.as_deref().expect("a binary log")).unwrap();
+        assert!(!log.succeeded);
+        assert!(log.diagnostics.iter().any(|d| d.code.as_deref() == Some("CS0029")), "{:?}", log.diagnostics);
+        assert!(log.projects.iter().any(|p| p.name == "Good.csproj" && p.succeeded));
+    }
+
+    /// BLD-3's acceptance: cancelling stops MSBuild within 2 s.
+    #[cfg(unix)]
+    #[test]
+    fn dotnet_build_cancels_within_two_seconds() {
+        if !has_dotnet() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Slow");
+        let marker = tmp.path().join("started");
+        // A target that would run for a minute, after leaving a marker.
+        write(
+            &dir,
+            "Slow.csproj",
+            &format!(
+                r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><Target Name="Wait" BeforeTargets="CoreCompile"><Exec Command="touch '{}'; sleep 60" /></Target></Project>"#,
+                marker.display()
+            ),
+        );
+        write(&dir, "Slow.cs", "namespace Slow;\npublic class A { }\n");
+        let p = plan(&dir, &BuildModel::default(), BuildKind::Build, None).unwrap();
+        let cancel = CancellationToken::new();
+        let watcher = {
+            let (cancel, marker) = (cancel.clone(), marker.clone());
+            std::thread::spawn(move || {
+                let deadline = Instant::now() + std::time::Duration::from_secs(120);
+                while !marker.exists() && Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                let at = Instant::now();
+                cancel.cancel();
+                at
+            })
+        };
+        let err = run(&dir, &p, &cancel, &|_| {}).expect_err("cancelled");
+        let at = watcher.join().unwrap();
+        assert!(marker.exists(), "the Exec task never started");
+        assert_eq!(err.kind, ide_core::error::ErrorKind::Cancelled);
+        assert!(at.elapsed() < std::time::Duration::from_secs(2), "took {:?}", at.elapsed());
     }
 
     #[test]

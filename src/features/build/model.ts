@@ -22,8 +22,16 @@ export function appendOutput(lines: ConsoleLine[], text: string, kind: ConsoleLi
   return next.length > MAX_CONSOLE_LINES ? next.slice(next.length - MAX_CONSOLE_LINES) : next;
 }
 
+/** A project of a .NET build: building, built, failed, or not built when the build stopped. */
+export interface BuildProjectState {
+  name: string;
+  path: string;
+  status: "running" | "success" | "failed" | "skipped";
+}
+
 export type BuildNode =
   | { kind: "root"; key: string; title: string; status: BuildStatus; errors: number; warnings: number }
+  | { kind: "project"; key: string; project: BuildProjectState; files: BuildNode[] }
   | { kind: "file"; key: string; path: string; messages: BuildMessage[] }
   | { kind: "message"; key: string; message: BuildMessage };
 
@@ -45,8 +53,42 @@ export function rootNode(title: string, status: BuildStatus, messages: readonly 
   };
 }
 
-/** Children of the root: files with messages (errors first), then messages about the build itself. */
-export function rootChildren(messages: readonly BuildMessage[]): BuildNode[] {
+const dirOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf("/")));
+
+/**
+ * Children of the root: with the projects of a .NET build, a node per project holding
+ * the files under its folder; then the other files with messages (errors first) and the
+ * messages about the build itself.
+ */
+export function rootChildren(
+  messages: readonly BuildMessage[],
+  projects: readonly BuildProjectState[] = [],
+): BuildNode[] {
+  const flat = fileNodes(messages);
+  if (!projects.length) return flat;
+  // The deepest project folder holding a file owns it (nested projects).
+  const dirs = projects.map((p) => `${dirOf(p.path)}/`);
+  const owned = new Map<number, BuildNode[]>();
+  const rest: BuildNode[] = [];
+  for (const n of flat) {
+    let best = -1;
+    if (n.kind === "file")
+      dirs.forEach((d, i) => {
+        if (n.path.startsWith(d) && (best < 0 || d.length > dirs[best]!.length)) best = i;
+      });
+    if (best < 0) rest.push(n);
+    else owned.set(best, [...(owned.get(best) ?? []), n]);
+  }
+  const nodes: BuildNode[] = projects.map((project, i) => ({
+    kind: "project",
+    key: `build:project:${project.path}`,
+    project,
+    files: owned.get(i) ?? [],
+  }));
+  return [...nodes, ...rest];
+}
+
+function fileNodes(messages: readonly BuildMessage[]): BuildNode[] {
   const byFile = new Map<string, BuildMessage[]>();
   const general: BuildNode[] = [];
   messages.forEach((m, i) => {
@@ -110,23 +152,40 @@ export function messageFiles(messages: readonly BuildMessage[]): string[] {
   return [...new Set(messages.filter((m) => m.path && m.range).map((m) => m.path!))];
 }
 
-/** The node with `key` in the tree of `messages` (root excluded). */
-export function findNode(messages: readonly BuildMessage[], key: string): BuildNode | undefined {
-  for (const c of rootChildren(messages)) {
-    if (c.key === key) return c;
-    if (c.kind === "file") {
-      const hit = fileChildren(c).find((m) => m.key === key);
-      if (hit) return hit;
-    }
+/** Children of a node below the root. */
+export function nodeChildren(n: BuildNode): BuildNode[] | undefined {
+  return n.kind === "project" ? n.files : n.kind === "file" ? fileChildren(n) : undefined;
+}
+
+function* walk(nodes: readonly BuildNode[]): Generator<BuildNode> {
+  for (const n of nodes) {
+    yield n;
+    const children = nodeChildren(n);
+    if (children) yield* walk(children);
   }
+}
+
+/** The node with `key` in the tree of `messages` (root excluded). */
+export function findNode(
+  messages: readonly BuildMessage[],
+  key: string,
+  projects: readonly BuildProjectState[] = [],
+): BuildNode | undefined {
+  for (const n of walk(rootChildren(messages, projects))) if (n.key === key) return n;
   return undefined;
 }
 
 /** The first error in tree order, selected (and navigated to) when a build fails. */
-export function firstError(messages: readonly BuildMessage[]): Extract<BuildNode, { kind: "message" }> | undefined {
-  for (const c of rootChildren(messages)) {
-    const leaves = c.kind === "file" ? fileChildren(c) : [c];
-    for (const n of leaves) if (n.kind === "message" && n.message.severity === "error") return n;
-  }
+export function firstError(
+  messages: readonly BuildMessage[],
+  projects: readonly BuildProjectState[] = [],
+): Extract<BuildNode, { kind: "message" }> | undefined {
+  for (const n of walk(rootChildren(messages, projects)))
+    if (n.kind === "message" && n.message.severity === "error") return n;
   return undefined;
+}
+
+/** The final state of the projects when a build ends: unfinished ones were built (success) or not. */
+export function finishProjects(projects: readonly BuildProjectState[], success: boolean): BuildProjectState[] {
+  return projects.map((p) => (p.status === "running" ? { ...p, status: success ? "success" : "skipped" } : p));
 }

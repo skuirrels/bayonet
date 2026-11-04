@@ -34,6 +34,9 @@ pub fn load(root: &Path, cache: &Path, settings: &Settings) -> BuildModel {
         &settings.languages.java.maven,
     );
     model.dotnet = ide_sdk::apply::dotnet_command(root, settings);
+    if settings.languages.dotnet.binary_log {
+        model.dotnet_binlogs = Some(cache.join("binlogs"));
+    }
     let jdk = ide_sdk::apply::project_jdk(root, settings);
     if let Some(m) = &mut model.maven {
         let mvn = ide_sdk::apply::maven_command(root, settings);

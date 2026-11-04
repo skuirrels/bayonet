@@ -26,16 +26,18 @@ import {
 import type { BuildMessage, Severity } from "@/platform/ipc";
 import {
   ROOT_KEY,
-  fileChildren,
   findNode,
+  nodeChildren,
   finishSummary,
   formatDuration,
   rootChildren,
   rootNode,
   type BuildNode,
+  type BuildProjectState,
   type BuildStatus,
 } from "./model";
 import { navigateToMessage, rerunBuild, selectBuildNode, useBuildRun } from "./store";
+import { maybeEditorService } from "@/workbench/contributions";
 import styles from "./Build.module.css";
 import { tx } from "@/platform/i18n";
 
@@ -51,6 +53,25 @@ function StatusIcon({ status }: { status: BuildStatus }) {
   if (status === "running") return <Spinner size={14} label="Building" />;
   const name = status === "success" ? "success" : status === "failed" ? "error" : "warning";
   return <Icon name={name} size={14} className={styles[`status-${status}`]} />;
+}
+
+function ProjectStatusIcon({ status }: { status: BuildProjectState["status"] }) {
+  if (status === "running") return <Spinner size={14} label="Building" />;
+  if (status === "skipped") return <Icon name="pause" size={14} className={styles["status-skipped"]} />;
+  return <Icon name={status === "success" ? "success" : "error"} size={14} className={styles[`status-${status}`]} />;
+}
+
+const PROJECT_STATUS: Record<BuildProjectState["status"], string> = {
+  running: "building…",
+  success: "built",
+  failed: "failed",
+  skipped: "not built",
+};
+
+function openBinlog(path: string) {
+  void maybeEditorService()
+    ?.openFile(path, { focus: true })
+    .catch(() => undefined);
 }
 
 function rootDetail(status: BuildStatus, durationMs: number | null, errors: number, warnings: number): string {
@@ -73,16 +94,23 @@ export function BuildHeaderActions() {
 }
 
 function BuildTree() {
-  const { title, status, messages, durationMs, selected } = useBuildRun();
+  const { title, status, messages, durationMs, selected, projects, binlog } = useBuildRun();
   const root = useProject((s) => s.project?.root ?? "");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const tree = useRef<TreeHandle>(null);
   const selection = useMemo(() => new Set(selected ? [selected] : []), [selected]);
   const roots = useMemo(() => (status ? [rootNode(title, status, messages)] : []), [title, status, messages]);
-  const children = useMemo(() => rootChildren(messages), [messages]);
+  const children = useMemo(() => rootChildren(messages, projects), [messages, projects]);
   const expanded = useMemo(() => {
     const keys = new Set<string>([ROOT_KEY]);
-    for (const c of children) if (c.kind === "file") keys.add(c.key);
+    for (const c of children) {
+      if (c.kind === "file") keys.add(c.key);
+      // Projects with messages open with their files.
+      if (c.kind === "project" && c.files.length) {
+        keys.add(c.key);
+        for (const f of c.files) keys.add(f.key);
+      }
+    }
     for (const k of collapsed) keys.delete(k);
     return keys;
   }, [children, collapsed]);
@@ -93,9 +121,11 @@ function BuildTree() {
   if (shown !== selected) {
     setShown(selected);
     const file = selected?.split("\u0000")[0];
-    if (file && file !== selected && collapsed.has(file)) {
+    const owner = children.find((c) => c.kind === "project" && c.files.some((f) => f.key === file));
+    if (file && file !== selected && (collapsed.has(file) || (owner && collapsed.has(owner.key)))) {
       const next = new Set(collapsed);
       next.delete(file);
+      if (owner) next.delete(owner.key);
       setCollapsed(next);
     }
   }
@@ -109,8 +139,7 @@ function BuildTree() {
   };
 
   const getChildren = useCallback(
-    (n: BuildNode): BuildNode[] | undefined =>
-      n.kind === "root" ? children : n.kind === "file" ? fileChildren(n) : undefined,
+    (n: BuildNode): BuildNode[] | undefined => (n.kind === "root" ? children : nodeChildren(n)),
     [children],
   );
 
@@ -121,6 +150,34 @@ function BuildTree() {
           <StatusIcon status={n.status} />
           <span className={styles.strong}>{n.title}</span>
           <span className={styles.muted}>{rootDetail(n.status, durationMs, n.errors, n.warnings)}</span>
+          {binlog && n.status !== "running" && (
+            <button
+              type="button"
+              className={styles.link}
+              onClick={(e) => {
+                e.stopPropagation();
+                openBinlog(binlog);
+              }}
+            >
+              <T>Binary log</T>
+            </button>
+          )}
+        </span>
+      );
+    }
+    if (n.kind === "project") {
+      const errors = n.files.reduce(
+        (c, f) => c + (f.kind === "file" ? f.messages.filter((m) => m.severity === "error").length : 0),
+        0,
+      );
+      return (
+        <span className={styles.row}>
+          <ProjectStatusIcon status={n.project.status} />
+          <Icon name={/\.fsproj$/i.test(n.project.path) ? "project-fsharp" : "project-csharp"} size={16} />
+          <span className={clsx(styles.strong, errors > 0 && styles.fileError, state.selected && styles.selected)}>
+            {n.project.name}
+          </span>
+          <span className={styles.muted}>{PROJECT_STATUS[n.project.status]}</span>
         </span>
       );
     }
@@ -164,7 +221,7 @@ function BuildTree() {
       className={styles.treeHost}
       onKeyDown={(e) => {
         if (e.key !== "F4" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !selected) return;
-        const n = findNode(messages, selected);
+        const n = findNode(messages, selected, projects);
         if (!n) return;
         e.preventDefault();
         e.stopPropagation();
@@ -176,9 +233,17 @@ function BuildTree() {
         aria-label="Build"
         roots={roots}
         getKey={(n) => n.key}
-        getLabel={(n) => (n.kind === "root" ? n.title : n.kind === "file" ? basename(n.path) : n.message.text)}
+        getLabel={(n) =>
+          n.kind === "root"
+            ? n.title
+            : n.kind === "project"
+              ? n.project.name
+              : n.kind === "file"
+                ? basename(n.path)
+                : n.message.text
+        }
         getChildren={getChildren}
-        isExpandable={(n) => n.kind !== "message"}
+        isExpandable={(n) => n.kind !== "message" && (n.kind !== "project" || n.files.length > 0)}
         expanded={expanded}
         onExpandedChange={(_next, node, isOpen) =>
           setCollapsed((prev) => {
@@ -275,7 +340,11 @@ function MessageDetail({ message }: { message: BuildMessage }) {
 function BuildOutput() {
   const selected = useBuildRun((s) => s.selected);
   const messages = useBuildRun((s) => s.messages);
-  const node = useMemo(() => (selected ? findNode(messages, selected) : undefined), [selected, messages]);
+  const projects = useBuildRun((s) => s.projects);
+  const node = useMemo(
+    () => (selected ? findNode(messages, selected, projects) : undefined),
+    [selected, messages, projects],
+  );
   return node?.kind === "message" ? <MessageDetail message={node.message} /> : <BuildConsole />;
 }
 

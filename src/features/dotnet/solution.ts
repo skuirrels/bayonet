@@ -10,8 +10,8 @@ import { tx } from "@/platform/i18n";
 export const SOLUTION_ROOT_ID = "solution";
 
 const PROJECT_ICONS: Partial<Record<ProjectLanguage, string>> = {
-  csharp: "file-csharp",
-  fsharp: "file-fsharp",
+  csharp: "project-csharp",
+  fsharp: "project-fsharp",
   sql: "file-sql",
 };
 

@@ -507,6 +507,8 @@ pub struct DotnetSettings {
     /// .NET install directory (`DOTNET_ROOT`) for language servers and terminals;
     /// empty = the `dotnet` on `PATH`. The SDK within it comes from `global.json`.
     pub root: String,
+    /// Write an MSBuild binary log (`-bl`) of every build, for the binary log viewer.
+    pub binary_log: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]

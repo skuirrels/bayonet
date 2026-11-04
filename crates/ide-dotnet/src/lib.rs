@@ -4,6 +4,8 @@
 //! Only the files are read; nothing is evaluated (MSBuild and NuGet belong to the
 //! .NET sidecar), so a solution opens instantly and also when no SDK is installed.
 
+pub mod binlog;
+pub mod diagnostics;
 pub mod ef;
 pub mod msbuild;
 pub mod nuget;

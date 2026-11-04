@@ -154,3 +154,22 @@
   white-space: pre-wrap;
   tab-size: 4;
 }
+
+.status-running {
+  color: var(--fg-muted);
+}
+.status-skipped {
+  color: var(--fg-subtle);
+}
+.link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link, var(--accent));
+  font: inherit;
+  cursor: pointer;
+}
+.link:hover {
+  text-decoration: underline;
+}

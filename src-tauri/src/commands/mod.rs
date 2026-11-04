@@ -17,6 +17,7 @@ pub mod coverage;
 pub mod db;
 pub mod debug;
 pub mod deploy;
+pub mod diagnostics;
 pub mod doc;
 pub mod docker;
 pub mod dotnet;
@@ -400,6 +401,28 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         dotnet::dotnet_solution_remove,
         dotnet::dotnet_migrate_solution,
         dotnet::dotnet_sdk_target,
+        dotnet::dotnet_binlog_read,
+        dotnet::dotnet_binlogs,
+        diagnostics::diag_tools,
+        diagnostics::diag_processes,
+        diagnostics::diag_stacks,
+        diagnostics::diag_stacks_read,
+        diagnostics::diag_gcdump,
+        diagnostics::diag_gcdump_read,
+        diagnostics::diag_dump,
+        diagnostics::diag_dump_analyze,
+        diagnostics::diag_symbols,
+        diagnostics::diag_trace,
+        diagnostics::diag_trace_read,
+        diagnostics::diag_counters,
+        diagnostics::diag_counters_read,
+        diagnostics::diag_artifacts,
+        diagnostics::diag_artifact_delete,
+        diagnostics::diag_monitor_status,
+        diagnostics::diag_monitor_start,
+        diagnostics::diag_monitor_stop,
+        diagnostics::diag_monitor_http,
+        diagnostics::diag_live_metrics,
         dotnet::dotnet_ef_projects,
         dotnet::dotnet_ef_migrations,
         dotnet::dotnet_ef_command,

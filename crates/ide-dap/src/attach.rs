@@ -276,8 +276,30 @@ pub fn dotnet_pids() -> std::collections::HashSet<u32> {
         std::env::var_os("TMPDIR").map_or_else(|| "/tmp".into(), std::path::PathBuf::from)
     };
     std::fs::read_dir(dir)
-        .map(|entries| entries.flatten().filter_map(|e| diagnostic_pid(&e.file_name().to_string_lossy())).collect())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| listening(&e.path()))
+                .filter_map(|e| diagnostic_pid(&e.file_name().to_string_lossy()))
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// Whether a runtime still listens on the diagnostic socket: one left behind by a
+/// process that died refuses the connection (and its pid may belong to another
+/// process by now).
+#[cfg(unix)]
+fn listening(socket: &std::path::Path) -> bool {
+    if !socket.file_name().is_some_and(|n| n.to_string_lossy().starts_with("dotnet-diagnostic-")) {
+        return false;
+    }
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
+}
+
+#[cfg(not(unix))]
+fn listening(_socket: &std::path::Path) -> bool {
+    true
 }
 
 /// `dotnet-diagnostic-1234-5678-socket` / `dotnet-diagnostic-1234` → 1234.

@@ -3,10 +3,14 @@
  * `.slnf` at the project root (read by the backend, no MSBuild evaluation).
  */
 import { commands } from "@/bindings";
-import { registerActions } from "@/platform/actions";
+import { executeAction, registerActions } from "@/platform/actions";
 import { call, isTauri, onIdeEvent } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import {
+  maybeEditorService,
+  notifications,
+  registerEditorKind,
+  registerFileEditorProvider,
   registerMenuGroup,
   registerOverlay,
   registerProjectViewRoot,
@@ -45,10 +49,50 @@ import { dotnetRunType } from "./runType";
 import { efActions, isEfProject, loadEfProjects } from "./ef/ef";
 import { msbuildCompletion } from "./msbuild/completion";
 import { SOLUTION_ROOT_ID, solutionRoot, touchesSolution } from "./solution";
+import { tx } from "@/platform/i18n";
+
+const BINLOG_KIND = "binlog";
+const isBinlog = (path: string) => /\.binlog$/i.test(path);
+const basenameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+/** Opens the newest binary log of this project's builds (Settings › .NET › Build). */
+async function showLastBinlog() {
+  const [last] = await call(commands.dotnetBinlogs()).catch(() => [] as string[]);
+  if (!last) {
+    notifications().notify({
+      group: "dotnet",
+      level: "info",
+      title: tx`No binary log yet`,
+      body: tx`Turn on "Write a binary log of every build" in Settings › Languages › .NET, then build.`,
+      actions: [{ label: tx`Open Settings`, run: () => void executeAction("file.settings", "languages.dotnet") }],
+    });
+    return;
+  }
+  await maybeEditorService()
+    ?.openFile(last, { focus: true })
+    .catch(() => undefined);
+}
 
 const REFRESH_DELAY = 300;
 export const NUGET_WINDOW = "nuget";
 export const UNIT_TESTS_WINDOW = "unitTests";
+export const DIAGNOSTICS_WINDOW = "dotnetDiagnostics";
+
+const diagnostics = () => import("./diagnostics/store");
+
+/** Shows the Diagnostics window on `tab` and runs `then` with its store. */
+function withDiagnostics(
+  tab: import("./diagnostics/store").DiagTab,
+  then?: (m: typeof import("./diagnostics/store")) => unknown,
+) {
+  activateToolWindow(DIAGNOSTICS_WINDOW);
+  void diagnostics().then(async (m) => {
+    m.setTab(tab);
+    if (!then) return;
+    if (m.useDiagnostics.getState().pid == null) await m.loadProcesses();
+    await then(m);
+  });
+}
 /** Files whose change can change the installed packages. */
 const PACKAGE_FILE = /(?:\.(?:cs|fs|vb)proj|(?:^|\/)Directory\.(?:Packages|Build)\.props)$/i;
 
@@ -56,6 +100,7 @@ export function activate(): () => void {
   let disposeRoot = () => {};
   let disposeNuget: (() => void) | null = null;
   let disposeTests: (() => void) | null = null;
+  let disposeDiagnostics: (() => void) | null = null;
   let seq = 0;
   let shown = "";
   const clear = () => {
@@ -66,6 +111,9 @@ export function activate(): () => void {
     disposeNuget = null;
     disposeTests?.();
     disposeTests = null;
+    if (disposeDiagnostics) void diagnostics().then((m) => m.resetDiagnostics());
+    disposeDiagnostics?.();
+    disposeDiagnostics = null;
     resetNuget();
     resetUnitTests();
     shown = "";
@@ -96,6 +144,14 @@ export function activate(): () => void {
         order: 40,
         component: lazyComponent(() => import("./nuget/NugetView").then((m) => m.NugetView)),
       });
+      disposeDiagnostics ??= registerToolWindow({
+        id: DIAGNOSTICS_WINDOW,
+        title: ".NET Diagnostics",
+        icon: "toolwindow-profiler",
+        anchor: "bottom",
+        order: 42,
+        component: lazyComponent(() => import("./diagnostics/DiagnosticsView").then((m) => m.DiagnosticsView)),
+      });
       if (!disposeTests) {
         disposeTests = registerToolWindow({
           id: UNIT_TESTS_WINDOW,
@@ -117,6 +173,18 @@ export function activate(): () => void {
   };
   void refresh();
   const disposeRunType = registerRunConfigType(dotnetRunType);
+  const disposeBinlogKind = registerEditorKind({
+    kind: BINLOG_KIND,
+    component: lazyComponent(() => import("./binlog/BinlogViewer").then((m) => m.BinlogViewer)),
+    title: (input) => basenameOf(input.path ?? input.key),
+    icon: () => "toolwindow-build",
+    restorable: true,
+  });
+  const disposeBinlogProvider = registerFileEditorProvider({
+    id: "dotnet.binlog",
+    order: 5,
+    resolve: (path) => (isBinlog(path) ? { kind: BINLOG_KIND, key: `binlog:${path}`, path } : null),
+  });
   const disposeStatus = registerStatusItem({
     id: "dotnet.targetFramework",
     title: "Target Framework",
@@ -252,6 +320,16 @@ export function activate(): () => void {
   };
   const disposeActions = registerActions([
     {
+      id: "dotnet.showLastBinlog",
+      title: "Show Last Binary Log",
+      description: "Opens the MSBuild binary log of the last .NET build in the binary log viewer",
+      category: "Build",
+      icon: "toolwindow-build",
+      when: "projectOpen",
+      keywords: ["binlog", "binary log", "msbuild", "structured log", "build log"],
+      run: () => void showLastBinlog(),
+    },
+    {
       id: "dotnet.newProject",
       title: "New Project…",
       description: "Creates a project from an installed dotnet new template and adds it to the solution",
@@ -347,6 +425,66 @@ export function activate(): () => void {
       run: refresh,
     },
     {
+      id: "dotnet.diagnostics",
+      title: ".NET Diagnostics",
+      description: "Live counters, thread stacks, GC heap snapshots, dumps and CPU traces of a running .NET process",
+      category: "Diagnostics",
+      icon: "toolwindow-profiler",
+      when: "projectOpen",
+      keywords: ["diagnostics", "counters", "dotnet-counters", "dotnet-monitor", "profiler", "metrics", "performance"],
+      run: () => withDiagnostics("live"),
+    },
+    {
+      id: "dotnet.captureStacks",
+      title: "Capture Thread Stacks",
+      description: "Captures the managed stack of every thread of the selected .NET process (dotnet-stack)",
+      category: "Diagnostics",
+      icon: "hierarchy",
+      when: "projectOpen",
+      keywords: ["stacks", "threads", "dotnet-stack", "hang", "deadlock"],
+      run: () => withDiagnostics("threads", (m) => m.collectStacks()),
+    },
+    {
+      id: "dotnet.captureGcHeap",
+      title: "Capture GC Heap Snapshot",
+      description: "Snapshots the GC heap of the selected .NET process by type (dotnet-gcdump)",
+      category: "Diagnostics",
+      icon: "package",
+      when: "projectOpen",
+      keywords: ["gcdump", "heap", "memory", "leak", "dotnet-gcdump", "snapshot"],
+      run: () => withDiagnostics("memory", (m) => m.collectGcdump()),
+    },
+    {
+      id: "dotnet.collectDump",
+      title: "Collect Process Dump",
+      description: "Writes a dump of the selected .NET process and analyses it with SOS (dotnet-dump)",
+      category: "Diagnostics",
+      icon: "debug",
+      when: "projectOpen",
+      keywords: ["dump", "dotnet-dump", "sos", "clrstack", "dumpheap", "crash"],
+      run: () => withDiagnostics("dumps", (m) => m.collectDump()),
+    },
+    {
+      id: "dotnet.recordCpuTrace",
+      title: "Record CPU Trace",
+      description: "Samples the selected .NET process's stacks and shows a flame graph (dotnet-trace)",
+      category: "Diagnostics",
+      icon: "profile",
+      when: "projectOpen",
+      keywords: ["trace", "dotnet-trace", "cpu", "profile", "flame graph", "sampling"],
+      run: () => withDiagnostics("trace", (m) => m.collectTrace()),
+    },
+    {
+      id: "dotnet.sosShell",
+      title: "Open SOS Shell on Process",
+      description: "Attaches dotnet-debug to the selected .NET process and opens its SOS shell in the terminal",
+      category: "Diagnostics",
+      icon: "attach-to-process",
+      when: "projectOpen",
+      keywords: ["sos", "dotnet-debug", "attach", "clrstack", "debugger extension"],
+      run: () => withDiagnostics("threads", (m) => m.attachSosShell()),
+    },
+    {
       id: "dotnet.manageNugetPackages",
       title: "Manage NuGet Packages…",
       description: "Opens the NuGet tool window: search, install, update and remove packages",
@@ -395,6 +533,8 @@ export function activate(): () => void {
     disposeSolutionMenu();
     disposeRunType();
     disposeStatus();
+    disposeBinlogProvider();
+    disposeBinlogKind();
     clear();
   };
 }

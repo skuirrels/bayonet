@@ -79,6 +79,10 @@ const BUILT_AT_RUNTIME = new Set<string>([]);
 
 /** Text that stays as written in every locale: names, code, formats, shortcuts. */
 const UNTRANSLATED = new Set<string>([
+  // .NET diagnostics: tool names and column abbreviations
+  "ID",
+  "OS ID",
+  "dotnet-monitor HTTP API",
   // Entity Framework Core: a product name and placeholder values
   "Entity Framework Core",
   "InitialCreate",

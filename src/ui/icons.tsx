@@ -213,6 +213,8 @@ const ICONS = {
   case: "inline/matchCase",
   word: "inline/exactWords",
   "text-match": "openidea/nodes/textMatch",
+  "project-csharp": "openidea/nodes/csharpProject",
+  "project-fsharp": "openidea/nodes/fsharpProject",
   "open-in-tool-window": "general/openInToolWindow",
   "preserve-case": "openidea/inline/preserveCase",
   "new-line": "openidea/inline/newLine",

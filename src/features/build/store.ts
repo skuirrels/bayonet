@@ -26,7 +26,16 @@ import {
 import { useProject } from "@/platform/project";
 import { maybeEditorService, notifications, toolWindowService } from "@/workbench/contributions";
 import { cancelTask, removeTask, upsertTask, useTasks } from "@/workbench/tasks";
-import { appendOutput, finishSummary, firstError, messageFiles, type BuildStatus, type ConsoleLine } from "./model";
+import {
+  appendOutput,
+  finishProjects,
+  finishSummary,
+  firstError,
+  messageFiles,
+  type BuildProjectState,
+  type BuildStatus,
+  type ConsoleLine,
+} from "./model";
 
 export const BUILD_TASK_ID = "build:compile";
 export const BUILD_RUNNING = "build.running";
@@ -71,7 +80,13 @@ export interface BuildState {
   system: BuildSystem | null;
   status: BuildStatus | null;
   message: string | null;
+  /** Progress of the status bar task, 0..1, or null when indeterminate. */
+  fraction: number | null;
   durationMs: number | null;
+  /** Projects of a .NET build, in solution order. */
+  projects: BuildProjectState[];
+  /** The MSBuild binary log of the last build. */
+  binlog: string | null;
   messages: BuildMessage[];
   lines: ConsoleLine[];
   /** Files with diagnostics from the last build. */
@@ -88,7 +103,10 @@ const INITIAL: BuildState = {
   system: null,
   status: null,
   message: null,
+  fraction: null,
   durationMs: null,
+  projects: [],
+  binlog: null,
   messages: [],
   lines: [],
   files: [],
@@ -111,7 +129,15 @@ export function applyBuildEvent(s: BuildState, e: BuildEvent): Partial<BuildStat
     case "message":
       return { messages: [...s.messages, e.message] };
     case "progress":
-      return { message: e.message };
+      return { message: e.message, fraction: e.fraction ?? s.fraction };
+    case "projects":
+      return { projects: e.projects.map((p) => ({ name: p.name, path: p.path, status: "running" as const })) };
+    case "projectFinished":
+      return {
+        projects: s.projects.map((p) =>
+          p.path === e.path ? { ...p, status: e.success ? ("success" as const) : ("failed" as const) } : p,
+        ),
+      };
   }
 }
 
@@ -158,7 +184,14 @@ export async function startBuild(
     for (const e of events) s = { ...s, ...applyBuildEvent(s, e) };
     useBuildRun.setState(s);
     if (s.message)
-      upsertTask({ id: BUILD_TASK_ID, title: taskTitle, message: s.message, fraction: null, done: false, cancel });
+      upsertTask({
+        id: BUILD_TASK_ID,
+        title: taskTitle,
+        message: s.message,
+        fraction: s.fraction,
+        done: false,
+        cancel,
+      });
   };
   const onEvent = (e: BuildEvent) => {
     queue.push(e);
@@ -179,6 +212,8 @@ export async function startBuild(
       durationMs: result.durationMs,
       files: messageFiles(result.messages),
       message: null,
+      projects: finishProjects(useBuildRun.getState().projects, result.success),
+      binlog: result.binlog,
     });
     const summary = finishSummary(result);
     notifications().notify({
@@ -197,7 +232,12 @@ export async function startBuild(
     clearTimeout(timer);
     flush();
     if (isCancelled(e)) {
-      useBuildRun.setState({ status: "cancelled", files: [], message: null });
+      useBuildRun.setState((s) => ({
+        status: "cancelled",
+        files: [],
+        message: null,
+        projects: finishProjects(s.projects, false),
+      }));
     } else {
       const text = e instanceof Error ? e.message : String(e);
       useBuildRun.setState((s) => ({
@@ -251,7 +291,8 @@ function showFailure() {
   } catch {
     // No workbench (tests / settings window).
   }
-  const first = firstError(useBuildRun.getState().messages);
+  const { messages, projects } = useBuildRun.getState();
+  const first = firstError(messages, projects);
   if (!first) return;
   selectBuildNode(first.key);
   navigateToMessage(first.message, true);

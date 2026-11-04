@@ -15,7 +15,7 @@ function detected(configs: readonly RunConfig[], key: "project" | "launchProfile
 export const dotnetRunType: RunConfigTypeContribution = {
   id: DOTNET_RUN_KIND,
   label: ".NET Project",
-  icon: "file-csharp",
+  icon: "project-csharp",
   description: "Run a .NET project with dotnet run and a launch profile",
   debugAdapter: "netcoredbg",
   fields: [

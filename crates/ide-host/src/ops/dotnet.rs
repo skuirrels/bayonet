@@ -273,6 +273,29 @@ pub async fn dotnet_sdk_target(
     .await
 }
 
+/// Reads the MSBuild binary log at `path` for the binary log viewer (BLD-3).
+pub async fn dotnet_binlog_read(host: &Host, path: PathBuf) -> IdeResult<ide_dotnet::binlog::Binlog> {
+    host.blocking(move || ide_dotnet::binlog::read(&path)).await
+}
+
+/// The binary logs builds of this project wrote (Settings › .NET › binary log), newest first.
+pub async fn dotnet_binlogs(host: &Host, window: &str) -> IdeResult<Vec<IpcPath>> {
+    let dir = host.project(window)?.build_cache_dir().join("binlogs");
+    host.blocking(move || {
+        let mut logs: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "binlog"))
+            .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+            .collect();
+        logs.sort_by_key(|l| std::cmp::Reverse(l.0));
+        Ok(logs.into_iter().map(|(_, p)| IpcPath::from(p)).collect())
+    })
+    .await
+}
+
 /// The projects `project` references.
 pub async fn dotnet_project_references(host: &Host, _window: &str, project: IpcPath) -> IdeResult<Vec<IpcPath>> {
     host.blocking(move || Ok(templates::project_references(&project)?.into_iter().map(IpcPath::from).collect())).await
@@ -570,6 +593,8 @@ pub(crate) fn register(d: &mut Dispatcher) {
         dotnet_migrate_solution(&c.host, &c.window, c.arg("solution")?).await
     });
     d.add("dotnet_sdk_target", |c| async move { dotnet_sdk_target(&c.host, &c.window, c.arg("name")?).await });
+    d.add("dotnet_binlog_read", |c| async move { dotnet_binlog_read(&c.host, c.arg("path")?).await });
+    d.add("dotnet_binlogs", |c| async move { dotnet_binlogs(&c.host, &c.window).await });
     d.add("dotnet_ef_projects", |c| async move { dotnet_ef_projects(&c.host, &c.window).await });
     d.add("dotnet_ef_migrations", |c| async move { dotnet_ef_migrations(&c.host, &c.window, c.arg("project")?).await });
     d.add("dotnet_ef_command", |c| async move {

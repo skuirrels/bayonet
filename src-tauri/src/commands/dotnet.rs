@@ -189,6 +189,23 @@ pub async fn dotnet_sdk_target(
     ide_host::ops::dotnet::dotnet_sdk_target(&state.host, window.label(), name).await
 }
 
+/// Reads an MSBuild binary log for the binary log viewer.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_binlog_read(
+    state: State<'_, AppState>,
+    path: std::path::PathBuf,
+) -> IdeResult<ide_dotnet::binlog::Binlog> {
+    ide_host::ops::dotnet::dotnet_binlog_read(&state.host, path).await
+}
+
+/// The binary logs of this project's builds, newest first.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_binlogs(window: Window, state: State<'_, AppState>) -> IdeResult<Vec<IpcPath>> {
+    ide_host::ops::dotnet::dotnet_binlogs(&state.host, window.label()).await
+}
+
 /// The solution's projects that use Entity Framework Core.
 #[tauri::command]
 #[specta::specta]

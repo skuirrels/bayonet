@@ -47,8 +47,9 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 
 ## Still to do
 
-- App icons in `src-tauri/icons/` and the README wordmark are OpenIDEA's artwork. New
-  artwork is needed before any release.
+- The app icon and splash mark are DotnetIDEA's own (".d" on a violet frame, source in
+  `src-tauri/icons/source/dotnetidea.svg`; regenerate with `pnpm tauri icon` on that file).
+  The `openidea-wordmark*.svg` files still spell "OpenIDEA" and need redrawing.
 - `.github/workflows/release.yml` still assumes OpenIDEA's signing secrets and updater
   artifacts.
 
@@ -145,3 +146,22 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - Each runs `dotnet ef … --project <project> --startup-project <startup>` in the Run tool window. The startup project is the project itself when it can start, else the first executable project in the solution that references it.
 - The tool is `dotnet ef` when that works in the project folder, else the global tool's executable `~/.dotnet/tools/dotnet-ef` (a local tool manifest that was never restored hides the global tool from `dotnet ef`), else a notification offers `dotnet tool install --global dotnet-ef`.
 - Migrations for Update Database come from the migration file names (no build).
+
+## Build progress and binary logs (phase 4)
+
+- A .NET build lists the solution's projects under the Build tool window's root, each with its state (building, built, failed, not built) and the files with messages below it. The status bar task shows the fraction of projects built (BLD-3, `crates/ide-build/src/compile/mod.rs`, `src/features/build`). A project counts as built when MSBuild prints its `Name -> output` line, and as failed when it has errors.
+- Cancel kills the whole process group, MSBuild's worker nodes included; `dotnet_build_cancels_within_two_seconds` checks the acceptance against the installed SDK.
+- **Settings › Languages › .NET › Write a binary log of every build** adds `-bl` to builds. The last 10 logs are kept in the project's build cache; the Build tool window's root links to the build's log, and **Show Last Binary Log** opens the newest.
+- `.binlog` files open in a binary log viewer (`crates/ide-dotnet/src/binlog.rs`, `src/features/dotnet/binlog`): errors and warnings, then projects with their targets, tasks and the projects they built, each with its duration and its place on the build's timeline; a summary with the slowest targets; search over names, command lines and messages; skipped targets on request. The reader follows MSBuild's own format (versions 18 and later, .NET 8 SDK on) and skips records it does not need by their length.
+- Projects show their own icons, a boxed C# or F#, distinct from source files.
+
+## .NET diagnostics (phase 4)
+
+- **View › Tool Windows › .NET Diagnostics** (DIAG, `crates/ide-dotnet/src/diagnostics.rs`, `crates/ide-host/src/ops/diagnostics.rs`, `src/features/dotnet/diagnostics`) works on a running .NET process picked at the top: this project's processes first, then other apps, then build and IDE tooling. Processes come from the runtime's diagnostic sockets; a socket that no longer accepts connections is left out, so stale ones from dead processes do not show (this also cleans up Attach to Process).
+- **Counters**: live tiles (CPU, working set, GC heap, thread pool, exceptions) with sparklines, a large chart of the chosen counter with a crosshair read-out, and every counter in a filterable table. They stream from a `dotnet-monitor` sidecar on loopback at one-second intervals; it starts on first use and exits with the IDE (`--exit-on-stdin-disconnect`). **Record 10 s to CSV** runs `dotnet-counters collect` and shows the recording in place of the live view. **dotnet-monitor HTTP API** writes a `.http` file of the monitor's endpoints (processes, stacks, gcdump, dump, trace, logs, collection rules) for the process, to try in the HTTP client.
+- **Threads**: `dotnet-stack report`, with identical stacks grouped and named after their innermost user-code frame. **SOS Shell on Live Process** opens `dotnet-debug attach` in the terminal.
+- **Memory**: `dotnet-gcdump` snapshots by type with size bars; compare with an earlier snapshot to see growth by type.
+- **Dumps**: `dotnet-dump collect` (heap, mini, triage or full); each dump is summarised with SOS `clrthreads` and `dumpheap -stat`. **Open SOS Console** opens `dotnet-dump analyze` in the terminal for `clrstack`, `dumpheap`, `eeheap` and the rest; **Download Symbols** runs `dotnet-symbol` into a folder next to the dump.
+- **CPU Trace**: `dotnet-trace collect --format Speedscope` for 5 to 60 seconds, merged across threads into a flame graph (callers on top; click to zoom), coloured by your code, .NET libraries and native frames, with a self-time hot-spot table.
+- **Triggers**: rules such as "CPU above 80 % for 10 s, then record a CPU trace", checked against the live counters every second, with a cool-down. dotnet-monitor applies its own collection rules only in listen mode, where each app has to be started pointed at the monitor, so the IDE evaluates the rules itself; they work for any process.
+- **Files** lists what was collected for the project (kept in its cache), to reopen or delete. **Tools** shows which diagnostics tools are installed, installs missing ones with `dotnet tool install --global`, and runs `dotnet-sos install` for LLDB.

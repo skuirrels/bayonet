@@ -54,14 +54,14 @@ describe("solutionRoot", () => {
         children: [
           {
             label: "App",
-            icon: "file-csharp",
+            icon: "project-csharp",
             path: "/w/src/App",
             detail: undefined,
             hide: BUILD_OUTPUT,
           },
           {
             label: "Gone",
-            icon: "file-fsharp",
+            icon: "project-fsharp",
             path: "/w/src/Gone",
             detail: "not found",
             hide: BUILD_OUTPUT,

@@ -9,6 +9,7 @@ pub mod bytes;
 pub mod coverage;
 pub mod debug;
 pub mod deploy;
+pub mod diagnostics;
 pub mod doc;
 pub mod dotnet;
 pub mod env;
@@ -81,6 +82,7 @@ pub fn register_all(d: &mut crate::rpc::Dispatcher) {
     vcs::register(d);
     doc::register(d);
     dotnet::register(d);
+    diagnostics::register(d);
     search::register(d);
     run::register(d);
     env::register(d);

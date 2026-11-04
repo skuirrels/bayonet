@@ -184,6 +184,7 @@ export function RustPage() {
 // .NET
 
 export function DotnetPage() {
+  const [binaryLog, setBinaryLog] = useSetting<boolean>("languages.dotnet.binaryLog");
   return (
     <div className={styles.page}>
       <Section title=".NET Install">
@@ -197,6 +198,14 @@ export function DotnetPage() {
           browseTitle="Select .NET Install Directory"
           aria-label=".NET install"
           hint="DOTNET_ROOT for the C# and F# language servers. The SDK within it comes from the project's global.json."
+        />
+      </Section>
+      <Section title="Build">
+        <Toggle
+          label="Write a binary log of every build"
+          checked={binaryLog}
+          onChange={setBinaryLog}
+          hint="Builds run with -bl. The last 10 logs are kept and open in the binary log viewer from the Build tool window."
         />
       </Section>
     </div>

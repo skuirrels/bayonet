@@ -4188,6 +4188,7 @@ dependencies = [
 name = "ide-dotnet"
 version = "0.1.29"
 dependencies = [
+ "flate2",
  "ide-core",
  "ide-jsonrpc",
  "quick-xml",
@@ -4196,6 +4197,7 @@ dependencies = [
  "specta",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

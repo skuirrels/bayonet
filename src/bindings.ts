@@ -853,6 +853,50 @@ export const commands = {
 	line: number,
 	col: number,
 } | null, IdeError>(__TAURI_INVOKE("dotnet_sdk_target", { name })),
+	/**  Reads an MSBuild binary log for the binary log viewer. */
+	dotnetBinlogRead: (path: string) => typedError<Binlog, IdeError>(__TAURI_INVOKE("dotnet_binlog_read", { path })),
+	/**  The binary logs of this project's builds, newest first. */
+	dotnetBinlogs: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_binlogs")),
+	/**  The diagnostics tools and whether each is installed. */
+	diagTools: () => typedError<DiagToolStatus[], IdeError>(__TAURI_INVOKE("diag_tools")),
+	/**  The running .NET processes. */
+	diagProcesses: () => typedError<AttachableProcess[], IdeError>(__TAURI_INVOKE("diag_processes")),
+	/**  Every managed thread's stack of `pid` (`dotnet-stack`). */
+	diagStacks: (request: RequestId, pid: number) => typedError<StackSnapshot, IdeError>(__TAURI_INVOKE("diag_stacks", { request, pid })),
+	/**  Re-reads a saved stack report. */
+	diagStacksRead: (path: string) => typedError<StackSnapshot, IdeError>(__TAURI_INVOKE("diag_stacks_read", { path })),
+	/**  Snapshots the GC heap of `pid` (`dotnet-gcdump`). */
+	diagGcdump: (request: RequestId, pid: number) => typedError<HeapSnapshot, IdeError>(__TAURI_INVOKE("diag_gcdump", { request, pid })),
+	/**  Reports a `.gcdump` file by type. */
+	diagGcdumpRead: (request: RequestId, path: string) => typedError<HeapSnapshot, IdeError>(__TAURI_INVOKE("diag_gcdump_read", { request, path })),
+	/**  Writes a dump of `pid` (`dotnet-dump collect`). */
+	diagDump: (request: RequestId, pid: number, kind: DumpType) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("diag_dump", { request, pid, kind })),
+	/**  Runs SOS `clrthreads` and `dumpheap -stat` on a dump. */
+	diagDumpAnalyze: (request: RequestId, path: string) => typedError<DumpAnalysis, IdeError>(__TAURI_INVOKE("diag_dump_analyze", { request, path })),
+	/**  Downloads symbols and modules for a dump (`dotnet-symbol`). */
+	diagSymbols: (request: RequestId, dump: string) => typedError<string, IdeError>(__TAURI_INVOKE("diag_symbols", { request, dump })),
+	/**  Samples CPU stacks of `pid` for `seconds` into a flame graph (`dotnet-trace`). */
+	diagTrace: (request: RequestId, pid: number, seconds: number) => typedError<TraceProfile, IdeError>(__TAURI_INVOKE("diag_trace", { request, pid, seconds })),
+	/**  Reads a Speedscope trace into a flame graph. */
+	diagTraceRead: (path: string) => typedError<TraceProfile, IdeError>(__TAURI_INVOKE("diag_trace_read", { path })),
+	/**  Records the counters of `pid` for `seconds` (`dotnet-counters`). */
+	diagCounters: (request: RequestId, pid: number, seconds: number) => typedError<CounterRecording, IdeError>(__TAURI_INVOKE("diag_counters", { request, pid, seconds })),
+	/**  Reads a counter recording. */
+	diagCountersRead: (path: string) => typedError<CounterRecording, IdeError>(__TAURI_INVOKE("diag_counters_read", { path })),
+	/**  The diagnostics files this project collected, newest first. */
+	diagArtifacts: () => typedError<DiagArtifact[], IdeError>(__TAURI_INVOKE("diag_artifacts")),
+	/**  Deletes a collected diagnostics file. */
+	diagArtifactDelete: (path: string) => typedError<null, IdeError>(__TAURI_INVOKE("diag_artifact_delete", { path })),
+	/**  Whether the dotnet-monitor sidecar runs, and its URL. */
+	diagMonitorStatus: () => typedError<MonitorStatus, IdeError>(__TAURI_INVOKE("diag_monitor_status")),
+	/**  Starts the dotnet-monitor sidecar and returns its URL. */
+	diagMonitorStart: () => typedError<string, IdeError>(__TAURI_INVOKE("diag_monitor_start")),
+	/**  Stops the dotnet-monitor sidecar. */
+	diagMonitorStop: () => typedError<null, IdeError>(__TAURI_INVOKE("diag_monitor_stop")),
+	/**  Writes a `.http` file of dotnet-monitor's endpoints for `pid`. */
+	diagMonitorHttp: (pid: number) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("diag_monitor_http", { pid })),
+	/**  Streams the live metrics of `pid` until `cancel_request(request)`. */
+	diagLiveMetrics: (request: RequestId, pid: number, onSamples: Channel<MetricSample[]>) => typedError<null, IdeError>(__TAURI_INVOKE("diag_live_metrics", { request, pid, onSamples })),
 	/**  The solution's projects that use Entity Framework Core. */
 	dotnetEfProjects: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_ef_projects")),
 	/**  The EF Core migrations of `project`, oldest first. */
@@ -1493,6 +1537,8 @@ export type ArtifactKey = {
 	artifactId: string,
 };
 
+export type ArtifactKind = "dump" | "gcdump" | "trace" | "counters" | "stacks";
+
 /**  What an askpass prompt asks for. */
 export type AskpassKind = 
 /**  Password or passphrase: hidden input. */
@@ -1538,6 +1584,79 @@ export type BeforeLaunchTask = {
 	 */
 	kind: string,
 	target?: string,
+};
+
+export type Binlog = {
+	formatVersion: number,
+	succeeded: boolean,
+	cancelled: boolean,
+	durationMs: number,
+	/**  Projects in start order. */
+	projects: BinlogProject[],
+	/**  Errors and warnings of the whole build, in logged order. */
+	diagnostics: BinlogMessage[],
+	/**  Messages outside any project (evaluation, the build itself). */
+	messages: BinlogMessage[],
+	/**  Messages were left out (limits per node or in all). */
+	truncated: boolean,
+};
+
+export type BinlogMessage = {
+	severity: BinlogSeverity,
+	text: string,
+	code: string | null,
+	file: string | null,
+	/**  1-based, 0 when unknown. */
+	line: number,
+	col: number,
+};
+
+export type BinlogProject = {
+	/**  MSBuild's project context id (unique in the build). */
+	id: number,
+	/**  The project that built this one (`MSBuild` task, solution metaproject). */
+	parent: number | null,
+	file: string,
+	/**  `Fixture.Api.csproj`. */
+	name: string,
+	targetFramework: string | null,
+	configuration: string | null,
+	/**  Targets requested (empty: default targets). */
+	entryTargets: string,
+	startMs: number,
+	durationMs: number,
+	succeeded: boolean,
+	errors: number,
+	warnings: number,
+	targets: BinlogTarget[],
+	messages: BinlogMessage[],
+};
+
+export type BinlogSeverity = "error" | "warning" | 
+/**  `MessageImportance.High` and critical messages. */
+"high" | "normal" | "low";
+
+export type BinlogTarget = {
+	name: string,
+	file: string | null,
+	/**  The target that made this one run (`DependsOnTargets`, `BeforeTargets`, …). */
+	parent: string | null,
+	startMs: number,
+	durationMs: number,
+	succeeded: boolean,
+	/**  Why it did not run (`condition false`, `outputs up to date`, …); `None` when it ran. */
+	skipped: string | null,
+	tasks: BinlogTask[],
+	messages: BinlogMessage[],
+};
+
+export type BinlogTask = {
+	name: string,
+	startMs: number,
+	durationMs: number,
+	succeeded: boolean,
+	commandLine: string | null,
+	messages: BinlogMessage[],
 };
 
 export type BlameLine = {
@@ -1608,6 +1727,10 @@ export type BuildEvent =
 { kind: "step"; command: string; cwd: IpcPath } | 
 /**  Console output (one or more lines, each ending in `\n`). */
 { kind: "output"; text: string; stderr: boolean } | { kind: "message"; message: BuildMessage } | 
+/**  The projects of a .NET build, before it builds them. */
+{ kind: "projects"; projects: BuildProject[] } | 
+/**  A project of `Projects` was built, or failed. */
+{ kind: "projectFinished"; path: IpcPath; success: boolean } | 
 /**  Status bar progress; `fraction` 0..1 or `None` when indeterminate. */
 { kind: "progress"; message: string; fraction: number | null };
 
@@ -1647,6 +1770,13 @@ export type BuildModel = {
 	gradle: GradleModel | null,
 };
 
+/**  A project of a .NET build (its tree node in the Build tool window). */
+export type BuildProject = {
+	name: string,
+	/**  The project file. */
+	path: IpcPath,
+};
+
 export type BuildResult = {
 	system: BuildSystem,
 	title: string,
@@ -1655,6 +1785,8 @@ export type BuildResult = {
 	warnings: number,
 	durationMs: number | null,
 	messages: BuildMessage[],
+	/**  The MSBuild binary log the build wrote. */
+	binlog: IpcPath | null,
 };
 
 export type BuildSystem = "maven" | "gradle" | "cargo" | "go" | "typescript" | "dotnet";
@@ -2005,6 +2137,11 @@ export type ConsoleSettings = {
 };
 
 export type ContainerOp = "start" | "stop" | "restart" | "pause" | "unpause" | "kill";
+
+export type CounterRecording = {
+	path: IpcPath,
+	samples: MetricSample[],
+};
 
 export type CoveragePrepared = CoveragePrepared_Serialize | CoveragePrepared_Deserialize;
 
@@ -2508,6 +2645,26 @@ export type DeploymentSettings = {
 
 export type DeploymentType = "sftp" | "local";
 
+export type DiagArtifact = {
+	path: IpcPath,
+	kind: ArtifactKind,
+	size: number,
+	/**  Seconds since the Unix epoch. */
+	modifiedSecs: number,
+};
+
+export type DiagTool = "counters" | "stack" | "gcdump" | "dump" | "trace" | "monitor" | "symbol" | "sos" | "debug";
+
+export type DiagToolStatus = {
+	tool: DiagTool,
+	command: string,
+	purpose: string,
+	/**  The executable, `None` when the tool is not installed. */
+	path: IpcPath | null,
+	/**  `dotnet tool install --global <tool>`. */
+	install: ToolInstall,
+};
+
 export type Diagnostic = {
 	range: Range,
 	severity: Severity,
@@ -2712,7 +2869,28 @@ export type DotnetSettings = {
 	 *  empty = the `dotnet` on `PATH`. The SDK within it comes from `global.json`.
 	 */
 	root?: string,
+	/**  Write an MSBuild binary log (`-bl`) of every build, for the binary log viewer. */
+	binaryLog?: boolean,
 };
+
+export type DumpAnalysis = {
+	path: IpcPath,
+	size: number,
+	threads: ManagedThread[],
+	heap: HeapReport,
+	/**  SOS output as printed, for the console view. */
+	output: string,
+};
+
+export type DumpType = 
+/**  Everything, including module images. */
+"full" | 
+/**  Memory with the GC heap (what managed analysis needs). */
+"heap" | 
+/**  Small: stacks and module list. */
+"mini" | 
+/**  Mini with personal data removed. */
+"triage";
 
 export type DuplicateGroup = {
 	tokens: number,
@@ -3175,6 +3353,14 @@ export type FileTypeAssociation = {
 	hashbangs?: string[],
 };
 
+export type FlameNode = {
+	name: string,
+	/**  Inclusive time in milliseconds (whole, for the bindings). */
+	totalMs: number,
+	selfMs: number,
+	children: FlameNode[],
+};
+
 export type FoldKind = "region" | "comment" | "imports";
 
 export type FoldRange = {
@@ -3410,6 +3596,27 @@ export type GradleTask = {
 	/**  Lower-case group (`build`, `build setup`, `other`). */
 	group: string,
 	description: string | null,
+};
+
+export type HeapReport = {
+	totalBytes: number,
+	totalObjects: number,
+	/**  Largest first. */
+	types: HeapType[],
+};
+
+export type HeapSnapshot = {
+	path: IpcPath,
+	report: HeapReport,
+};
+
+export type HeapType = {
+	/**  `System.String`, `Entry<System.String,System.String>[]`. */
+	name: string,
+	/**  `System.Private.CoreLib.dll`; empty when unknown. */
+	module: string,
+	bytes: number,
+	count: number,
 };
 
 export type HierarchyDirection = 
@@ -4271,6 +4478,27 @@ export type MainToolbarSettings = {
 	hidden?: string[],
 };
 
+export type ManagedFrame = {
+	/**  `System.Private.CoreLib`; empty for `[Native Frames]`. */
+	module: string,
+	/**  `System.Threading.Monitor.Wait(class System.Object,int32)`. */
+	method: string,
+};
+
+export type ManagedThread = {
+	/**  The debugger's thread number (`XXXX` for a dead thread). */
+	debuggerId: string,
+	managedId: number,
+	osId: string,
+	gcMode: string,
+	lockCount: number,
+	/**  `Finalizer`, `Threadpool Worker`, … */
+	role: string | null,
+	/**  The exception the thread is throwing, if any. */
+	exception: string | null,
+	dead: boolean,
+};
+
 export type Markup = {
 	/**  `markdown` or `plaintext`. */
 	kind: string,
@@ -4447,6 +4675,26 @@ export type MethodStat = {
 	frame: number,
 	selfWeight: number | null,
 	total: number | null,
+};
+
+export type MetricSample = {
+	/**  Milliseconds since the Unix epoch. */
+	time: number | null,
+	provider: string,
+	/**  `cpu-usage`, `dotnet.gc.collections`. */
+	name: string,
+	displayName: string,
+	unit: string,
+	/**  `Metric` (a gauge) or `Rate` (per interval). */
+	counterType: string,
+	/**  `gc.heap.generation=gen0`; empty without tags. */
+	tags: string,
+	value: number | null,
+};
+
+export type MonitorStatus = {
+	/**  `http://127.0.0.1:<port>` while the sidecar runs. */
+	url: string | null,
 };
 
 export type NewAgentTask = {
@@ -5904,6 +6152,12 @@ export type StackFrame = {
 	presentationHint: string | null,
 };
 
+export type StackSnapshot = {
+	/**  Where the report was saved. */
+	path: IpcPath,
+	threads: ThreadStack[],
+};
+
 export type StartupMetrics = {
 	/**
 	 *  Process start → `main`: exec, code-signature scan (seconds for a freshly
@@ -6314,6 +6568,13 @@ export type ThreadInfo = {
 	name: string,
 };
 
+export type ThreadStack = {
+	/**  OS thread id as printed (`0xA43E53E`). */
+	id: string,
+	/**  Innermost frame first. */
+	frames: ManagedFrame[],
+};
+
 export type TomcatHome = {
 	version: string,
 };
@@ -6376,6 +6637,14 @@ export type ToolStatus =
 "onPath" | 
 /**  The executable chosen in settings. */
 "custom" | "missing";
+
+export type TraceProfile = {
+	path: IpcPath,
+	durationMs: number,
+	threads: number,
+	/**  All threads merged; children by time, longest first. */
+	root: FlameNode,
+};
 
 export type TransferError = {
 	path: string,

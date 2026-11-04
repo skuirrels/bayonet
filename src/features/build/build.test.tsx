@@ -20,6 +20,7 @@ import { BuildView } from "./BuildView";
 import { activate } from "./index";
 import {
   appendOutput,
+  finishProjects,
   findNode,
   finishSummary,
   firstError,
@@ -29,7 +30,15 @@ import {
   rootNode,
   MAX_CONSOLE_LINES,
 } from "./model";
-import { BUILD_TASK_ID, setBuildBackend, startBuild, stopBuild, useBuildRun, type BuildBackend } from "./store";
+import {
+  BUILD_TASK_ID,
+  applyBuildEvent,
+  setBuildBackend,
+  startBuild,
+  stopBuild,
+  useBuildRun,
+  type BuildBackend,
+} from "./store";
 
 const err = (path: string | null, line: number, text = "cannot find symbol"): BuildMessage => ({
   severity: "error",
@@ -39,6 +48,43 @@ const err = (path: string | null, line: number, text = "cannot find symbol"): Bu
   code: null,
 });
 const warn = (path: string, line: number): BuildMessage => ({ ...err(path, line, "deprecated"), severity: "warning" });
+
+describe("build projects (.NET)", () => {
+  const projects = [
+    { name: "App", path: "/s/src/App/App.csproj", status: "running" as const },
+    { name: "App.Tests", path: "/s/src/App/tests/App.Tests.csproj", status: "running" as const },
+  ];
+
+  it("files messages under the deepest project folder holding them", () => {
+    const messages = [err("/s/src/App/tests/T.cs", 1), err("/s/src/App/A.cs", 2), err("/s/other/X.cs", 3)];
+    const children = rootChildren(messages, projects);
+    expect(children.map((c) => c.key)).toEqual([
+      "build:project:/s/src/App/App.csproj",
+      "build:project:/s/src/App/tests/App.Tests.csproj",
+      "build:file:/s/other/X.cs",
+    ]);
+    const [app, tests] = children;
+    expect(app?.kind === "project" && app.files.map((f) => f.key)).toEqual(["build:file:/s/src/App/A.cs"]);
+    expect(tests?.kind === "project" && tests.files.map((f) => f.key)).toEqual(["build:file:/s/src/App/tests/T.cs"]);
+    // The first error is found through its project.
+    expect(firstError(messages, projects)?.key).toBe("build:file:/s/src/App/A.cs\u00000");
+    expect(findNode(messages, "build:file:/s/src/App/A.cs\u00000", projects)?.kind).toBe("message");
+  });
+
+  it("tracks projects and progress from the build events", () => {
+    let s = useBuildRun.getState();
+    s = {
+      ...s,
+      ...applyBuildEvent(s, { kind: "projects", projects: projects.map(({ name, path }) => ({ name, path })) }),
+    };
+    s = { ...s, ...applyBuildEvent(s, { kind: "projectFinished", path: projects[0]!.path, success: true }) };
+    s = { ...s, ...applyBuildEvent(s, { kind: "progress", message: "Built App", fraction: 0.5 }) };
+    expect(s.projects.map((p) => p.status)).toEqual(["success", "running"]);
+    expect(s.fraction).toBe(0.5);
+    expect(finishProjects(s.projects, false).map((p) => p.status)).toEqual(["success", "skipped"]);
+    expect(finishProjects(s.projects, true).map((p) => p.status)).toEqual(["success", "success"]);
+  });
+});
 
 describe("build model", () => {
   it("groups messages by file, errors first, build messages last", () => {
@@ -118,6 +164,7 @@ const result = (messages: BuildMessage[], success: boolean): BuildResult => ({
   warnings: messages.filter((m) => m.severity === "warning").length,
   durationMs: 3000,
   messages,
+  binlog: null,
 });
 
 describe("build feature", () => {
