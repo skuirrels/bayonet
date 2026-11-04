@@ -533,6 +533,7 @@ fn custom_server(name: &str, ls: &LanguageServerSettings) -> LanguageServerConfi
         launch_error: None,
         tsserver_project: false,
         pull_diagnostics: false,
+        workspace_diagnostics: false,
     }
 }
 

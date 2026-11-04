@@ -14,10 +14,20 @@ describe(".NET Project run configurations", () => {
       framework: "",
       configuration: "",
       arguments: "--seed 1",
+      hotReload: "false",
     });
     expect(dotnetRunType.commandLine(params)).toEqual({
       command: "dotnet",
       args: detected.args,
+    });
+  });
+
+  it("runs with Hot Reload through dotnet watch", () => {
+    const line = dotnetRunType.commandLine({ project: "src/Api/Api.csproj", hotReload: "true" })!;
+    expect(line.args).toEqual(["watch", "--non-interactive", "run", "--project", "src/Api/Api.csproj"]);
+    expect(dotnetRunType.paramsFrom!(rc(line.args))).toMatchObject({
+      project: "src/Api/Api.csproj",
+      hotReload: "true",
     });
   });
 

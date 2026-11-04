@@ -79,6 +79,10 @@ const BUILT_AT_RUNTIME = new Set<string>([]);
 
 /** Text that stays as written in every locale: names, code, formats, shortcuts. */
 const UNTRANSLATED = new Set<string>([
+  // Entity Framework Core: a product name and placeholder values
+  "Entity Framework Core",
+  "InitialCreate",
+  "Data Source=app.db",
   // Go environment variables and placeholder values
   "CGO",
   "GOPROXY",

@@ -31,6 +31,21 @@ import type { LanguageDescription } from "@codemirror/language";
 import { create } from "zustand";
 import { maybeEditorService } from "@/workbench/contributions";
 
+/** Indentation as Code Style resolves it (`indentSize` when it differs from the tab size). */
+export interface StyleIndent {
+  tabSize: number;
+  insertSpaces: boolean;
+  indentSize?: number;
+}
+
+/**
+ * The Code Style indentation (without detected indents) that Reformat Code uses:
+ * like IDEA, detected indents apply to editing only.
+ */
+export const formatIndent = Facet.define<StyleIndent, StyleIndent | null>({
+  combine: (values) => values[0] ?? null,
+});
+
 export interface EditorDocContext {
   doc: number;
   path: string;

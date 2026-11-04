@@ -27,12 +27,15 @@ export type SolutionDialog =
 interface SolutionState {
   solution: Solution | null;
   projects: SolutionProject[];
+  /** Project files of the projects that use Entity Framework Core. */
+  efProjects: string[];
   dialog: SolutionDialog | null;
 }
 
 export const useSolution = create<SolutionState>(() => ({
   solution: null,
   projects: [],
+  efProjects: [],
   dialog: null,
 }));
 
@@ -101,6 +104,18 @@ export function editReferences(project: SolutionProject, add: string[], remove: 
     () => call(commands.dotnetEditReferences(project.path, add, remove)),
     tx`Updated the references of ${name}`,
     tx`Cannot change the references of ${name}`,
+  );
+}
+
+/** Converts the open `.sln` to `.slnx` (SLN-6); the Solution Explorer then shows the `.slnx`. */
+export function migrateSolution(): Promise<boolean> {
+  const solution = useSolution.getState().solution;
+  if (!solution || solution.format !== "sln") return Promise.resolve(false);
+  const name = solution.name;
+  return edit(
+    () => call(commands.dotnetMigrateSolution(solution.path)),
+    tx`Converted ${name} to .slnx`,
+    tx`Cannot convert the solution to .slnx`,
   );
 }
 

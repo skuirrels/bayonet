@@ -24,6 +24,10 @@ describe("editor settings behaviour", () => {
     expect(detectIndent("a\n  b\n    c\n  d\n")).toEqual({ insertSpaces: true, size: 2 });
     expect(detectIndent("a\n\tb\n\t\tc\n")).toEqual({ insertSpaces: false });
     expect(detectIndent("plain\ntext\n")).toBeNull();
+    // C# preprocessor directives at column 0 are not dedents.
+    const cs =
+      "class A\n{\n    void M()\n    {\n#if X\n        A();\n#else\n        B();\n#endif\n        C();\n    }\n}\n";
+    expect(detectIndent(cs)).toEqual({ insertSpaces: true, size: 4 });
     const info = { id: "python", indent: { tabSize: 4, insertSpaces: true } } as Parameters<typeof effectiveIndent>[1];
     const settings = {
       codeStyle: { languages: { python: { useTab: true, tabSize: 8 } }, detectIndents: true, editorconfig: false },

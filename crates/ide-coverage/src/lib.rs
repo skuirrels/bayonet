@@ -12,9 +12,11 @@
 //! | Python (pytest, scripts) | coverage.py (`coverage run`, then `coverage lcov`) | lcov |
 //! | Go (`go test`) | `-coverprofile` | Go cover profile |
 //! | Maven / Gradle tests | JaCoCo (plugin goals / an init script) | JaCoCo XML |
+//! | .NET tests (Unit Tests window) | Microsoft.Testing.Extensions.CodeCoverage | Cobertura XML |
 //!
 //! Lines in the model are 0-based, like every IPC coordinate.
 
+mod cobertura;
 mod goprofile;
 mod import;
 mod jacoco;
@@ -83,6 +85,8 @@ pub enum CoverageReportSpec {
     Lcov { runner: String, path: IpcPath, base: IpcPath },
     /// `go test -coverprofile`; import paths under `module` map to `module_dir`.
     GoProfile { path: IpcPath, module: String, module_dir: IpcPath },
+    /// Cobertura XML reports, merged (one per .NET test project); relative names resolve against `base`.
+    Cobertura { runner: String, paths: Vec<IpcPath>, base: IpcPath },
     /// Every JaCoCo XML report (Maven `target/site/jacoco`, Gradle `build/reports/jacoco`) under `dir`.
     Jacoco { dir: IpcPath },
     /// The tool's raw data is exported to lcov by `argv` first (coverage.py: `… -m coverage lcov -o <lcov>`).
@@ -188,6 +192,15 @@ pub fn collect(spec: &CoverageReportSpec) -> IdeResult<CoverageSuite> {
         CoverageReportSpec::GoProfile { path, module, module_dir } => {
             let text = read_report(path)?;
             Ok(goprofile::parse(&text, module, module_dir).finish("go test -cover"))
+        }
+        CoverageReportSpec::Cobertura { runner, paths, base } => {
+            let mut acc = Accumulator::default();
+            for path in paths {
+                let xml = read_report(path)?;
+                cobertura::parse_into(&xml, base, &mut acc)
+                    .map_err(|e| IdeError::invalid(format!("{}: {e}", path.display())))?;
+            }
+            Ok(acc.finish(runner))
         }
         CoverageReportSpec::Jacoco { dir } => {
             let reports = jacoco::find_reports(dir);

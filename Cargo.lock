@@ -4273,6 +4273,7 @@ dependencies = [
 name = "ide-http"
 version = "0.1.29"
 dependencies = [
+ "chrono",
  "ide-core",
  "parking_lot",
  "reqwest",

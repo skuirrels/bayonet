@@ -19,7 +19,7 @@ import {
   type FormatGuardOptions,
 } from "@/platform/formatGuard";
 import { useProject } from "@/platform/project";
-import { CONTRIBUTED_FORMAT, contributedAt, whenSynced, type ContributedFormatter } from "@/editor/api";
+import { CONTRIBUTED_FORMAT, contributedAt, formatIndent, whenSynced, type ContributedFormatter } from "@/editor/api";
 import { docOf, lspRequest, reportLspError } from "./lsp";
 import { offsetToPos, textEditsToChanges } from "./positions";
 import { tx, txTemplate } from "@/platform/i18n";
@@ -68,8 +68,16 @@ function formattedHint(view: EditorView, lines: number) {
   });
 }
 
-/** LSP `FormattingOptions`: with spaces the indent width is the indent unit, not the tab size. */
+/**
+ * LSP `FormattingOptions`: the Code Style indentation (detected indents are for editing only);
+ * with spaces the indent width is the indent unit, not the tab size.
+ */
 export function formatOptionsOf(state: EditorState): { tabSize: number; insertSpaces: boolean } {
+  const style = state.facet(formatIndent);
+  if (style)
+    return style.insertSpaces
+      ? { tabSize: style.indentSize ?? style.tabSize, insertSpaces: true }
+      : { tabSize: style.tabSize, insertSpaces: false };
   const unit = state.facet(indentUnit);
   return unit.includes("\t")
     ? { tabSize: state.tabSize, insertSpaces: false }

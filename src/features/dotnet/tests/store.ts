@@ -5,6 +5,7 @@ import { commands } from "@/bindings";
 import type { RequestId, TestEvent, TestNode, TestSelection } from "@/bindings";
 import { call, isCancelled, isTauri, nextRequestId } from "@/platform/ipc";
 import { mergeTest, type ProjectTests } from "./model";
+import { collectTestCoverage } from "./coverage";
 
 const MAX_OUTPUT = 2000;
 
@@ -96,6 +97,8 @@ function apply(e: TestEvent) {
           version: s.version + 1,
         };
       }
+      case "coverage":
+        return {};
     }
   });
 }
@@ -124,11 +127,16 @@ export async function loadProjects(): Promise<void> {
   }
 }
 
-async function start(run: boolean, selection: TestSelection[]): Promise<void> {
+async function start(run: boolean, selection: TestSelection[], coverage = false): Promise<void> {
   if (!isTauri() || useUnitTests.getState().busy) return;
   const request = nextRequestId();
   const channel = new Channel<TestEvent>();
-  channel.onmessage = apply;
+  // Cobertura reports by test project, from a coverage run.
+  const reports = new Map<string, string>();
+  channel.onmessage = (e) => {
+    if (e.kind === "coverage") reports.set(e.project, e.report);
+    else apply(e);
+  };
   const wanted = new Map(selection.map((t) => [t.project, new Set(t.uids)]));
   useUnitTests.setState((s) => ({
     busy: run ? "run" : "discover",
@@ -161,8 +169,10 @@ async function start(run: boolean, selection: TestSelection[]): Promise<void> {
     }),
     version: s.version + 1,
   }));
+  let finished = false;
   try {
-    await call(commands.dotnetTests(request, run, selection, channel));
+    await call(commands.dotnetTests(request, run, coverage, selection, channel));
+    finished = true;
   } catch (e) {
     if (!isCancelled(e))
       useUnitTests.setState({
@@ -176,6 +186,13 @@ async function start(run: boolean, selection: TestSelection[]): Promise<void> {
       version: s.version + 1,
     }));
   }
+  if (coverage && finished) {
+    const ran = useUnitTests
+      .getState()
+      .projects.filter((p) => (selection.length === 0 || wanted.has(p.path)) && !p.message)
+      .map((p) => ({ path: p.path, name: p.name }));
+    await collectTestCoverage(reports, ran);
+  }
 }
 
 /** Builds and discovers the tests of every test project. */
@@ -183,6 +200,9 @@ export const discoverTests = () => start(false, []);
 
 /** Builds and runs `selection` (every test when empty). */
 export const runTests = (selection: TestSelection[] = []) => start(true, selection);
+
+/** Builds and runs `selection` (every test when empty) with Microsoft Code Coverage. */
+export const runTestsWithCoverage = (selection: TestSelection[] = []) => start(true, selection, true);
 
 export function cancelTests() {
   const { request } = useUnitTests.getState();

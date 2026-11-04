@@ -127,6 +127,10 @@ pub struct LanguageServerConfig {
     /// through `publishDiagnostics` (Roslyn): pull them for open files after each change.
     #[serde(default)]
     pub pull_diagnostics: bool,
+    /// Also pull the whole workspace's diagnostics (`workspace/diagnostic`) after the
+    /// server asks for a refresh, so problems in files that are not open are listed.
+    #[serde(default)]
+    pub workspace_diagnostics: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

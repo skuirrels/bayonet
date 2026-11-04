@@ -17,6 +17,7 @@ reqwest.workspace = true
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net"] }

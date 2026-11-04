@@ -16,6 +16,7 @@ describe("dotnet run command lines", () => {
       "1",
     ]);
     expect(run).toEqual({
+      watch: false,
       project: "src/App/App.csproj",
       launchProfile: "https",
       framework: "net10.0",
@@ -42,5 +43,29 @@ describe("dotnet run command lines", () => {
     expect(parseDotnetRun("dotnet", ["test"])).toBeNull();
     expect(parseDotnetRun("cargo", ["run"])).toBeNull();
     expect(parseDotnetRun("dotnet.exe", ["run"])).not.toBeNull();
+  });
+
+  it("reads and writes Hot Reload runs through dotnet watch", () => {
+    const args = dotnetRunArgs({ watch: true, project: "src/Api/Api.csproj", launchProfile: "http" });
+    expect(args).toEqual([
+      "watch",
+      "--non-interactive",
+      "run",
+      "--project",
+      "src/Api/Api.csproj",
+      "--launch-profile",
+      "http",
+    ]);
+    expect(parseDotnetRun("dotnet", args)).toMatchObject({
+      watch: true,
+      project: "src/Api/Api.csproj",
+      launchProfile: "http",
+      options: [],
+    });
+    expect(parseDotnetRun("dotnet", ["watch", "--project", "A.csproj"])).toMatchObject({
+      watch: true,
+      project: "A.csproj",
+    });
+    expect(parseDotnetRun("dotnet", ["build"])).toBeNull();
   });
 });

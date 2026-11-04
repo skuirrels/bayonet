@@ -103,6 +103,7 @@ pub async fn dotnet_tests(
     state: State<'_, AppState>,
     request: RequestId,
     run: bool,
+    coverage: bool,
     selection: Vec<TestSelection>,
     on_event: Channel<TestEvent>,
 ) -> IdeResult<()> {
@@ -111,6 +112,7 @@ pub async fn dotnet_tests(
         window.label(),
         request,
         run,
+        coverage,
         selection,
         crate::commands::sender(on_event),
     )
@@ -163,6 +165,58 @@ pub async fn dotnet_solution_add(
     solution_folder: Option<String>,
 ) -> IdeResult<()> {
     ide_host::ops::dotnet::dotnet_solution_add(&state.host, window.label(), projects, solution_folder).await
+}
+
+/// Converts a `.sln` to `.slnx` and returns the new file.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_migrate_solution(
+    window: Window,
+    state: State<'_, AppState>,
+    solution: IpcPath,
+) -> IdeResult<IpcPath> {
+    ide_host::ops::dotnet::dotnet_migrate_solution(&state.host, window.label(), solution).await
+}
+
+/// Where the .NET SDK in use defines MSBuild target `name`.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_sdk_target(
+    window: Window,
+    state: State<'_, AppState>,
+    name: String,
+) -> IdeResult<Option<ide_dotnet::msbuild::FileLocation>> {
+    ide_host::ops::dotnet::dotnet_sdk_target(&state.host, window.label(), name).await
+}
+
+/// The solution's projects that use Entity Framework Core.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_ef_projects(window: Window, state: State<'_, AppState>) -> IdeResult<Vec<IpcPath>> {
+    ide_host::ops::dotnet::dotnet_ef_projects(&state.host, window.label()).await
+}
+
+/// The EF Core migrations of `project`, oldest first.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_ef_migrations(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+) -> IdeResult<Vec<String>> {
+    ide_host::ops::dotnet::dotnet_ef_migrations(&state.host, window.label(), project).await
+}
+
+/// The `dotnet ef` command line of `operation` on `project`.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_ef_command(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+    operation: ide_dotnet::ef::EfOperation,
+) -> IdeResult<ide_dotnet::ef::EfCommand> {
+    ide_host::ops::dotnet::dotnet_ef_command(&state.host, window.label(), project, operation).await
 }
 
 /// Removes projects from the solution.

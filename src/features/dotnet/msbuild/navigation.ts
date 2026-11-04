@@ -1,7 +1,9 @@
 /**
- * Go to Declaration in MSBuild files (SLN-5): a central package version, a
- * property's definition in the file or in `Directory.Build.props/targets`, and
- * the files `Import` and `ProjectReference` point at.
+ * Go to Declaration in MSBuild files (SLN-5, CI-18): a central package version, a
+ * property's definition in the file or in `Directory.Build.props/targets`, the
+ * files `Import` and `ProjectReference` point at, and targets named in
+ * `DependsOnTargets` / `AfterTargets` / `BeforeTargets` / `Targets`, including
+ * the .NET SDK's.
  */
 import { EditorState, type Extension } from "@codemirror/state";
 import { commands } from "@/bindings";
@@ -17,7 +19,12 @@ export const MSBUILD_FILE = /\.(csproj|fsproj|vbproj|sqlproj|esproj|props|target
 export type MsbuildTarget =
   | { kind: "package"; id: string }
   | { kind: "property"; name: string }
-  | { kind: "path"; path: string };
+  | { kind: "path"; path: string }
+  | { kind: "target"; name: string };
+
+/** Attributes whose value is a `;`-separated list of target names. */
+const TARGET_LIST =
+  /\b(?:DependsOnTargets|AfterTargets|BeforeTargets|Targets|InitialTargets|DefaultTargets)\s*=\s*"([^"]*)"/gi;
 
 export interface TextLocation {
   line: number;
@@ -41,7 +48,36 @@ export function msbuildTargetAt(text: string, offset: number): MsbuildTarget | n
     return { kind: "package", id: pkg[1]!.trim() };
   const file = /<(?:Import|ProjectReference)\b[^>]*?\b(?:Project|Include)\s*=\s*"([^"]+)"/i.exec(line);
   if (file && within(file, 1)) return { kind: "path", path: file[1]! };
+  for (const m of line.matchAll(TARGET_LIST)) {
+    const from = m.index + m[0].length - 1 - m[1]!.length;
+    if (at < from || at > from + m[1]!.length) continue;
+    // The name under the caret in `A;B;$(C)`.
+    const rel = at - from;
+    const start = m[1]!.lastIndexOf(";", rel - 1) + 1;
+    const stop = m[1]!.indexOf(";", rel);
+    const name = m[1]!.slice(start, stop < 0 ? undefined : stop).trim();
+    return /^[A-Za-z_][\w.-]*$/.test(name) ? { kind: "target", name } : null;
+  }
   return null;
+}
+
+/** Where `<Target Name="name">` is in `text`, outside comments (names ignore case). */
+export function findTargetDefinition(text: string, name: string): TextLocation | null {
+  const clean = text.replace(/<!--[\s\S]*?-->/g, (c) => c.replace(/[^\n]/g, " "));
+  const want = name.toLowerCase();
+  for (const m of clean.matchAll(/<Target\s[^>]*?\bName\s*=\s*["']([^"']+)["']/g))
+    if (m[1]!.trim().toLowerCase() === want) return locationOf(text, m.index);
+  return null;
+}
+
+/** The files `<Import Project="…">` in `text` (in `dir`) name, where they can be resolved without evaluation. */
+export function importedFiles(text: string, dir: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/<Import\b[^>]*?\bProject\s*=\s*"([^"]+)"/gi)) {
+    const file = resolveMsbuildPath(dir, m[1]!);
+    if (file) out.push(file);
+  }
+  return out;
 }
 
 /** Where `<PackageVersion Include="id">` is in a `Directory.Packages.props` (ids ignore case, as NuGet's do). */
@@ -154,6 +190,31 @@ export async function followMsbuildTarget(path: string, text: string, target: Ms
       const file = resolveMsbuildPath(dir, target.path);
       if (!file || (await readText(file)) === null) return false;
       await open(file, { line: 0, col: 0 });
+      return true;
+    }
+    case "target": {
+      const own = findTargetDefinition(text, target.name);
+      if (own) {
+        await open(path, own);
+        return true;
+      }
+      const files: Array<{ path: string; text: string }> = [];
+      for (const name of ["Directory.Build.props", "Directory.Build.targets"])
+        files.push(...(await nearest(dir, name, path)));
+      for (const file of importedFiles(text, dir)) {
+        const t = await readText(file);
+        if (t !== null) files.push({ path: file, text: t });
+      }
+      for (const f of files) {
+        const at = findTargetDefinition(f.text, target.name);
+        if (at) {
+          await open(f.path, at);
+          return true;
+        }
+      }
+      const sdk = await call(commands.dotnetSdkTarget(target.name)).catch(() => null);
+      if (!sdk) return false;
+      await open(sdk.path, { line: sdk.line, col: sdk.col });
       return true;
     }
   }

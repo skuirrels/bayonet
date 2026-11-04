@@ -51,8 +51,11 @@ pub fn prepare(
     envs: &Environments,
     env: Option<&str>,
     base_dir: Option<&Path>,
+    exchanges: &std::collections::HashMap<String, crate::HttpExchange>,
 ) -> IdeResult<PreparedRequest> {
-    let resolver = Resolver { file_vars, env: envs.variables(env) };
+    // `$dotenv` reads the nearest `.env` at or above the request file.
+    let dotenv_dirs = base_dir.map(|d| d.ancestors().map(Path::to_path_buf).collect()).unwrap_or_default();
+    let resolver = Resolver { file_vars, env: envs.variables(env), dotenv_dirs, exchanges };
     let mut missing = BTreeSet::new();
     let url = resolver.substitute(&raw.block.url, &mut missing);
     let headers: Vec<(String, String)> =
@@ -193,7 +196,8 @@ mod tests {
         std::fs::write(tmp.path().join("body.json"), "{\"id\": \"{{id}}\"}\n").unwrap();
         let f = parse("@id = 7\nPOST {{host}}/items\nAuthorization: Bearer {{token}}\n\n< ./body.json\n");
         let envs = Environments::from_json(r#"{"dev":{"host":"https://api.test","token":"abc"}}"#, "").unwrap();
-        let p = prepare(&f.requests[0], &f.variables, &envs, Some("dev"), Some(tmp.path())).unwrap();
+        let p =
+            prepare(&f.requests[0], &f.variables, &envs, Some("dev"), Some(tmp.path()), &Default::default()).unwrap();
         assert_eq!(p.url, "https://api.test/items");
         assert_eq!(p.headers, vec![("Authorization".into(), "Bearer abc".into())]);
         // Included files are inserted verbatim (no substitution inside them).
@@ -203,14 +207,16 @@ mod tests {
     #[test]
     fn reports_unresolved_variables() {
         let f = parse("GET https://{{host}}/x\n");
-        let err = prepare(&f.requests[0], &f.variables, &Environments::default(), None, None).unwrap_err();
+        let err = prepare(&f.requests[0], &f.variables, &Environments::default(), None, None, &Default::default())
+            .unwrap_err();
         assert!(err.message.contains("host"), "{}", err.message);
     }
 
     #[test]
     fn relative_urls_use_the_host_header() {
         let f = parse("GET /status\nHost: localhost:9000\n");
-        let p = prepare(&f.requests[0], &f.variables, &Environments::default(), None, None).unwrap();
+        let p =
+            prepare(&f.requests[0], &f.variables, &Environments::default(), None, None, &Default::default()).unwrap();
         assert_eq!(p.url, "http://localhost:9000/status");
     }
 

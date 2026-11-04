@@ -19,7 +19,14 @@ import { attachConfig, attachDetail, attachRows, matchesFilter } from "../attach
 const proc = (p: Partial<AttachableProcess> & Pick<AttachableProcess, "pid" | "kind">): AttachableProcess => ({
   name: p.kind,
   commandLine: `${p.kind} app`,
-  adapter: { java: "java-debug", node: "js-debug", python: "debugpy", go: "delve", native: "codelldb" }[p.kind],
+  adapter: {
+    dotnet: "netcoredbg",
+    java: "java-debug",
+    node: "js-debug",
+    python: "debugpy",
+    go: "delve",
+    native: "codelldb",
+  }[p.kind],
   host: null,
   port: null,
   ...p,
@@ -38,12 +45,14 @@ const list = [
   }),
   proc({ pid: 25, kind: "node", name: "node", commandLine: "node server.js" }),
   proc({ pid: 26, kind: "go", name: "gosrv", commandLine: "./gosrv" }),
+  proc({ pid: 40, kind: "dotnet", name: "Fixture.Api", commandLine: "dotnet exec Fixture.Api.dll" }),
 ];
 
 describe("Attach to Process popup model", () => {
   it("groups processes by debugger in IDEA's order with counts", () => {
     const rows = attachRows(list, "");
     expect(rows.filter((r) => r.kind === "group").map((r) => r.kind === "group" && `${r.label}:${r.count}`)).toEqual([
+      ".NET (netcoredbg):1",
       "Java (JDWP):1",
       "Node.js:1",
       "Python (debugpy):2",
@@ -51,7 +60,7 @@ describe("Attach to Process popup model", () => {
       "Native (LLDB):1",
     ]);
     expect(rows[0]!.kind).toBe("group");
-    expect(rows[1]!.kind === "process" && rows[1]!.process.pid).toBe(10);
+    expect(rows[1]!.kind === "process" && rows[1]!.process.pid).toBe(40);
   });
 
   it("filters on pid, name and command line (all words)", () => {
@@ -86,5 +95,8 @@ describe("Attach to Process popup model", () => {
     const native = await attachConfig(list[0]!, "/proj");
     expect(native).toMatchObject({ adapter: "codelldb", request: "attach", name: "a.out (30)", cwd: "/proj" });
     expect(JSON.parse(native.extraJson!)).toEqual({ pid: 30 });
+    const dotnet = await attachConfig(list[6]!, "/proj");
+    expect(dotnet).toMatchObject({ adapter: "netcoredbg", request: "attach", name: "Fixture.Api (40)" });
+    expect(JSON.parse(dotnet.extraJson!)).toMatchObject({ processId: 40 });
   });
 });

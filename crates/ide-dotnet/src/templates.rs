@@ -222,6 +222,16 @@ pub fn sln_remove_args(solution: &Path, projects: &[PathBuf]) -> Vec<String> {
     args
 }
 
+/// `dotnet sln <solution> migrate`: writes `<name>.slnx` next to a `.sln` (SLN-6).
+pub fn sln_migrate_args(solution: &Path) -> Vec<String> {
+    vec!["sln".into(), solution.to_string_lossy().into_owned(), "migrate".into()]
+}
+
+/// The `.slnx` that migrating `solution` writes.
+pub fn migrated_solution(solution: &Path) -> PathBuf {
+    solution.with_extension("slnx")
+}
+
 /// `dotnet reference add|remove <references…> --project <project>`.
 pub fn reference_args(add: bool, project: &Path, references: &[PathBuf]) -> Vec<String> {
     let mut args = vec!["reference".into(), if add { "add" } else { "remove" }.into()];
@@ -277,6 +287,12 @@ mod tests {
        "TagsCollection":{"type":"item"},"Parameters":[]},
       {"Identity":"Microsoft.Standard.QuickStarts.Solution","Name":"Solution File","ShortNameList":["sln","solution"],
        "TagsCollection":{"type":"solution"},"Parameters":[]}]}"#;
+
+    #[test]
+    fn migrating_writes_an_slnx_next_to_the_sln() {
+        assert_eq!(sln_migrate_args(Path::new("/s/App.sln")), ["sln", "/s/App.sln", "migrate"]);
+        assert_eq!(migrated_solution(Path::new("/s/App.sln")), Path::new("/s/App.slnx"));
+    }
 
     #[test]
     fn templates_of_the_cache() {

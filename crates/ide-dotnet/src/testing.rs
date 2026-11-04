@@ -107,6 +107,9 @@ pub enum TestEvent {
     /// Build or test-process output.
     #[serde(rename_all = "camelCase")]
     Output { project: Option<IpcPath>, line: String },
+    /// The Cobertura report a coverage run of `project` wrote.
+    #[serde(rename_all = "camelCase")]
+    Coverage { project: IpcPath, report: IpcPath },
 }
 
 /// The tests to run in one project; empty `uids` runs all of them.
@@ -287,6 +290,31 @@ pub struct TestApp {
     pub assembly: PathBuf,
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
+    /// More options for the test app (code coverage).
+    pub args: Vec<String>,
+}
+
+/// The NuGet package that collects code coverage in a Microsoft.Testing.Platform app.
+pub const COVERAGE_PACKAGE: &str = "Microsoft.Testing.Extensions.CodeCoverage";
+
+/// Whether the project in `project_dir` references [`COVERAGE_PACKAGE`] (directly or through a
+/// package such as MSTest that brings it), from its restore output `obj/project.assets.json`.
+pub fn has_coverage_extension(project_dir: &Path) -> bool {
+    std::fs::read_to_string(project_dir.join("obj").join("project.assets.json"))
+        .is_ok_and(|text| text.to_ascii_lowercase().contains(&format!("\"{}/", COVERAGE_PACKAGE.to_ascii_lowercase())))
+}
+
+/// Test-app options that write a Cobertura report to `dir/name`.
+pub fn coverage_args(dir: &Path, name: &str) -> Vec<String> {
+    vec![
+        "--results-directory".into(),
+        dir.to_string_lossy().into_owned(),
+        "--coverage".into(),
+        "--coverage-output-format".into(),
+        "cobertura".into(),
+        "--coverage-output".into(),
+        name.into(),
+    ]
 }
 
 struct Notifications(mpsc::UnboundedSender<(String, Value)>);
@@ -322,6 +350,7 @@ pub async fn session(
     cmd.arg("exec")
         .arg(&app.assembly)
         .args(["--server", "--client-host", "127.0.0.1", "--client-port", &port.to_string()])
+        .args(&app.args)
         .current_dir(&app.cwd)
         .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
         .env("TESTINGPLATFORM_TELEMETRY_OPTOUT", "1")
@@ -354,27 +383,28 @@ pub async fn session(
             }
         });
     }
-    let stream = tokio::select! {
-        r = tokio::time::timeout(CONNECT_TIMEOUT, listener.accept()) => match r {
-            Ok(Ok((s, _))) => s,
-            Ok(Err(e)) => return Err(io_error(e)),
-            Err(_) => return Err(IdeError::new(ErrorKind::Io, "the test app did not connect; is it a Microsoft.Testing.Platform project?")),
-        },
-        status = child.wait() => {
-            let code = status.ok().and_then(|s| s.code()).map_or("?".to_owned(), |c| c.to_string());
-            return Err(IdeError::new(ErrorKind::Io, format!("the test app exited with code {code} before connecting")));
-        }
-        () = cancel.cancelled() => return Err(IdeError::cancelled()),
-    };
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (reader, writer) = stream.into_split();
-    let peer = Peer::connect(reader, writer, Arc::new(Notifications(tx)));
     let init = json!({
         "processId": std::process::id(),
         "clientInfo": { "name": "DotnetIDEA", "version": env!("CARGO_PKG_VERSION") },
         "capabilities": { "testing": { "debuggerProvider": false } },
     });
-    peer.request::<_, Value>("initialize", init, Some(cancel.clone())).await.map_err(IdeError::from)?;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    // An extension with a test host controller (code coverage, hang dumps) makes the app relaunch
+    // itself: the controller connects first and stays passive (it cannot discover), then the test
+    // host connects. The controller's connection stays open until the session ends.
+    let mut controllers = Vec::new();
+    let peer = loop {
+        let stream = accept(&listener, &mut child, cancel).await?;
+        let (reader, writer) = stream.into_split();
+        let peer = Peer::connect(reader, writer, Arc::new(Notifications(tx.clone())));
+        let reply =
+            peer.request::<_, Value>("initialize", init.clone(), Some(cancel.clone())).await.map_err(IdeError::from)?;
+        if is_host_controller(&reply) && controllers.len() < 2 {
+            controllers.push(peer);
+            continue;
+        }
+        break peer;
+    };
     let run_id = format!("{:032x}", rand_id());
     let (method, params) = match &request {
         SessionRequest::Discover => ("testing/discoverTests", json!({ "runId": run_id })),
@@ -416,11 +446,38 @@ pub async fn session(
         }
     }
     let _ = ended;
-    let _ = peer.notify("exit", json!({}));
+    for p in controllers.iter().chain([&peer]) {
+        let _ = p.notify("exit", json!({}));
+    }
     if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
     result
+}
+
+/// Whether an `initialize` reply comes from a test host controller rather than the test host:
+/// only the test host can discover tests.
+fn is_host_controller(reply: &Value) -> bool {
+    reply.pointer("/capabilities/testing/supportsDiscovery").and_then(Value::as_bool) == Some(false)
+}
+
+async fn accept(
+    listener: &TcpListener,
+    child: &mut tokio::process::Child,
+    cancel: &CancellationToken,
+) -> IdeResult<tokio::net::TcpStream> {
+    tokio::select! {
+        r = tokio::time::timeout(CONNECT_TIMEOUT, listener.accept()) => match r {
+            Ok(Ok((s, _))) => Ok(s),
+            Ok(Err(e)) => Err(io_error(e)),
+            Err(_) => Err(IdeError::new(ErrorKind::Io, "the test app did not connect; is it a Microsoft.Testing.Platform project?")),
+        },
+        status = child.wait() => {
+            let code = status.ok().and_then(|s| s.code()).map_or("?".to_owned(), |c| c.to_string());
+            Err(IdeError::new(ErrorKind::Io, format!("the test app exited with code {code} before connecting")))
+        }
+        () = cancel.cancelled() => Err(IdeError::cancelled()),
+    }
 }
 
 fn rand_id() -> u128 {
@@ -530,6 +587,7 @@ mod tests {
             assembly: PathBuf::from(&props[0].1),
             cwd: project.parent().unwrap().to_path_buf(),
             env: Vec::new(),
+            args: Vec::new(),
         };
         let cancel = CancellationToken::new();
         let found = std::sync::Mutex::new(Vec::new());
@@ -546,5 +604,39 @@ mod tests {
         let last: Vec<_> = ran.iter().filter(|t| t.state != TestState::InProgress).collect();
         assert_eq!(last.len(), 1, "only the selected test runs: {ran:?}");
         assert_eq!(last[0].state, TestState::Passed);
+    }
+
+    /// The coverage extension's host controller connects before the test host (needs `dotnet`).
+    #[tokio::test]
+    #[ignore = "builds the fixture with the .NET SDK"]
+    async fn runs_the_fixture_tests_with_coverage() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
+        let project = root.join("tests/Fixture.Core.MSTests/Fixture.Core.MSTests.csproj");
+        let status =
+            std::process::Command::new("dotnet").args(["build", "-nologo", "-tl:off"]).arg(&project).status().unwrap();
+        assert!(status.success());
+        assert!(has_coverage_extension(project.parent().unwrap()), "MSTest brings the coverage extension");
+        let out = std::process::Command::new("dotnet")
+            .args(["msbuild", "-getProperty:TargetPath"])
+            .arg(&project)
+            .output()
+            .unwrap();
+        let props = parse_msbuild_properties(&String::from_utf8_lossy(&out.stdout), &["TargetPath"]);
+        let dir = tempfile::tempdir().unwrap();
+        let app = TestApp {
+            dotnet: PathBuf::from("dotnet"),
+            assembly: PathBuf::from(&props[0].1),
+            cwd: project.parent().unwrap().to_path_buf(),
+            env: Vec::new(),
+            args: coverage_args(dir.path(), "out.cobertura.xml"),
+        };
+        let cancel = CancellationToken::new();
+        let ran = std::sync::Mutex::new(Vec::new());
+        session(&app, SessionRequest::Run(Vec::new()), &cancel, |t| ran.lock().unwrap().extend(t), |_| {})
+            .await
+            .unwrap();
+        assert!(ran.into_inner().unwrap().iter().any(|t| t.state == TestState::Passed));
+        let report = std::fs::read_to_string(dir.path().join("out.cobertura.xml")).unwrap();
+        assert!(report.contains("Greeter.cs"), "{report}");
     }
 }

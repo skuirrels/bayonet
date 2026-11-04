@@ -197,6 +197,8 @@ pub struct LspManager {
     virtual_docs: Mutex<HashMap<String, VirtualDocument>>,
     /// Latest diagnostics pull per document ([`pull`]); an older one is discarded.
     pulls: Mutex<HashMap<DocId, u64>>,
+    /// Running workspace diagnostics pull per server ([`pull`]).
+    workspace_pulls: Mutex<HashMap<ide_core::ServerId, pull::WorkspacePull>>,
 }
 
 /// Fetched virtual documents kept before the cache is reset.
@@ -326,6 +328,7 @@ impl LspManager {
             virtual_origins: Mutex::new(HashMap::new()),
             virtual_docs: Mutex::new(HashMap::new()),
             pulls: Mutex::new(HashMap::new()),
+            workspace_pulls: Mutex::new(HashMap::new()),
         })
     }
 
@@ -678,6 +681,12 @@ impl LspManager {
         });
         if !init_options.is_null() {
             params["initializationOptions"] = init_options;
+        }
+        // Only to pull-only servers: a server that can do both may stop pushing once a client can pull.
+        // Roslyn reports workspace diagnostics, and sends `workspace/diagnostic/refresh`, only to such clients.
+        if server.effective_config().pull_diagnostics {
+            params["capabilities"]["textDocument"]["diagnostic"] =
+                json!({ "dynamicRegistration": false, "relatedDocumentSupport": false });
         }
         params
     }

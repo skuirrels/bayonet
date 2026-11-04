@@ -27,6 +27,8 @@ pub struct RunInput<'a> {
     pub file: Option<&'a Path>,
     pub root: Option<&'a Path>,
     pub env: Option<&'a str>,
+    /// Earlier responses, for request variables (`{{login.response.body.$.token}}`).
+    pub history: Option<&'a History>,
 }
 
 /// Prepares and sends request `index` of `text`. Preparation errors (bad
@@ -38,7 +40,14 @@ pub async fn run(input: RunInput<'_>, cancel: &CancellationToken) -> IdeResult<H
         .get(input.index as usize)
         .ok_or_else(|| IdeError::not_found(format!("no request #{}", input.index + 1)))?;
     let envs = Environments::load(input.file, input.root)?;
-    let request = exec::prepare(raw, &parsed.variables, &envs, input.env, input.file.and_then(Path::parent))?;
+    let exchanges = input.history.map_or_else(Default::default, |h| {
+        env::request_variable_names(input.text)
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), h.latest_named(&name, input.file)?)))
+            .collect()
+    });
+    let request =
+        exec::prepare(raw, &parsed.variables, &envs, input.env, input.file.and_then(Path::parent), &exchanges)?;
     let time_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64() * 1000.0)

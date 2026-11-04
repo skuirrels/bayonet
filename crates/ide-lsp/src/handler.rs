@@ -283,6 +283,7 @@ impl Handler for ClientHandler {
             }
             "workspace/diagnostic/refresh" => {
                 mgr.schedule_pull_all(&self.server);
+                mgr.schedule_workspace_pull(&self.server);
                 Ok(Value::Null)
             }
             "workspace/inlineValue/refresh" => Ok(Value::Null),

@@ -23,7 +23,7 @@ import {
 } from "@/ui";
 import { StatusIcon } from "@/features/run/TestTreeView";
 import { buildTree, countTests, nodeStatus, selectionOf, stackLocations, type UtNode } from "./model";
-import { cancelTests, discoverTests, loadProjects, runTests, useUnitTests } from "./store";
+import { cancelTests, discoverTests, loadProjects, runTests, runTestsWithCoverage, useUnitTests } from "./store";
 import styles from "./UnitTestsView.module.css";
 
 const ICONS: Record<UtNode["kind"], string> = {
@@ -89,6 +89,12 @@ export function UnitTestsView() {
         run: () => void runTests(selectionOf(nodes)),
       },
       {
+        label: tx`Run Selected Tests with Coverage`,
+        icon: "run-coverage",
+        disabled: !!s.busy,
+        run: () => void runTestsWithCoverage(selectionOf(nodes)),
+      },
+      {
         label: tx`Jump to Source`,
         icon: "external-link",
         disabled: !src.path,
@@ -107,6 +113,12 @@ export function UnitTestsView() {
           title="Run Selected Tests"
           disabled={!!s.busy || s.selected.size === 0}
           onClick={runSelected}
+        />
+        <IconButton
+          icon="run-coverage"
+          title="Run All Tests with Coverage"
+          disabled={!!s.busy}
+          onClick={() => void runTestsWithCoverage()}
         />
         <IconButton icon="stop" title="Stop" disabled={!s.busy} onClick={cancelTests} />
         <IconButton

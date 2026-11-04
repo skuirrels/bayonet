@@ -337,7 +337,9 @@ impl Documents {
         // servers and Local History, which only know real files.
         let in_archive = ide_vfs::is_archive_path(path);
         let meta = if in_archive { None } else { std::fs::metadata(path).ok() };
-        let writable = !in_archive && meta.as_ref().map(|m| !m.permissions().readonly()).unwrap_or(true);
+        let writable = !in_archive
+            && !is_metadata_source(path)
+            && meta.as_ref().map(|m| !m.permissions().readonly()).unwrap_or(true);
         let empty_file = meta.as_ref().is_some_and(|m| m.len() == 0);
         let observed = !(loaded.binary || loaded.too_large || in_archive);
         let editorconfig = if loaded.binary || in_archive || !defaults.editorconfig {
@@ -838,5 +840,26 @@ impl Documents {
                 tracing::warn!("reload {}: {e}", path.display());
             }
         }
+    }
+}
+
+/// Library code Roslyn writes for Go to Definition into a referenced assembly (Source Link
+/// sources or decompiled code, under `<temp>/MetadataAsSource/`): shown read-only, as edits
+/// there change nothing.
+pub fn is_metadata_source(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "MetadataAsSource")
+}
+
+#[cfg(test)]
+mod metadata_source_tests {
+    use super::is_metadata_source;
+    use std::path::Path;
+
+    #[test]
+    fn roslyn_metadata_sources_are_recognised() {
+        assert!(is_metadata_source(Path::new(
+            "/var/folders/x/T/MetadataAsSource/b17c/DecompilationMetadataAsSourceFileProvider/020f/Assert.cs"
+        )));
+        assert!(!is_metadata_source(Path::new("/s/src/MetadataAsSourceTests/Assert.cs")));
     }
 }

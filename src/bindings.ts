@@ -836,7 +836,7 @@ export const commands = {
 	 *  Builds, then discovers or runs the tests of `selection` (every test project when
 	 *  empty), streaming events on `on_event`. Cancel with `cancel_request(request)`.
 	 */
-	dotnetTests: (request: RequestId, run: boolean, selection: TestSelection[], onEvent: Channel<TestEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_tests", { request, run, selection, onEvent })),
+	dotnetTests: (request: RequestId, run: boolean, coverage: boolean, selection: TestSelection[], onEvent: Channel<TestEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_tests", { request, run, coverage, selection, onEvent })),
 	/**  Installed project and solution templates, custom ones included. */
 	dotnetTemplates: () => typedError<ProjectTemplate[], IdeError>(__TAURI_INVOKE("dotnet_templates")),
 	/**  Creates a project from a template, optionally adding it to the solution. */
@@ -845,6 +845,20 @@ export const commands = {
 	dotnetSolutionAdd: (projects: IpcPath[], solutionFolder: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_solution_add", { projects, solutionFolder })),
 	/**  Removes projects from the solution. */
 	dotnetSolutionRemove: (projects: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_solution_remove", { projects })),
+	/**  Converts a `.sln` to `.slnx` and returns the new file. */
+	dotnetMigrateSolution: (solution: IpcPath) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("dotnet_migrate_solution", { solution })),
+	/**  Where the .NET SDK in use defines MSBuild target `name`. */
+	dotnetSdkTarget: (name: string) => typedError<{
+	path: IpcPath,
+	line: number,
+	col: number,
+} | null, IdeError>(__TAURI_INVOKE("dotnet_sdk_target", { name })),
+	/**  The solution's projects that use Entity Framework Core. */
+	dotnetEfProjects: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_ef_projects")),
+	/**  The EF Core migrations of `project`, oldest first. */
+	dotnetEfMigrations: (project: IpcPath) => typedError<string[], IdeError>(__TAURI_INVOKE("dotnet_ef_migrations", { project })),
+	/**  The `dotnet ef` command line of `operation` on `project`. */
+	dotnetEfCommand: (project: IpcPath, operation: EfOperation) => typedError<EfCommand, IdeError>(__TAURI_INVOKE("dotnet_ef_command", { project, operation })),
 	/**  The projects a project references. */
 	dotnetProjectReferences: (project: IpcPath) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_project_references", { project })),
 	/**  Adds and removes project references. */
@@ -1488,7 +1502,7 @@ export type AskpassKind =
 /**  Yes / no (an unknown host key); answered with `yes` or `no`. */
 "confirm";
 
-export type AttachKind = "java" | "node" | "python" | "go" | "native";
+export type AttachKind = "dotnet" | "java" | "node" | "python" | "go" | "native";
 
 export type AttachableProcess = {
 	pid: number,
@@ -2008,6 +2022,8 @@ export type CoverageReportSpec =
 { kind: "lcov"; runner: string; path: IpcPath; base: IpcPath } | 
 /**  `go test -coverprofile`; import paths under `module` map to `module_dir`. */
 { kind: "goProfile"; path: IpcPath; module: string; moduleDir: IpcPath } | 
+/**  Cobertura XML reports, merged (one per .NET test project); relative names resolve against `base`. */
+{ kind: "cobertura"; runner: string; paths: IpcPath[]; base: IpcPath } | 
 /**  Every JaCoCo XML report (Maven `target/site/jacoco`, Gradle `build/reports/jacoco`) under `dir`. */
 { kind: "jacoco"; dir: IpcPath } | 
 /**  The tool's raw data is exported to lcov by `argv` first (coverage.py: `… -m coverage lcov -o <lcov>`). */
@@ -2928,6 +2944,16 @@ export type EditorTabsSettings = {
 	activateOnClose?: string,
 };
 
+/**  The command line of an [`EfOperation`], or why it cannot run. */
+export type EfCommand = { status: "ready"; command: string; args: string[]; cwd: IpcPath; startupProject: IpcPath } | { status: "missingTool"; tool: string; message: string; install: ToolInstall | null };
+
+/**  What to do with `dotnet ef`. */
+export type EfOperation = { kind: "addMigration"; name: string; outputDir: string | null } | { kind: "removeMigration" } | 
+/**  To `migration` (`0` reverts every migration), or to the latest. */
+{ kind: "updateDatabase"; migration: string | null } | 
+/**  An idempotent SQL script of every migration. */
+{ kind: "script"; output: string } | { kind: "scaffoldDbContext"; connection: string; provider: string; outputDir: string | null; context: string | null };
+
 /**  Editor › File Encodings. */
 export type EncodingSettings = {
 	/**  Fallback for files outside the project that are not valid UTF-8 (WHATWG label). */
@@ -3050,6 +3076,13 @@ export type FileEntry = {
 export type FileIdentifiers = {
 	path: IpcPath,
 	occurrences: IdentifierOccurrence[],
+};
+
+/**  A position in a file (0-based line and UTF-16 column, as the editor wants). */
+export type FileLocation = {
+	path: IpcPath,
+	line: number,
+	col: number,
 };
 
 export type FileMatch = {
@@ -6181,7 +6214,9 @@ export type TestEvent = { kind: "phase"; project: IpcPath | null; phase: TestPha
 /**  New or changed tests of `project`. */
 { kind: "tests"; project: IpcPath; tests: TestNode[] } | 
 /**  Build or test-process output. */
-{ kind: "output"; project: IpcPath | null; line: string };
+{ kind: "output"; project: IpcPath | null; line: string } | 
+/**  The Cobertura report a coverage run of `project` wrote. */
+{ kind: "coverage"; project: IpcPath; report: IpcPath };
 
 /**  One test (an MTP "action" node), as discovered or with its latest result. */
 export type TestNode = {
@@ -6316,6 +6351,13 @@ export type ToolInfo = {
 	 *  server and the `fallback` ones after it. Empty when it has none.
 	 */
 	alternatives: string[],
+};
+
+/**  A command that installs a missing tool. */
+export type ToolInstall = {
+	command: string,
+	args: string[],
+	cwd: IpcPath | null,
 };
 
 export type ToolKind = "languageServer" | "debugger" | 

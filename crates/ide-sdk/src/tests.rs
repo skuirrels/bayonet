@@ -37,6 +37,7 @@ fn server(name: &str) -> LanguageServerConfig {
         launch_error: None,
         tsserver_project: false,
         pull_diagnostics: false,
+        workspace_diagnostics: false,
     }
 }
 

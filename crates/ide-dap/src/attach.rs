@@ -1,6 +1,7 @@
 //! Attach to Process: the current user's processes, grouped by the debugger that can
 //! attach to them (IDEA's `XAttachDebuggerProvider`s): JVMs with a JDWP agent, Node,
-//! Python (debugpy injection), Go binaries (Delve) and anything else natively (LLDB).
+//! Python (debugpy injection), Go binaries (Delve), .NET (netcoredbg) and anything else
+//! natively (LLDB).
 
 use crate::adapter;
 use ide_core::{IdeError, IdeResult};
@@ -11,6 +12,7 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AttachKind {
+    Dotnet,
     Java,
     Node,
     Python,
@@ -100,9 +102,30 @@ fn is_python(name: &str) -> bool {
     n == "Python" || n.strip_prefix("python").is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
 }
 
+/// The app a `dotnet [exec [options]] <App.dll>` host runs: `App`; else `None`.
+fn dotnet_app(args: &str) -> Option<String> {
+    let mut words = args.split_whitespace();
+    let host = file_name(words.next()?);
+    if host.strip_suffix(".exe").unwrap_or(host) != "dotnet" {
+        return None;
+    }
+    let dll = words.find(|w| w.to_ascii_lowercase().ends_with(".dll"))?;
+    Some(file_name(dll).trim_end_matches(".dll").trim_end_matches(".DLL").to_owned())
+}
+
 /// Classifies a process; `is_go` is asked only for processes no interpreter claims.
-pub fn classify(p: &RawProcess, is_go: impl Fn(&str) -> bool, native_adapter: &str) -> Option<AttachableProcess> {
-    let name = file_name(&p.exe).to_owned();
+/// `is_dotnet` says whether the process hosts the .NET runtime (it has a diagnostics endpoint).
+pub fn classify(
+    p: &RawProcess,
+    is_dotnet: impl Fn(u32) -> bool,
+    is_go: impl Fn(&str) -> bool,
+    native_adapter: &str,
+) -> Option<AttachableProcess> {
+    let mut name = file_name(&p.exe).to_owned();
+    let dotnet = is_dotnet(p.pid);
+    if dotnet && let Some(app) = dotnet_app(&p.args) {
+        name = app;
+    }
     let make = |kind, adapter: &str, addr: Option<(Option<String>, u16)>| {
         let (host, port) = match addr {
             Some((h, p)) => (h, Some(p)),
@@ -118,6 +141,9 @@ pub fn classify(p: &RawProcess, is_go: impl Fn(&str) -> bool, native_adapter: &s
             port,
         })
     };
+    if dotnet {
+        return make(AttachKind::Dotnet, "netcoredbg", None);
+    }
     let base = name.strip_suffix(".exe").unwrap_or(&name);
     if base == "java" || base == "javaw" {
         // Only JVMs started with a JDWP agent can be attached to.
@@ -239,12 +265,35 @@ pub async fn enable_node_inspector(pid: u32) -> IdeResult<u16> {
     Err(IdeError::unavailable(format!("start process {pid} with --inspect to attach to it")))
 }
 
+/// Processes that host the .NET runtime: each opens a diagnostics IPC endpoint,
+/// `dotnet-diagnostic-<pid>-<stamp>-socket` in the temp directory (a named pipe
+/// `dotnet-diagnostic-<pid>` on Windows), unless `DOTNET_EnableDiagnostics=0`.
+pub fn dotnet_pids() -> std::collections::HashSet<u32> {
+    let dir = if cfg!(windows) {
+        std::path::PathBuf::from(r"\\.\pipe\")
+    } else {
+        // The runtime uses $TMPDIR (macOS: the per-user folder), else /tmp.
+        std::env::var_os("TMPDIR").map_or_else(|| "/tmp".into(), std::path::PathBuf::from)
+    };
+    std::fs::read_dir(dir)
+        .map(|entries| entries.flatten().filter_map(|e| diagnostic_pid(&e.file_name().to_string_lossy())).collect())
+        .unwrap_or_default()
+}
+
+/// `dotnet-diagnostic-1234-5678-socket` / `dotnet-diagnostic-1234` → 1234.
+pub fn diagnostic_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("dotnet-diagnostic-")?.split('-').next()?.parse().ok()
+}
+
 /// Attachable processes, sorted by kind then name. Blocking (runs `ps`, reads binaries).
 pub fn attachable_processes() -> IdeResult<Vec<AttachableProcess>> {
     let cwd = std::env::temp_dir();
     let native = if adapter::resolve_binary("codelldb", &cwd).is_some() { "codelldb" } else { "lldb-dap" };
-    let mut out: Vec<AttachableProcess> =
-        list_processes()?.iter().filter_map(|p| classify(p, is_go_binary, native)).collect();
+    let dotnet = dotnet_pids();
+    let mut out: Vec<AttachableProcess> = list_processes()?
+        .iter()
+        .filter_map(|p| classify(p, |pid| dotnet.contains(&pid), is_go_binary, native))
+        .collect();
     out.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     Ok(out)
 }
@@ -258,7 +307,24 @@ mod tests {
     }
 
     fn kind(exe: &str, args: &str) -> Option<(AttachKind, Option<u16>)> {
-        classify(&raw(exe, args), |e| e.ends_with("/gosrv"), "codelldb").map(|p| (p.kind, p.port))
+        classify(&raw(exe, args), |_| false, |e| e.ends_with("/gosrv"), "codelldb").map(|p| (p.kind, p.port))
+    }
+
+    #[test]
+    fn classifies_dotnet_hosts_by_their_diagnostics_endpoint() {
+        assert_eq!(diagnostic_pid("dotnet-diagnostic-4242-1793750952-socket"), Some(4242));
+        assert_eq!(diagnostic_pid("dotnet-diagnostic-4242"), Some(4242));
+        assert_eq!(diagnostic_pid("dotnet-diagnostic-x-socket"), None);
+        let dotnet = |exe: &str, args: &str| classify(&raw(exe, args), |pid| pid == 7, |_| false, "codelldb").unwrap();
+        let app = dotnet("/usr/local/share/dotnet/dotnet", "dotnet exec --runtimeconfig a.json /s/bin/Fixture.Api.dll");
+        assert_eq!(
+            (app.kind, app.adapter.as_str(), app.name.as_str()),
+            (AttachKind::Dotnet, "netcoredbg", "Fixture.Api")
+        );
+        // An apphost keeps its own name.
+        assert_eq!(dotnet("/s/bin/Fixture.Cli", "/s/bin/Fixture.Cli --x").name, "Fixture.Cli");
+        // Without an endpoint, `dotnet` is just a native process.
+        assert_eq!(kind("/usr/local/share/dotnet/dotnet", "dotnet build"), Some((AttachKind::Native, None)));
     }
 
     #[test]

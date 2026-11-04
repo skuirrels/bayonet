@@ -197,6 +197,82 @@ pub async fn dotnet_solution_remove(host: &Host, window: &str, projects: Vec<Ipc
     .await
 }
 
+/// Converts a `.sln` to `.slnx` next to it (SLN-6); the `.sln` stays. Returns the new file.
+pub async fn dotnet_migrate_solution(host: &Host, window: &str, solution: IpcPath) -> IdeResult<IpcPath> {
+    let (root, dotnet) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        let solution = PathBuf::from(solution);
+        let target = templates::migrated_solution(&solution);
+        if target.exists() {
+            return Err(IdeError::new(
+                ide_core::error::ErrorKind::AlreadyExists,
+                format!("{} already exists", target.file_name().unwrap_or_default().to_string_lossy()),
+            ));
+        }
+        nuget::run(dotnet.as_deref(), &root, &templates::sln_migrate_args(&solution))?;
+        Ok(IpcPath::from(target))
+    })
+    .await
+}
+
+/// The projects of the root's solution (none without one).
+fn solution_projects(root: &Path) -> Vec<PathBuf> {
+    ide_dotnet::find(root)
+        .into_iter()
+        .next()
+        .and_then(|s| ide_dotnet::read(&s).ok())
+        .map(|s| s.projects())
+        .unwrap_or_default()
+}
+
+/// The solution's projects that use Entity Framework Core (PLT-2).
+pub async fn dotnet_ef_projects(host: &Host, window: &str) -> IdeResult<Vec<IpcPath>> {
+    let root = host.project(window)?.root.clone();
+    host.blocking(move || {
+        Ok(solution_projects(&root)
+            .into_iter()
+            .filter(|p| p.parent().is_some_and(ide_dotnet::ef::uses_ef_core))
+            .map(IpcPath::from)
+            .collect())
+    })
+    .await
+}
+
+/// The migrations of `project`, oldest first.
+pub async fn dotnet_ef_migrations(host: &Host, _window: &str, project: IpcPath) -> IdeResult<Vec<String>> {
+    host.blocking(move || Ok(ide_dotnet::ef::migrations(project.parent().unwrap_or(&project)))).await
+}
+
+/// The `dotnet ef` command line of `operation` on `project` (run in the Run tool window).
+pub async fn dotnet_ef_command(
+    host: &Host,
+    window: &str,
+    project: IpcPath,
+    operation: ide_dotnet::ef::EfOperation,
+) -> IdeResult<ide_dotnet::ef::EfCommand> {
+    let (root, dotnet) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+        Ok(ide_dotnet::ef::command(&dotnet, &operation, &project, &solution_projects(&root)))
+    })
+    .await
+}
+
+/// Where the .NET SDK the project uses defines MSBuild target `name` (CI-18).
+pub async fn dotnet_sdk_target(
+    host: &Host,
+    window: &str,
+    name: String,
+) -> IdeResult<Option<ide_dotnet::msbuild::FileLocation>> {
+    let (root, dotnet) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+        let Some(sdk) = ide_dotnet::msbuild::sdk_dir(&dotnet, &root) else { return Ok(None) };
+        Ok(ide_dotnet::msbuild::find_target(&ide_dotnet::msbuild::sdk_files(&sdk), &name))
+    })
+    .await
+}
+
 /// The projects `project` references.
 pub async fn dotnet_project_references(host: &Host, _window: &str, project: IpcPath) -> IdeResult<Vec<IpcPath>> {
     host.blocking(move || Ok(templates::project_references(&project)?.into_iter().map(IpcPath::from).collect())).await
@@ -241,12 +317,14 @@ pub async fn dotnet_tests(
     window: &str,
     request: RequestId,
     run: bool,
+    coverage: bool,
     selection: Vec<TestSelection>,
     on_event: Channel<TestEvent>,
 ) -> IdeResult<()> {
     let (root, dotnet) = dotnet_of(host, window)?;
     let token = host.begin_request(request);
-    let result = tests_inner(&root, dotnet, run, selection, &token, &on_event).await;
+    let coverage = (run && coverage).then(|| coverage_dir(request));
+    let result = tests_inner(&root, dotnet, run, coverage.as_deref(), selection, &token, &on_event).await;
     host.end_request(request);
     if let Err(e) = &result {
         let _ = on_event.send(TestEvent::Phase {
@@ -258,10 +336,17 @@ pub async fn dotnet_tests(
     result
 }
 
+/// Where a coverage run writes its reports: a fresh folder per run.
+fn coverage_dir(request: RequestId) -> PathBuf {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    std::env::temp_dir().join("dotnetidea-coverage").join(format!("{}-{}-{stamp}", std::process::id(), request.0))
+}
+
 async fn tests_inner(
     root: &Path,
     dotnet: Option<PathBuf>,
     run: bool,
+    coverage: Option<&Path>,
     selection: Vec<TestSelection>,
     token: &ide_core::CancellationToken,
     on_event: &Channel<TestEvent>,
@@ -311,7 +396,7 @@ async fn tests_inner(
         let phase =
             |phase, message: Option<String>| TestEvent::Phase { project: Some(project.clone()), phase, message };
         send(phase(if run { TestPhase::Running } else { TestPhase::Discovering }, None));
-        let app = match test_app(&dotnet, &t.project).await {
+        let mut app = match test_app(&dotnet, &t.project).await {
             Ok(app) => app,
             Err(e) => {
                 send(phase(TestPhase::Failed, Some(e.message)));
@@ -320,6 +405,15 @@ async fn tests_inner(
         };
         let request = if run { SessionRequest::Run(t.uids.clone()) } else { SessionRequest::Discover };
         let dir = t.project.parent().map(Path::to_path_buf).unwrap_or_default();
+        // Projects without the coverage extension run without coverage (the window says so).
+        let report = coverage.filter(|_| testing::has_coverage_extension(&dir)).map(|out| {
+            let name = format!(
+                "{}.cobertura.xml",
+                t.project.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            );
+            app.args = testing::coverage_args(out, &name);
+            out.join(name)
+        });
         let out = on_event.clone();
         let out_project = project.clone();
         let result = testing::session(
@@ -337,6 +431,9 @@ async fn tests_inner(
             },
         )
         .await;
+        if let Some(report) = report.filter(|r| r.is_file()) {
+            send(TestEvent::Coverage { project: project.clone(), report: report.into() });
+        }
         match result {
             Ok(()) => send(phase(TestPhase::Finished, None)),
             Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled => return Err(e),
@@ -390,6 +487,7 @@ async fn test_app(dotnet: &Path, project: &Path) -> IdeResult<TestApp> {
         assembly: PathBuf::from(assembly),
         cwd: dir.to_path_buf(),
         env: Vec::new(),
+        args: Vec::new(),
     })
 }
 
@@ -468,6 +566,15 @@ pub(crate) fn register(d: &mut Dispatcher) {
         "dotnet_solution_remove",
         |c| async move { dotnet_solution_remove(&c.host, &c.window, c.arg("projects")?).await },
     );
+    d.add("dotnet_migrate_solution", |c| async move {
+        dotnet_migrate_solution(&c.host, &c.window, c.arg("solution")?).await
+    });
+    d.add("dotnet_sdk_target", |c| async move { dotnet_sdk_target(&c.host, &c.window, c.arg("name")?).await });
+    d.add("dotnet_ef_projects", |c| async move { dotnet_ef_projects(&c.host, &c.window).await });
+    d.add("dotnet_ef_migrations", |c| async move { dotnet_ef_migrations(&c.host, &c.window, c.arg("project")?).await });
+    d.add("dotnet_ef_command", |c| async move {
+        dotnet_ef_command(&c.host, &c.window, c.arg("project")?, c.arg("operation")?).await
+    });
     d.add("dotnet_project_references", |c| async move {
         dotnet_project_references(&c.host, &c.window, c.arg("project")?).await
     });
@@ -476,8 +583,16 @@ pub(crate) fn register(d: &mut Dispatcher) {
     });
     d.add("dotnet_test_projects", |c| async move { dotnet_test_projects(&c.host, &c.window).await });
     d.add("dotnet_tests", |c| async move {
-        dotnet_tests(&c.host, &c.window, c.arg("request")?, c.arg("run")?, c.arg("selection")?, c.sender("onEvent")?)
-            .await
+        dotnet_tests(
+            &c.host,
+            &c.window,
+            c.arg("request")?,
+            c.arg("run")?,
+            c.arg::<Option<bool>>("coverage")?.unwrap_or(false),
+            c.arg("selection")?,
+            c.sender("onEvent")?,
+        )
+        .await
     });
     d.add("nuget_search", |c| async move {
         nuget_search(&c.host, &c.window, c.arg("query")?, c.arg("prerelease")?, c.arg("skip")?, c.arg("take")?).await

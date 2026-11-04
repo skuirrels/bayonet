@@ -23,17 +23,27 @@ import { msbuildNavigation } from "./msbuild/navigation";
 import { SolutionDialogs } from "./projects/SolutionDialogs";
 import {
   addExistingProject,
+  migrateSolution,
   openDialog,
   projectAt,
   removeFromSolution,
   setSolution,
   useSolution,
 } from "./projects/store";
-import { discoverTests, loadProjects, resetUnitTests, runTests, useUnitTests } from "./tests/store";
+import {
+  discoverTests,
+  loadProjects,
+  resetUnitTests,
+  runTests,
+  runTestsWithCoverage,
+  useUnitTests,
+} from "./tests/store";
 import { FrameworkStatus } from "./FrameworkStatus";
 import { GROUP_PREFIX } from "@/features/project-tree/model";
 import { setExpanded, suggestViewMode, useProjectTree } from "@/features/project-tree/store";
 import { dotnetRunType } from "./runType";
+import { efActions, isEfProject, loadEfProjects } from "./ef/ef";
+import { msbuildCompletion } from "./msbuild/completion";
 import { SOLUTION_ROOT_ID, solutionRoot, touchesSolution } from "./solution";
 
 const REFRESH_DELAY = 300;
@@ -76,6 +86,7 @@ export function activate(): () => void {
       shown = key;
       disposeRoot = registerProjectViewRoot(solutionRoot(solution));
       setSolution(solution);
+      void loadEfProjects();
       // Kept across solution edits so the window keeps its search and selection.
       disposeNuget ??= registerToolWindow({
         id: NUGET_WINDOW,
@@ -121,7 +132,7 @@ export function activate(): () => void {
   const disposeMsbuild = registerEditorContribution({
     id: "dotnet.msbuild",
     order: 57,
-    extensions: msbuildNavigation,
+    extensions: (ctx) => [msbuildNavigation(ctx), msbuildCompletion(ctx)],
   });
   const disposeDialogs = registerOverlay({
     id: "dotnet.solutionDialogs",
@@ -179,6 +190,9 @@ export function activate(): () => void {
           ],
         },
         { kind: "separator" },
+        ...(folder === null && useSolution.getState().solution?.format === "sln"
+          ? [{ kind: "action" as const, action: "dotnet.migrateSolution" }]
+          : []),
         { kind: "action", action: "dotnet.runAllTests" },
         { kind: "action", action: "dotnet.manageNugetPackages" },
       ];
@@ -203,6 +217,22 @@ export function activate(): () => void {
           action: "dotnet.manageNugetPackages",
           label: "Manage NuGet Packages…",
         },
+        ...(isEfProject(project)
+          ? [
+              {
+                label: "Entity Framework Core",
+                icon: "database",
+                submenu: [
+                  { kind: "action" as const, action: "dotnet.ef.addMigration", arg: { dir: project.dir } },
+                  { kind: "action" as const, action: "dotnet.ef.removeMigration", arg: { dir: project.dir } },
+                  { kind: "action" as const, action: "dotnet.ef.updateDatabase", arg: { dir: project.dir } },
+                  { kind: "separator" as const },
+                  { kind: "action" as const, action: "dotnet.ef.script", arg: { dir: project.dir } },
+                  { kind: "action" as const, action: "dotnet.ef.scaffold", arg: { dir: project.dir } },
+                ],
+              },
+            ]
+          : []),
         {
           kind: "action",
           action: "dotnet.removeFromSolution",
@@ -235,6 +265,15 @@ export function activate(): () => void {
           directory: dirArg(arg, "directory"),
           solutionFolder: dirArg(arg, "solutionFolder"),
         }),
+    },
+    {
+      id: "dotnet.migrateSolution",
+      title: "Convert Solution to .slnx",
+      description: "Writes a .slnx next to the .sln with dotnet sln migrate; the .sln is kept",
+      category: "Project",
+      when: "projectOpen",
+      keywords: ["slnx", "sln", "migrate", "convert", "solution"],
+      run: () => void migrateSolution(),
     },
     {
       id: "dotnet.addExistingProject",
@@ -278,6 +317,17 @@ export function activate(): () => void {
       },
     },
     {
+      id: "dotnet.runAllTestsWithCoverage",
+      title: "Run All Tests in Solution with Coverage",
+      category: "Unit Tests",
+      icon: "run-coverage",
+      when: "projectOpen",
+      keywords: ["test", "tests", "unit", "coverage", "cover"],
+      run: () => {
+        if (showTests() && !useUnitTests.getState().busy) void runTestsWithCoverage();
+      },
+    },
+    {
       id: "dotnet.discoverTests",
       title: "Build and Discover Tests",
       category: "Unit Tests",
@@ -288,6 +338,7 @@ export function activate(): () => void {
         if (showTests() && !useUnitTests.getState().busy) void discoverTests();
       },
     },
+    ...efActions(),
     {
       id: "dotnet.reloadSolution",
       title: "Reload Solution",

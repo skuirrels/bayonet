@@ -103,4 +103,45 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - **New › Project…** (on a folder, or **Add › New Project…** on the solution or a solution folder) lists every installed `dotnet new` project template, custom ones included, read from the template engine's cache (`crates/ide-dotnet/src/templates.rs`). It shows each template's options, runs `dotnet new`, adds the project to the solution (in the chosen solution folder) and opens it (SLN-7).
 - **Add › Existing Project…**, **Remove from Solution** and **Add Project Reference…** run `dotnet sln add/remove` and `dotnet reference add/remove`, so the `.sln`/`.slnx` and project files keep their formatting (SLN-4).
 - Group nodes in the project view (the solution and its solution folders) get a context menu from the new `projectViewGroup` menu id.
+- **Convert Solution to .slnx** (on a `.sln` solution node) runs `dotnet sln migrate`, which writes the `.slnx` next to the `.sln` and keeps the `.sln`; the Solution Explorer prefers the `.slnx` from then on (SLN-6).
 - **MSBuild navigation (SLN-5).** In project, `.props` and `.targets` files, Go to Declaration follows a version-less `PackageReference` to its `PackageVersion` in the nearest `Directory.Packages.props`, a `$(Property)` to where the file or a `Directory.Build.props/targets` above it sets it, and `Import` / `ProjectReference` paths to their files (`src/features/dotnet/msbuild/navigation.ts`). Properties set elsewhere (SDK targets, imported files) are not followed yet.
+- **MSBuild completion and targets (CI-18).** In the same files, completion offers properties inside a `PropertyGroup`, item types inside an `ItemGroup` (inserting `Include=""`), tasks inside a `Target`, top-level elements, `$(…)` properties, `@(…)` item types and target names in `DependsOnTargets`, `AfterTargets`, `BeforeTargets` and `Targets`, with the names the file defines (`src/features/dotnet/msbuild/completion.ts`). Go to Declaration on a target name in those attributes looks in the file, `Directory.Build.props/targets`, the files it imports, then the .NET SDK the project uses (`<dotnet>/sdk/<version>`, `Microsoft.Common.CurrentVersion.targets` first; `crates/ide-dotnet/src/msbuild.rs`).
+
+## Roslyn features (phase 4)
+
+- Roslyn's options are set in `languages/csharp.toml` under `[language-servers.settings."<language>|<group>"]`, the names Roslyn asks for in `workspace/configuration` (`csharp|inlay_hints.dotnet_enable_inlay_hints_for_parameters`, `navigation.dotnet_navigate_to_decompiled_sources`, …).
+- **Inlay hints (CI-9).** Parameter names for literals, indexers and object creation, and types for `var`, lambdas and implicit `new`, with Roslyn's suppressions for names that match. The editor's Inlay Hints setting turns them off.
+- **Referenced assemblies (CI-10).** Go to Declaration into a package or the BCL opens Source Link sources when the package has them, else code decompiled with ICSharpCode.Decompiler. Roslyn writes these under `<temp>/MetadataAsSource/`; such files open read-only.
+- **Solution-wide analysis (CI-7).** Analyser and compiler diagnostics run on the whole solution (`fullSolution`). Servers marked `workspace-diagnostics` in their TOML are pulled with `workspace/diagnostic` once they send a refresh. Roslyn holds a workspace pull open until something changes, so there is one pull at a time per server, sent with the previous result ids and sent again as soon as it answers (`crates/ide-lsp/src/pull.rs`). Problems in files that are not open appear in the Problems view and clear when fixed. Servers marked `pull-diagnostics` are now told the client supports pull diagnostics: Roslyn only answers workspace pulls and sends refreshes to such clients.
+- **Reformat (CI-8).** Reformat Code and reformat on save use Roslyn's formatter. Reformatting now sends the Code Style or `.editorconfig` indentation, not the indentation detected in the file (which IDEA also uses for typing only), so the result matches `dotnet format`. Indent detection also skips preprocessor lines at column 0, which made C# files with `#if` blocks look 8-space indented. Optimise imports and cleanup on save ask for `source.organizeImports` / `source.fixAll` code actions; whether Roslyn offers them is not checked yet.
+- Not yet: source-generated files in the Solution Explorer (CI-17).
+
+## Hot Reload (phase 4)
+
+- A .NET Project run configuration has a **Hot Reload (dotnet watch)** option (BLD-4). The command becomes `dotnet watch --non-interactive run …`: code edits are applied to the running app, and edits Hot Reload cannot apply restart it instead of waiting for an answer. Debugging such a configuration runs it under netcoredbg without Hot Reload.
+
+## Test coverage (phase 4)
+
+- **Run All Tests with Coverage** (Unit Tests toolbar, the selection's context menu, and the **Run All Tests in Solution with Coverage** action) runs the tests with Microsoft Code Coverage and shows the result as a "Unit Tests" suite in the Coverage tool window, the editor gutter and the project tree (TST-4).
+- It needs no installed tool: test projects that reference `Microsoft.Testing.Extensions.CodeCoverage` (the MSTest metapackage brings it in; detected from `obj/project.assets.json`) get `--coverage --coverage-output-format cobertura` and write one Cobertura report each, which `crates/ide-coverage/src/cobertura.rs` merges. Projects without the extension still run, and a notification offers to add the package to them.
+- The coverage extension makes the test app a test host controller that relaunches itself: the controller connects to the IDE first and reports `supportsDiscovery: false`. The session keeps that connection open and drives the test host's connection, which comes second.
+- Not yet: coverage for VSTest-only projects, and coverlet reports from run configurations.
+
+## Attach to Process (phase 4)
+
+- **Attach to Process…** lists .NET processes first, under ".NET (netcoredbg)" (DBG-4). A process counts as .NET when the runtime has opened its diagnostics IPC endpoint (`dotnet-diagnostic-<pid>-…-socket` in `$TMPDIR`, a `dotnet-diagnostic-<pid>` pipe on Windows), so apphosts, `dotnet exec` apps and tools are all found; `dotnet <App>.dll` hosts show the app's name. Attaching sends netcoredbg `attach` with `processId` and Just My Code from the debugger settings.
+- Not verified end to end: netcoredbg is not installed on the development machine.
+
+## Visual Studio `.http` files (phase 4)
+
+- The HTTP client (IntelliJ syntax) also runs Visual Studio's `.http` files (PLT-3, `crates/ide-http/src/env.rs`):
+  - `http-client.env.json.user` is read as the private environment file next to `http-client.private.env.json` (the IntelliJ one wins for a name both set).
+  - Dynamic variables `$guid`, `$randomInt min max` (max exclusive), `$timestamp [offset unit]`, `$datetime` and `$localDatetime` with `rfc1123`, `iso8601` or a quoted .NET format and an optional offset (`1 d`, `-2 h`; units y, M, w, d, h, m, s, ms), `$processEnv NAME`, and `$dotenv NAME` from the nearest `.env` at or above the request file.
+  - Request variables: `{{login.response.body.$.token}}`, `{{login.response.body.*}}`, `{{login.response.headers.Location}}` and the `request.` equivalents read the last successful response of the request named `# @name login` in the same file (from the response history). The JSONPath subset is `$`, `.key`, `[n]` and `['key']`; XPath is not supported.
+
+## Entity Framework Core (phase 4)
+
+- Projects that use EF Core (`Microsoft.EntityFrameworkCore` in their restore output) get an **Entity Framework Core** submenu in the Solution Explorer: Add Migration…, Remove Last Migration, Update Database… (to the latest, any migration, or `0`), Generate SQL Script… (idempotent) and Scaffold DbContext… (connection string, provider, output folder) (PLT-2, `crates/ide-dotnet/src/ef.rs`, `src/features/dotnet/ef/ef.ts`).
+- Each runs `dotnet ef … --project <project> --startup-project <startup>` in the Run tool window. The startup project is the project itself when it can start, else the first executable project in the solution that references it.
+- The tool is `dotnet ef` when that works in the project folder, else the global tool's executable `~/.dotnet/tools/dotnet-ef` (a local tool manifest that was never restored hides the global tool from `dotnet ef`), else a notification offers `dotnet tool install --global dotnet-ef`.
+- Migrations for Update Database come from the migration file names (no build).

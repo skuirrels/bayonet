@@ -3,6 +3,8 @@ import {
   ancestors,
   findPackageVersion,
   findPropertyDefinition,
+  findTargetDefinition,
+  importedFiles,
   msbuildTargetAt,
   resolveMsbuildPath,
 } from "./navigation";
@@ -76,5 +78,37 @@ describe("paths", () => {
 
   it("lists a directory and its ancestors, nearest first", () => {
     expect(ancestors("/a/b")).toEqual(["/a/b", "/a"]);
+  });
+});
+
+describe("targets", () => {
+  const text = [
+    "<Project>",
+    '  <Target Name="Pack2" DependsOnTargets="Build; $(Extra);Publish" AfterTargets="Compile" />',
+    '  <!-- <Target Name="Publish" /> -->',
+    "  <Target",
+    '      Name="publish">',
+    "  </Target>",
+    '  <Import Project="build/common.targets" />',
+    '  <Import Project="$(MSBuildExtensionsPath)/x.targets" />',
+    "</Project>",
+  ].join("\n");
+
+  it("finds the target name under the caret in a target list", () => {
+    expect(msbuildTargetAt(text, at(text, "Build;"))).toEqual({ kind: "target", name: "Build" });
+    expect(msbuildTargetAt(text, at(text, 'Publish"'))).toEqual({ kind: "target", name: "Publish" });
+    expect(msbuildTargetAt(text, at(text, "Compile"))).toEqual({ kind: "target", name: "Compile" });
+    // A property reference in the list is a property, not a target.
+    expect(msbuildTargetAt(text, at(text, "Extra"))).toEqual({ kind: "property", name: "Extra" });
+  });
+
+  it("finds definitions outside comments, ignoring case", () => {
+    expect(findTargetDefinition(text, "Publish")).toEqual({ line: 3, col: 2 });
+    expect(findTargetDefinition(text, "pack2")).toEqual({ line: 1, col: 2 });
+    expect(findTargetDefinition(text, "Build")).toBeNull();
+  });
+
+  it("lists the imports it can resolve", () => {
+    expect(importedFiles(text, "/s/App")).toEqual(["/s/App/build/common.targets"]);
   });
 });

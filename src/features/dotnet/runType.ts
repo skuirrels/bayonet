@@ -52,10 +52,17 @@ export const dotnetRunType: RunConfigTypeContribution = {
       ],
     },
     { key: "arguments", label: "Program arguments", mono: true },
+    {
+      key: "hotReload",
+      label: "Hot Reload (dotnet watch)",
+      control: "checkbox",
+      hint: "Applies code edits to the running app; edits it cannot apply restart it. Debugging runs without it.",
+    },
   ],
   commandLine: (p) => ({
     command: p.executable || "dotnet",
     args: dotnetRunArgs({
+      watch: p.hotReload === "true",
       project: p.project?.trim(),
       launchProfile: p.launchProfile?.trim(),
       framework: p.framework?.trim(),
@@ -72,6 +79,7 @@ export const dotnetRunType: RunConfigTypeContribution = {
       framework: run.framework,
       configuration: run.configuration,
       arguments: formatArgs(run.programArgs),
+      hotReload: run.watch ? "true" : "false",
       ...(c.command !== "dotnet" ? { executable: c.command } : {}),
     };
   },

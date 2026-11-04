@@ -72,6 +72,15 @@ impl History {
         serde_json::from_str(&text).map_err(|e| IdeError::internal(format!("corrupt history entry: {e}")))
     }
 
+    /// The newest exchange of the request named `name` in `file` (Visual Studio's request variables).
+    pub fn latest_named(&self, name: &str, file: Option<&std::path::Path>) -> Option<HttpExchange> {
+        let entry = self
+            .list()
+            .into_iter()
+            .find(|e| e.name.as_deref() == Some(name) && e.file.as_deref() == file && e.status.is_some())?;
+        self.get(&entry.id).ok()
+    }
+
     /// Saves `exchange`, dropping the oldest entries beyond [`MAX_ENTRIES`].
     pub fn add(&self, exchange: &HttpExchange) -> IdeResult<()> {
         let _g = self.lock.lock();
