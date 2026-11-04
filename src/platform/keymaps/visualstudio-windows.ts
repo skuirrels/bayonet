@@ -115,6 +115,10 @@ export const visualStudioAdditions: Record<string, string[]> = {
   "toolwindow.terminal": ["Ctrl+`"],
   "view.zoomIn": ["Ctrl+Shift+."],
   "view.zoomOut": ["Ctrl+Shift+,"],
+  // Alt+Down moves the line in the editor; in a search field it opens the history, as in
+  // Visual Studio's own Find dropdowns.
+  "find.popup.recentSearches": ["Alt+Down"],
+  "find.field.recentSearches": ["Alt+Down"],
 };
 
 /**

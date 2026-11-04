@@ -37,6 +37,25 @@ changes can keep flowing in.
     `store_virtual`, which skips the cache for them.
   - App icons, product name, identifier and version in `tauri.conf.json`, and the
     README stay ours.
+- **2026-11-05, `9669e583` (v0.1.36 and 86 commits).**
+  - **Pull diagnostics.** Upstream now pulls `textDocument/diagnostic` from every server
+    that advertises `diagnosticProvider` (`20c439ba`), keeping pulled and pushed
+    diagnostics apart, and declares pull support to all servers. `crates/ide-lsp/src/pull.rs`
+    is upstream's document pull plus our `workspace/diagnostic` loop. `pull-diagnostics`
+    now only adds servers that did not advertise the capability. The workspace pull's
+    findings are stored as the server's pushed diagnostics. A file's own pull clears them
+    while it is open, and on close its pulled findings are kept as pushed ones, since
+    Roslyn reports a closed file again only when it changes.
+  - **Unity.** Upstream's Unity support (`7e9acdc5`) is kept. The Roslyn server gets the
+    same `ProjectSettings/ProjectVersion.txt` root marker as csharp-ls, and the Project
+    view lists Solution and Unity panes. `suggestViewMode` leaves a Unity project in its
+    Unity pane, which hides the solution Unity generates.
+  - **Keymap.** The Visual Studio keymap's Alt+Down (Move Line Down) took the key from
+    upstream's search-history actions in the Find popup. Those actions keep it, because
+    they don't clash in practice: Move Line Down acts in the editor and history only
+    in a search field.
+  - The new Polish and Portuguese catalogues drop upstream's .NET run configuration
+    strings and use the DotnetIDEA names, as fr/ko/zh do.
 
 ## What was renamed
 

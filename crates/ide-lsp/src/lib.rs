@@ -12,6 +12,7 @@ mod clang_tidy;
 mod convert;
 mod external_project;
 mod file_ops;
+mod file_watch;
 mod handler;
 mod inspect;
 pub mod jdtls;
@@ -22,6 +23,7 @@ mod scope;
 mod server;
 mod tcp;
 mod text;
+mod ts_file_moves;
 mod tsserver_bridge;
 pub mod types;
 mod uri;
@@ -175,6 +177,9 @@ impl DocSnap {
     }
 }
 
+/// Receives the folders outside the project that servers want watched.
+pub type WatchRootsFn = dyn Fn(Vec<PathBuf>) + Send + Sync;
+
 pub struct LspManager {
     me: Weak<LspManager>,
     project_root: PathBuf,
@@ -192,6 +197,7 @@ pub struct LspManager {
     servers_hook: RwLock<Option<Arc<ServersFn>>>,
     candidates_hook: RwLock<Option<Arc<CandidateFn>>>,
     excludes_hook: RwLock<Option<Arc<external_project::ExcludesFn>>>,
+    watch_roots_hook: RwLock<Option<Arc<WatchRootsFn>>>,
     shutting_down: AtomicBool,
     execution_allowed: AtomicBool,
     java_usages_warned: AtomicBool,
@@ -202,8 +208,6 @@ pub struct LspManager {
     virtual_origins: Mutex<HashMap<String, ide_core::ServerId>>,
     /// Contents fetched for virtual URIs.
     virtual_docs: Mutex<HashMap<String, VirtualDocument>>,
-    /// Latest diagnostics pull per document ([`pull`]); an older one is discarded.
-    pulls: Mutex<HashMap<DocId, u64>>,
     /// Running workspace diagnostics pull per server ([`pull`]).
     workspace_pulls: Mutex<HashMap<ide_core::ServerId, pull::WorkspacePull>>,
 }
@@ -355,6 +359,7 @@ impl LspManager {
             servers_hook: RwLock::new(None),
             candidates_hook: RwLock::new(None),
             excludes_hook: RwLock::new(None),
+            watch_roots_hook: RwLock::new(None),
             shutting_down: AtomicBool::new(false),
             execution_allowed: AtomicBool::new(true),
             java_usages_warned: AtomicBool::new(false),
@@ -362,7 +367,6 @@ impl LspManager {
             shown_messages: Mutex::new(HashSet::new()),
             virtual_origins: Mutex::new(HashMap::new()),
             virtual_docs: Mutex::new(HashMap::new()),
-            pulls: Mutex::new(HashMap::new()),
             workspace_pulls: Mutex::new(HashMap::new()),
         })
     }
@@ -447,6 +451,7 @@ impl LspManager {
         let wanted: Vec<(DocId, Vec<Arc<Server>>)> =
             open.into_iter().map(|(id, language, path)| (id, self.servers_for(&language, &path))).collect();
         let mut start = Vec::new();
+        let mut opened = Vec::new();
         {
             let mut docs = self.docs.lock();
             for (id, servers) in wanted {
@@ -461,6 +466,7 @@ impl LspManager {
                             user_did_open(server, &run, &d.path, &d.uri, d.did_open_params());
                         }
                         attached.opened_gen = Some(run.generation);
+                        opened.push((id, server.clone()));
                     }
                     d.servers.push(attached);
                     if !start.iter().any(|s: &Arc<Server>| s.id == server.id) {
@@ -470,6 +476,9 @@ impl LspManager {
                 // In definition order: the first server answers hover, rename and symbols.
                 d.servers.sort_by_key(|a| servers.iter().position(|s| s.id == a.server.id).unwrap_or(usize::MAX));
             }
+        }
+        for (doc, server) in opened {
+            self.schedule_pull(doc, Some(&server), Duration::ZERO);
         }
         for server in &start {
             self.ensure_started(server);
@@ -608,6 +617,9 @@ impl LspManager {
                 return;
             }
         };
+        let run =
+            Running { generation, peer: peer.clone(), caps: Arc::new(RwLock::new(caps)), watchers: Default::default() };
+        server.set_initializing(Some(run.clone()));
         if let Err(e) = peer.notify("initialized", json!({})) {
             tracing::warn!("{}: {e}", server.name);
         }
@@ -619,28 +631,33 @@ impl LspManager {
         {
             tracing::debug!("{}: didChangeConfiguration: {e}", server.name);
         }
-        let run = Running { generation, peer: peer.clone(), caps: Arc::new(RwLock::new(caps)) };
 
         self.refresh_external_project(&server, &run).await;
 
         // Publish readiness and (re)open attached documents atomically w.r.t. did_change.
+        let mut reopened = Vec::new();
         {
             let mut docs = self.docs.lock();
             if !server.mark_ready(generation, run.clone()) {
                 drop(docs);
+                server.set_initializing(None);
                 peer.kill();
                 return;
             }
             let open_close = run.caps.read().open_close;
-            for d in docs.values_mut() {
+            for (id, d) in docs.iter_mut() {
                 let params = d.did_open_params();
                 for a in d.servers.iter_mut().filter(|a| a.server.id == server.id && a.opened_gen != Some(generation)) {
                     if open_close && let Err(e) = peer.notify("textDocument/didOpen", params.clone()) {
                         tracing::debug!("{}: didOpen: {e}", server.name);
                     }
                     a.opened_gen = Some(generation);
+                    reopened.push(*id);
                 }
             }
+        }
+        for doc in reopened {
+            self.schedule_pull(doc, Some(&server), Duration::ZERO);
         }
         self.check_clang_tidy(&server).await;
         server.refresh_busy_status(&self.sink);
@@ -665,6 +682,7 @@ impl LspManager {
             None => return, // superseded instance
         };
         self.clear_server_state(&server);
+        self.file_watch_roots_changed();
         if intentional {
             server.announce_down();
             return;
@@ -764,12 +782,6 @@ impl LspManager {
         }
         if !init_options.is_null() {
             params["initializationOptions"] = init_options;
-        }
-        // Only to pull-only servers: a server that can do both may stop pushing once a client can pull.
-        // Roslyn reports workspace diagnostics, and sends `workspace/diagnostic/refresh`, only to such clients.
-        if server.effective_config().pull_diagnostics {
-            params["capabilities"]["textDocument"]["diagnostic"] =
-                json!({ "dynamicRegistration": false, "relatedDocumentSupport": false });
         }
         params
     }
@@ -871,6 +883,7 @@ impl LspManager {
             }
             docs.insert(doc, state);
         }
+        self.schedule_pull(doc, None, Duration::ZERO);
         for s in &servers {
             self.ensure_started(s);
             if s.running().is_some()
@@ -880,7 +893,6 @@ impl LspManager {
                 self.runtime.spawn(async move { me.check_clang_tidy(&server).await });
             }
         }
-        self.schedule_pull(doc);
     }
 
     pub fn did_change(&self, doc: DocId, version: u32, changes: &[AppliedChange], full_text: &dyn Fn() -> String) {
@@ -950,7 +962,29 @@ impl LspManager {
             }
         }
         drop(docs);
-        self.schedule_pull(doc);
+        self.schedule_pull(doc, None, pull::AFTER_EDIT);
+    }
+
+    /// Sends the documents open on instance `generation` of `server` again, as a `didChange`
+    /// with their unchanged text, so the server parses them with the settings it just read.
+    pub(crate) fn resync_documents(&self, server: &Server, generation: u64) {
+        let Some(run) = server.running_gen(generation) else { return };
+        if run.caps.read().sync == SyncKind::None {
+            return;
+        }
+        let docs = self.docs.lock();
+        for d in docs.values() {
+            if !d.servers.iter().any(|a| a.server.id == server.id && a.opened_gen == Some(generation)) {
+                continue;
+            }
+            let params = json!({
+                "textDocument": { "uri": d.uri, "version": d.version },
+                "contentChanges": [{ "text": d.text.as_str() }],
+            });
+            if let Err(e) = run.peer.notify("textDocument/didChange", params) {
+                tracing::debug!("{}: didChange: {e}", server.name);
+            }
+        }
     }
 
     pub fn did_save(&self, doc: DocId, text: &str) {
@@ -973,12 +1007,15 @@ impl LspManager {
                 tracing::debug!("{}: didSave: {e}", a.server.name);
             }
         }
+        drop(docs);
+        self.schedule_pull(doc, None, Duration::ZERO);
+        self.pull_dependents(doc);
     }
 
     pub fn did_close(&self, doc: DocId) {
-        self.forget_pulls(doc);
         let Some(d) = self.docs.lock().remove(&doc) else { return };
         for a in &d.servers {
+            self.forget_pulled(&a.server, &d.path, a.server.running().as_ref());
             let Some(run) = a.server.running() else { continue };
             if a.opened_gen == Some(run.generation)
                 && run.caps.read().open_close
@@ -1675,6 +1712,20 @@ impl LspManager {
         Ok(())
     }
 
+    /// Whether a server of `doc` (`server`, when given) provides the command `name`. Code actions
+    /// can carry commands other editors' extensions run themselves after the edit (vtsls'
+    /// `_typescript.didOrganizeImports`): no server provides those.
+    pub async fn provides_command(&self, doc: DocId, server: Option<ide_core::ServerId>, name: &str) -> bool {
+        let servers = match self.snapshot(doc) {
+            Ok(snap) => snap.servers,
+            Err(_) => self.servers.lock().clone(),
+        };
+        self.ready_targets(&servers, |c| c.commands().iter().any(|c| c == name))
+            .await
+            .iter()
+            .any(|t| server.is_none_or(|s| t.server.id == s))
+    }
+
     async fn command_target(&self, doc: DocId, server: ide_core::ServerId, name: &str) -> IdeResult<Target> {
         let snap = self.snapshot(doc)?;
         self.ready_targets(&snap.servers, |c| c.commands().iter().any(|c| c == name))
@@ -1693,6 +1744,10 @@ impl LspManager {
         answers: Vec<FormAnswer>,
         cancel: CancellationToken,
     ) -> IdeResult<Option<CommandForm>> {
+        // Nothing to ask for a command its server doesn't provide (executing it decides).
+        if !self.provides_command(doc, Some(server), &command.command).await {
+            return Ok(None);
+        }
         let t = self.command_target(doc, server, &command.command).await?;
         let interactive = t.server.name == "gopls"
             && t.caps()
@@ -1975,7 +2030,30 @@ impl LspManager {
             servers.iter().zip(ready).filter_map(|(s, run)| Some(Target { server: s.clone(), run: run? })).collect();
         let mut out = FileRenameEdits::default();
         for t in targets {
-            let Some(params) = Self::file_op_params(&t, "willRename", &moves) else { continue };
+            let Some(params) = Self::file_op_params(&t, "willRename", &moves) else {
+                if t.server.config.tsserver_project && t.caps().commands().iter().any(|c| c == ts_file_moves::COMMAND) {
+                    out.servers.push(t.server.name.clone());
+                    let opened = self.open_for_file_op(&t, &moves);
+                    for (from, to, _) in &moves {
+                        let r: IdeResult<Value> = self
+                            .call(
+                                &t,
+                                "workspace/executeCommand",
+                                ts_file_moves::request(from, to),
+                                Some(&cancel),
+                                LONG_TIMEOUT,
+                            )
+                            .await;
+                        match r {
+                            Ok(result) => out.edit.files.extend(ts_file_moves::edit(&result).files),
+                            Err(e) if e.kind == ErrorKind::Cancelled && cancel.is_cancelled() => return Err(e),
+                            Err(e) => out.errors.push(e.message),
+                        }
+                    }
+                    drop(opened);
+                }
+                continue;
+            };
             out.servers.push(t.server.name.clone());
             let opened = self.open_for_file_op(&t, &moves);
             let r: IdeResult<Option<lsp::WorkspaceEdit>> =
@@ -2006,27 +2084,76 @@ impl LspManager {
         }
     }
 
-    /// Files that changed on disk, outside the editor too (a checkout, another tool): each running
-    /// server hears of those of its languages under its root through `workspace/didChangeWatchedFiles`.
-    /// Without it jdtls's incremental build never sees them, so a launch runs stale classes.
-    pub fn watched_files_changed(&self, created: &[PathBuf], modified: &[PathBuf], removed: &[PathBuf]) {
+    /// Files that changed on disk, outside the editor too (a checkout, another tool), sent to
+    /// running servers through `workspace/didChangeWatchedFiles`. A server that registered file
+    /// watchers hears of what they match, including `excluded_dirs` (folders in excluded or
+    /// ignored trees whose entries came or went, reported as created): a package installed
+    /// into `.venv` or a `go.mod` rewritten by `go get` is picked up without a restart. Other
+    /// servers hear of their languages' files under their root; without it jdtls's incremental
+    /// build never sees them, so a launch runs stale classes.
+    pub fn watched_files_changed(
+        &self,
+        created: &[PathBuf],
+        modified: &[PathBuf],
+        removed: &[PathBuf],
+        excluded_dirs: &[PathBuf],
+    ) {
+        use file_watch::Change;
         let servers: Vec<Arc<Server>> = self.servers.lock().clone();
         for s in servers {
             let Some(run) = s.running() else { continue };
-            let languages = s.languages();
-            let changes: Vec<Value> = [(created, 1), (modified, 2), (removed, 3)]
+            let all = [(created, Change::Created), (modified, Change::Changed), (removed, Change::Deleted)]
                 .into_iter()
-                .flat_map(|(paths, kind)| paths.iter().map(move |p| (p, kind)))
-                .filter(|(p, _)| p.starts_with(&s.root) && languages.contains(&self.languages.detect(p, None)))
-                .map(|(p, kind)| json!({ "uri": uri::path_to_uri(p), "type": kind }))
-                .collect();
+                .flat_map(|(paths, change)| paths.iter().map(move |p| (p, change)));
+            let watchers = run.watchers.read();
+            let changes: Vec<(&PathBuf, Change)> = if watchers.is_empty() {
+                let languages = s.languages();
+                all.filter(|(p, _)| p.starts_with(&s.root) && languages.contains(&self.languages.detect(p, None)))
+                    .collect()
+            } else {
+                all.chain(excluded_dirs.iter().map(|p| (p, Change::Created)))
+                    .filter(|(p, change)| watchers.wants(&s.root, p, *change))
+                    .collect()
+            };
+            drop(watchers);
             if changes.is_empty() {
                 continue;
             }
+            let changes: Vec<Value> =
+                changes.iter().map(|(p, c)| json!({ "uri": uri::path_to_uri(p), "type": *c as u8 })).collect();
             if let Err(e) = run.peer.notify("workspace/didChangeWatchedFiles", json!({ "changes": changes })) {
                 tracing::debug!("{}: didChangeWatchedFiles: {e}", s.name);
             }
         }
+    }
+
+    /// Called with the folders outside the project that servers registered file watchers
+    /// for (a virtualenv elsewhere, a path dependency), whenever they change. Changes
+    /// below them go to [`Self::watched_files_changed`].
+    pub fn set_file_watch_roots_hook(&self, hook: Box<WatchRootsFn>) {
+        *self.watch_roots_hook.write() = Some(Arc::from(hook));
+        self.file_watch_roots_changed();
+    }
+
+    pub(crate) fn file_watch_roots_changed(&self) {
+        let Some(hook) = self.watch_roots_hook.read().clone() else { return };
+        let servers: Vec<Arc<Server>> = self.servers.lock().clone();
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for run in servers.iter().filter_map(|s| s.instance()) {
+            roots.extend(
+                run.watchers.read().bases().filter(|b| !b.starts_with(&self.project_root)).map(Path::to_path_buf),
+            );
+        }
+        roots.sort();
+        roots.dedup();
+        // Sorted, so a folder's subfolders follow it.
+        let mut outer: Vec<PathBuf> = Vec::new();
+        for r in roots {
+            if !outer.last().is_some_and(|o| r.starts_with(o)) {
+                outer.push(r);
+            }
+        }
+        hook(outer);
     }
 
     /// Checks initialized capabilities, including dynamic registrations, before choosing a formatter.
@@ -2165,7 +2292,7 @@ impl LspManager {
             d.context = context;
             d.servers.iter().map(|a| a.server.id).collect()
         };
-        self.schedule_pull(doc);
+        self.schedule_pull(doc, None, Duration::ZERO);
         // Highlighting, hints and lenses depend on the context too: editors ask again.
         use ide_core::event::LspRefreshKind as Kind;
         for server in servers {
@@ -2561,6 +2688,12 @@ impl LspManager {
                 self.ensure_started(server);
             }
         }
+    }
+
+    /// [`Self::reconfigure`] on the manager's runtime, for callers outside one (file watchers).
+    pub fn reconfigure_soon(self: &Arc<Self>) {
+        let me = self.clone();
+        self.runtime.spawn(async move { me.reconfigure().await });
     }
 
     pub async fn reconfigure(&self) {

@@ -13,7 +13,7 @@ tree-sitter = "csharp"
 name = "roslyn-language-server"
 command = "roslyn-language-server"
 args = ["--stdio", "--autoLoadProjects", "--telemetryLevel", "off", "--logLevel", "Information"]
-root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props"]
+root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props", "ProjectSettings/ProjectVersion.txt"]
 install-hint = "dotnet tool install --global roslyn-language-server --prerelease"
 pull-diagnostics = true
 # Problems in files that are not open, for the Problems view (solution-wide analysis).
@@ -47,7 +47,7 @@ dotnet_navigate_to_decompiled_sources = true
 [[language-servers]]
 name = "csharp-ls"
 command = "csharp-ls"
-root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props"]
+root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props", "ProjectSettings/ProjectVersion.txt"]
 install-hint = "dotnet tool install --global csharp-ls"
 fallback = true
 
