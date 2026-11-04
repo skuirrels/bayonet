@@ -140,6 +140,17 @@ describe("application configurations", () => {
     expect(jvmModuleDir("odd/App.java", [cfg({ id: "m", kind: "maven", cwd: "odd" })])).toBe("odd");
   });
 
+  it("takes the innermost module the build model knows, like IDEA's file index", () => {
+    const modules = ["", "/w/billing", "/w/billing/modules/core", "legacy"];
+    // `sourceSets.main.java.srcDirs = ['src']`: no `src/main/java` to guess from.
+    expect(jvmModuleDir("legacy/src/a/App.java", [], modules)).toBe("legacy");
+    expect(jvmModuleDir("/w/billing/modules/core/src/main/java/a/App.java", [], modules)).toBe(
+      "/w/billing/modules/core",
+    );
+    // A module the model does not know yet (before the first sync): the source layout.
+    expect(jvmModuleDir("services/api/src/main/java/a/App.java", [], modules)).toBe("services/api");
+  });
+
   it("adds JDWP to a script explicitly assigned the Kotlin debugger", () => {
     const rc = cfg({ id: "kotlin-script", kind: "shell", command: "./run.sh", debugAdapter: "kotlin-debug-adapter" });
     expect(jdwpLaunch(rc)?.env.JAVA_TOOL_OPTIONS).toContain("-agentlib:jdwp=");
@@ -250,6 +261,21 @@ describe("java command lines", () => {
     expect(
       resolveJavaCommand(c, { ...info, modulePaths: ["/m/x.jar"], pathListSeparator: ";" }).args.slice(0, 2),
     ).toEqual(["--module-path", "/m/x.jar"]);
+  });
+
+  it("colours a Spring Boot console unless the configuration sets the property", () => {
+    const boot = (args: string[]) => ({
+      ...applicationConfig({ className: "a.Main" }, "src/main/java/a/Main.java"),
+      kind: "spring-boot" as const,
+      args,
+    });
+    expect(resolveJavaCommand(boot(["-Xmx1g", "a.Main"]), info).args[0]).toBe("-Dspring.output.ansi.enabled=always");
+    expect(resolveJavaCommand(boot(["-Dspring.output.ansi.enabled=never", "a.Main"]), info).args).toEqual([
+      "-Dspring.output.ansi.enabled=never",
+      "a.Main",
+    ]);
+    const plain = applicationConfig({ className: "a.Main" }, "src/main/java/a/Main.java");
+    expect(resolveJavaCommand(plain, info).args).not.toContain("-Dspring.output.ansi.enabled=always");
   });
 
   it("joins arguments for java-debug and reads JDWP's port", () => {
@@ -365,7 +391,7 @@ describe("temporary configurations", () => {
     expect(s.temporary).not.toContain(apps[0]!.id);
     expect(s.selectedId).toBe(apps[apps.length - 1]!.id);
     expect(s.configs.filter((c) => c.kind === "application")).toHaveLength(MAX_TEMPORARY);
-    expect(JSON.parse(localStorage.getItem("openidea.run.temporary:/p")!)).toHaveLength(MAX_TEMPORARY);
+    expect(JSON.parse(localStorage.getItem("openidea.run.temporary.v2:/p")!)).toHaveLength(MAX_TEMPORARY);
     // Reusing an existing temporary moves it last instead of duplicating it.
     adoptTemporary(apps[3]!);
     expect(useRun.getState().temporary.at(-1)).toBe(apps[3]!.id);
@@ -378,6 +404,25 @@ describe("temporary configurations", () => {
     const used = adoptTemporary(applicationConfig({ className: "a.Main" }, "src/main/java/a/Main.java"));
     expect(used.name).toBe("Mine");
     expect(useRun.getState().temporary).toEqual([]);
+  });
+
+  it("reuse a configuration of the same main class and module, whatever its id", () => {
+    const own = (module: string) =>
+      cfg({
+        id: `user:${module}`,
+        kind: "spring-boot",
+        name: `Mine ${module}`,
+        args: ["-Xmx1g", "-cp", "${classpath}", "a.Main"],
+        module,
+        detected: false,
+      });
+    useRun.setState({ configs: [own("other"), own("app")] });
+    expect(adoptTemporary(applicationConfig({ className: "a.Main" }, "app/src/main/java/a/Main.java")).name).toBe(
+      "Mine app",
+    );
+    expect(useRun.getState().temporary).toEqual([]);
+    const fresh = adoptTemporary(applicationConfig({ className: "a.Other" }, "app/src/main/java/a/Other.java"));
+    expect(useRun.getState().temporary).toEqual([fresh.id]);
   });
 
   it("offer Save in the chooser while selected", async () => {

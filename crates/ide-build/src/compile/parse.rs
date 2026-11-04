@@ -24,6 +24,8 @@ pub(crate) enum Format {
     Go,
     /// MSBuild (`dotnet build`): `/p/A.cs(12,5): error CS1002: ; expected [/p/A.csproj]`.
     MsBuild,
+    /// GCC / Clang (through `cmake --build`): `src/a.cpp:12:5: error: msg`.
+    Gcc,
 }
 
 /// What a printed column counts.
@@ -365,6 +367,17 @@ fn is_project_file(p: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
+/// A GCC / Clang diagnostic line; notes and the context lines after it are left as output.
+fn gcc_line(line: &str) -> Option<RawMessage> {
+    let (path, ln, col, rest) = path_line_col(line)?;
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let (severity, msg) =
+        [("fatal error:", Severity::Error), ("error:", Severity::Error), ("warning:", Severity::Warning)]
+            .into_iter()
+            .find_map(|(prefix, severity)| rest.strip_prefix(prefix).map(|m| (severity, m.trim())))?;
+    (!msg.is_empty()).then(|| RawMessage::new(severity, msg, ColUnit::Byte).at(path, ln, col))
+}
+
 /// rustc's JSON diagnostic (`reason: compiler-message`) → message and its rendered text.
 fn cargo_json(v: &Value) -> Option<(Option<RawMessage>, String)> {
     if v.get("reason")?.as_str()? != "compiler-message" {
@@ -480,6 +493,7 @@ impl OutputParser {
             Format::Tsc => tsc_line(&line),
             Format::Go => go_line(&line),
             Format::MsBuild => msbuild_line(&line),
+            Format::Gcc => gcc_line(&line),
             Format::Cargo => None,
         };
         if let Some(msg) = parsed {
@@ -631,6 +645,24 @@ mod tests {
         assert!(out[1].text.ends_with("\nProperty 'x' is missing in type 'A'."));
         assert_eq!(pos(&out[2]), (Severity::Error, "src/c.tsx", 7, Some(10)));
         assert_eq!(out[2].text, "Cannot find name 'foo'.");
+    }
+
+    #[test]
+    fn gcc_errors_and_warnings() {
+        let out = parse(
+            Format::Gcc,
+            "[1/2] Building CXX object CMakeFiles/app.dir/main.cpp.o\n\
+             /p/src/main.cpp:12:5: error: use of undeclared identifier 'foo'\n\
+             \x20  12 |     foo();\n\
+             /p/src/util.h:3:10: warning: unused variable 'x' [-Wunused-variable]\n\
+             /p/src/main.cpp:4:10: fatal error: 'missing.h' file not found\n\
+             /p/src/main.cpp:2:1: note: in file included from here\n",
+        );
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].text, "use of undeclared identifier 'foo'");
+        assert_eq!(out[1].severity, Severity::Warning);
+        assert_eq!(out[2].text, "'missing.h' file not found");
     }
 
     #[test]

@@ -17,14 +17,33 @@ pub fn subscribe(host: &Host, window: &str, on_event: Emit<AgentEvent>) -> IdeRe
 }
 
 pub fn providers(host: &Host, window: &str) -> IdeResult<Vec<AgentProvider>> {
+    host.require_trust(window)?;
     let mut providers = host.project(window)?.agents.providers();
     ide_agent::registry::mark_updates(&registry_paths(host), &mut providers);
     Ok(providers)
 }
 
+/// Overrides built-in agent `id`'s command with `command` (its agent file keeps the
+/// built-in's driver and arguments), or returns it to auto-detection with `None`.
+pub fn set_command(host: &Host, window: &str, id: String, command: Option<String>) -> IdeResult<()> {
+    host.require_trust(window)?;
+    host.project(window)?.agents.set_builtin_command(&id, command)
+}
+
+/// Environment variables built-in agent `id` starts with; empty clears them.
+pub fn set_env(
+    host: &Host,
+    window: &str,
+    id: String,
+    env: std::collections::BTreeMap<String, String>,
+) -> IdeResult<()> {
+    host.require_trust(window)?;
+    host.project(window)?.agents.set_builtin_env(&id, env)
+}
+
 /// Where ACP Registry agents are saved (`<config>/agents`, like the user's own) and installed.
 pub(crate) fn registry_paths(host: &Host) -> RegistryPaths {
-    RegistryPaths::new(&host.config_dir, &host.data_dir)
+    RegistryPaths::new(&host.config_dir, &host.local_data_dir)
 }
 
 fn join_err(e: impl std::fmt::Display) -> IdeError {
@@ -62,13 +81,21 @@ pub async fn registry_install(
     .await
     .map_err(join_err);
     host.end_request(request);
-    result?
+    result??;
+    for project in host.projects() {
+        project.agents.reload_providers();
+    }
+    Ok(())
 }
 
 /// Removes a registry agent: its agent file and installed files.
 pub async fn registry_remove(host: &Host, _window: &str, id: String) -> IdeResult<()> {
     let paths = registry_paths(host);
-    tokio::task::spawn_blocking(move || ide_agent::registry::remove(&paths, &id)).await.map_err(join_err)?
+    tokio::task::spawn_blocking(move || ide_agent::registry::remove(&paths, &id)).await.map_err(join_err)??;
+    for project in host.projects() {
+        project.agents.reload_providers();
+    }
+    Ok(())
 }
 
 /// Slash commands to complete for `provider` in `task`'s directory, or in the project
@@ -88,6 +115,7 @@ pub fn entries(host: &Host, window: &str, task: String, subagent: Option<String>
 }
 
 pub async fn create(host: &Host, window: &str, mut request: NewAgentTask) -> IdeResult<AgentTask> {
+    host.require_trust(window)?;
     let project = host.project(window)?;
     let root = project.root.clone();
     let requested = request.project_root.take();
@@ -99,6 +127,7 @@ pub async fn create(host: &Host, window: &str, mut request: NewAgentTask) -> Ide
 
 /// Sends a message; while the agent works it is queued, or with `now` it interrupts the turn.
 pub async fn prompt(host: &Host, window: &str, task: String, prompt: AgentPrompt, now: bool) -> IdeResult<()> {
+    host.require_trust(window)?;
     host.project(window)?.agents.prompt(&task, prompt, now).await
 }
 
@@ -109,26 +138,31 @@ pub fn unqueue(host: &Host, window: &str, task: String, queued: String) -> IdeRe
 
 /// Sends a queued message now, interrupting the current turn.
 pub fn send_queued_now(host: &Host, window: &str, task: String, queued: String) -> IdeResult<()> {
+    host.require_trust(window)?;
     host.project(window)?.agents.send_queued_now(&task, &queued)
 }
 
 /// Changes a session setting (model, mode, thinking effort…).
 pub async fn set_config(host: &Host, window: &str, task: String, option: String, value: String) -> IdeResult<()> {
+    host.require_trust(window)?;
     host.project(window)?.agents.set_config(&task, &option, value).await
 }
 
 /// Copies the task's conversation into a new task, up to its first `turns` turns (all when `None`).
 pub async fn fork(host: &Host, window: &str, task: String, turns: Option<u32>) -> IdeResult<AgentTask> {
+    host.require_trust(window)?;
     host.project(window)?.agents.fork(&task, turns).await
 }
 
 /// Drops the task's turns after its first `turns`; returns the message of the first dropped one.
 pub async fn rollback(host: &Host, window: &str, task: String, turns: u32) -> IdeResult<Option<AgentPrompt>> {
+    host.require_trust(window)?;
     host.project(window)?.agents.rollback(&task, turns).await
 }
 
 /// What the agent reports about itself when it starts, without opening a session.
 pub async fn probe(host: &Host, window: &str, provider: String, refresh: bool) -> IdeResult<AgentProbe> {
+    host.require_trust(window)?;
     host.project(window)?.agents.probe(&provider, refresh).await
 }
 
@@ -139,6 +173,7 @@ pub fn cancel(host: &Host, window: &str, task: String, subagent: Option<String>)
 
 /// Answers a permission request; `option: None` cancels it.
 pub fn respond(host: &Host, window: &str, task: String, permission: u32, option: Option<String>) -> IdeResult<()> {
+    host.require_trust(window)?;
     host.project(window)?.agents.respond(&task, permission, option)
 }
 
@@ -151,15 +186,18 @@ pub fn unarchive(host: &Host, window: &str, task: String) -> IdeResult<()> {
 }
 
 pub async fn delete(host: &Host, window: &str, task: String, remove_worktree: bool) -> IdeResult<()> {
+    host.require_trust(window)?;
     host.project(window)?.agents.delete(&task, remove_worktree).await
 }
 
 pub async fn changes(host: &Host, window: &str, task: String) -> IdeResult<Vec<AgentChange>> {
+    host.require_trust(window)?;
     host.project(window)?.agents.changes(&task).await
 }
 
 /// Content of `path` when the task started (left side of its diff).
 pub async fn base_text(host: &Host, window: &str, task: String, path: IpcPath) -> IdeResult<Option<String>> {
+    host.require_trust(window)?;
     host.project(window)?.agents.base_text(&task, path.into_path_buf()).await
 }
 
@@ -167,6 +205,8 @@ pub async fn base_text(host: &Host, window: &str, task: String, path: IpcPath) -
 pub(crate) fn register(d: &mut Dispatcher) {
     d.add("agent_subscribe", |c| async move { subscribe(&c.host, &c.window, c.channel("onEvent")?) });
     d.add("agent_providers", |c| async move { providers(&c.host, &c.window) });
+    d.add("agent_set_command", |c| async move { set_command(&c.host, &c.window, c.arg("id")?, c.arg("command")?) });
+    d.add("agent_set_env", |c| async move { set_env(&c.host, &c.window, c.arg("id")?, c.arg("env")?) });
     d.add("agent_registry_list", |c| async move { registry_list(&c.host, &c.window, c.arg("request")?).await });
     d.add("agent_registry_install", |c| async move {
         registry_install(&c.host, &c.window, c.arg("id")?, c.arg("request")?, c.sender("onEvent")?).await

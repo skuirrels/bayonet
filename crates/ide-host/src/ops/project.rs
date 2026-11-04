@@ -10,6 +10,7 @@ use std::sync::Arc;
 #[derive(Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {
+    pub trusted: bool,
     pub root: ide_core::IpcPath,
     pub name: String,
     pub is_git: bool,
@@ -22,6 +23,7 @@ pub fn info(project: &Project) -> ProjectInfo {
     let settings = project.settings.effective();
     let custom = settings.general.project_name.trim();
     ProjectInfo {
+        trusted: project.is_trusted(),
         name: if custom.is_empty() {
             project.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
         } else {
@@ -170,8 +172,16 @@ pub fn set_settings(
         host.apply_proxy();
     }
     // A new interpreter / toolchain / server executable restarts the language servers it affects.
-    if ["languages", "tools", "languageServers"].iter().any(|k| key == *k || key.starts_with(&format!("{k}."))) {
+    let code_style = key == "editor" || key == "editor.codeStyle" || key.starts_with("editor.codeStyle.");
+    let toolchain = ["languages", "tools", "languageServers", "projectStructure"]
+        .iter()
+        .any(|k| key == *k || key.starts_with(&format!("{k}.")));
+    // Code style only reaches servers as settings (e.g. jdtls' formatter profile); builds don't depend on it.
+    if code_style || toolchain {
         for project in affected() {
+            if toolchain && let Some(bridge) = &project.kotlin_bridge {
+                bridge.schedule();
+            }
             let lsp = project.lsp.clone();
             host.runtime.spawn(async move { lsp.reconfigure().await });
         }

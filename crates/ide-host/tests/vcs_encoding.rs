@@ -28,6 +28,7 @@ async fn gbk_document_gutter_diff_stage_and_rollback_share_encoding() {
     let host = Host::new(HostConfig {
         config_dir: base.join("config"),
         data_dir: base.join("data"),
+        local_data_dir: base.join("data"),
         languages: Arc::new(ide_language::LanguageRegistry::load(None).unwrap()),
         syntax: Arc::default(),
         sink_for: Box::new(|_| Arc::new(NullSink)),
@@ -35,6 +36,7 @@ async fn gbk_document_gutter_diff_stage_and_rollback_share_encoding() {
         runtime: tokio::runtime::Handle::current(),
         project_environment: false,
     });
+    host.trust.decide(&root, true, false).unwrap();
     let project = host.open_project("main", &root).unwrap();
     for _ in 0..500 {
         if !project.repos().is_empty() {

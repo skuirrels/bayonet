@@ -1,5 +1,6 @@
 export * from "./icons";
 export * from "./Button";
+export * from "./FloatingToolbar";
 export * from "./Kbd";
 export * from "./Tooltip";
 export * from "./Input";
@@ -10,10 +11,12 @@ export {
   FILES_DRAG,
   dragRequiresAlt,
   dragSession,
+  dropZoneAt,
   registerDropTarget,
   setDragRequiresAlt,
   startPointerDrag,
   type DragSession,
+  type DropEdge,
 } from "./pointerDrag";
 export * from "./Tree";
 export * from "./List";
@@ -32,3 +35,4 @@ export { lazyComponent, prefetchLazyComponents } from "./lazy";
 export { T } from "./T";
 export { selectableText, copyMenuFor, copyText } from "./selectableText";
 export { useSelectionBoundary } from "./useSelectionBoundary";
+export * from "./rowSelection";

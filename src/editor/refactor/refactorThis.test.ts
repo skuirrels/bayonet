@@ -14,9 +14,11 @@ const lspCodeActionQuery = vi.fn(async (request: number, _doc: number, _range: u
 );
 const lspPrepareRename = vi.fn(async () => prepare);
 let onApply: (() => void) | null = null;
-const lspApplyCodeAction = vi.fn(async () => {
+// applyCodeAction resolves the picked action, then executes it (interactive command support).
+const lspResolveCodeAction = vi.fn(async (_doc: number, action: CodeAction) => ok(action));
+const lspExecuteCodeAction = vi.fn(async () => {
   onApply?.();
-  return ok(null);
+  return ok([]);
 });
 const lspCodeActions = vi.fn(async () => ok([]));
 const cancelRequest = vi.fn(async () => undefined);
@@ -31,7 +33,8 @@ vi.mock("@/platform/ipc", async (orig) => {
       ...actual.commands,
       lspCodeActionQuery,
       lspPrepareRename,
-      lspApplyCodeAction,
+      lspResolveCodeAction,
+      lspExecuteCodeAction,
       lspCodeActions,
       cancelRequest,
       languages,
@@ -61,6 +64,8 @@ vi.mock("./introduce", () => ({
 }));
 const safeDelete = vi.fn();
 vi.mock("./safeDelete", () => ({ safeDelete }));
+const startHierarchyRefactoring = vi.fn();
+vi.mock("./hierarchy", () => ({ startHierarchyRefactoring }));
 
 const { classifyAction, kindAdvertised, cannotPerform } = await import("./catalog");
 const { refactorThis, runRefactoring } = await import("./refactorThis");
@@ -85,13 +90,19 @@ const answer =
     ok({ actions, advertisedKinds } satisfies CodeActionQuery);
 
 let view: EditorView | null = null;
-function editor(text = "fn main() { let total = price * 2; }") {
+function editor(text = "fn main() { let total = price * 2; }", language = "rust") {
   view = new EditorView({
     state: EditorState.create({
       doc: text,
       selection: { anchor: text.indexOf("price") + 1 },
       extensions: [
-        lspDoc.of({ doc: 1, path: "/p/a.rs", language: "rust", uiMode: null, readOnly: false }),
+        lspDoc.of({
+          doc: 1,
+          path: `/p/a.${language === "java" ? "java" : "rs"}`,
+          language,
+          uiMode: null,
+          readOnly: false,
+        }),
         inplaceRenameExtension(),
       ],
     }),
@@ -176,6 +187,24 @@ describe("Refactor This", () => {
     expect(lspCodeActionQuery.mock.calls[0]![3]).toEqual(["refactor"]);
   });
 
+  it("offers Pull Members Up / Push Members Down in Java files, after IDEA's other refactorings", async () => {
+    query = answer([action("Convert to switch expression", "refactor.rewrite")]);
+    const v = editor("class Dog extends Animal { int price; }", "java");
+    await refactorThis(v, vi.fn());
+    expect(labels()).toEqual(["Pull Members Up…", "Push Members Down…", "Convert to switch expression"]);
+    const items = (useLspPopup.getState().popup as { items: { label: string; run: () => void }[] }).items;
+    items.find((i) => i.label === "Push Members Down…")!.run();
+    expect(startHierarchyRefactoring).toHaveBeenCalledWith(v, "pushDown");
+    closePopup();
+    v.destroy();
+    // Other languages have no server for them; nor does Java while its server is down.
+    await refactorThis(editor(), vi.fn());
+    expect(labels()).not.toContain("Pull Members Up…");
+    query = async () => unavailable;
+    await refactorThis(editor("class Dog {}", "java"), vi.fn());
+    expect(labels()).toEqual(["Nothing here"]);
+  });
+
   it("runs the mapped server action, Rename and Safe Delete", async () => {
     prepare = ok({ start: { line: 0, col: 0 }, end: { line: 0, col: 1 } });
     query = answer([action("Inline variable", "refactor.inline")]);
@@ -185,7 +214,7 @@ describe("Refactor This", () => {
     const items = (useLspPopup.getState().popup as { items: { label: string; run: () => void }[] }).items;
     items.find((i) => i.label === "Inline…")!.run();
     await new Promise((r) => setTimeout(r, 0));
-    expect(lspApplyCodeAction).toHaveBeenCalledOnce();
+    expect(lspExecuteCodeAction).toHaveBeenCalledOnce();
     items.find((i) => i.label === "Rename…")!.run();
     expect(rename).toHaveBeenCalledWith(v);
     items.find((i) => i.label === "Safe Delete…")!.run();
@@ -240,7 +269,7 @@ describe("Refactor menu actions", () => {
   it("apply the single matching action, or offer a choice", async () => {
     query = answer([action("Move to a new file", "refactor.move.newFile")]);
     await runRefactoring(editor(), "move");
-    expect(lspApplyCodeAction).toHaveBeenCalledOnce();
+    expect(lspExecuteCodeAction).toHaveBeenCalledOnce();
     expect(lspCodeActionQuery.mock.calls[0]![3]).toEqual(["refactor.move"]);
 
     closePopup();

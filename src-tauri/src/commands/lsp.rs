@@ -95,8 +95,8 @@ pub async fn lsp_implementations(
     ide_host::ops::lsp::lsp_implementations(&state.host, window.label(), request, doc, positions).await
 }
 
-/// Contents of a virtual document (library class, decompiled code) that a
-/// language server returned a non-`file:` URI for. Cached per project.
+/// Contents of a read-only language-server document, including JDT library
+/// classes and disk class files. Cached per project.
 #[tauri::command]
 #[specta::specta]
 pub async fn lsp_virtual_document(
@@ -105,6 +105,16 @@ pub async fn lsp_virtual_document(
     uri: String,
 ) -> IdeResult<VirtualDocument> {
     ide_host::ops::lsp::lsp_virtual_document(&state.host, window.label(), uri).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn lsp_resolve_class_file(
+    window: Window,
+    state: State<'_, AppState>,
+    path: std::path::PathBuf,
+) -> IdeResult<String> {
+    ide_host::ops::lsp::lsp_resolve_class_file(&state.host, window.label(), path).await
 }
 
 /// References of the symbol at `pos`. `project_wide` also searches project files
@@ -230,6 +240,38 @@ pub async fn lsp_rename(
     ide_host::ops::lsp::lsp_rename(&state.host, window.label(), request, doc, pos, new_name).await
 }
 
+/// The class at `pos` and the members Pull Members Up / Push Members Down can move.
+#[tauri::command]
+#[specta::specta]
+pub async fn lsp_hierarchy_members(
+    window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    doc: DocId,
+    pos: Pos,
+    kind: HierarchyRefactoring,
+) -> IdeResult<HierarchyMembers> {
+    ide_host::ops::lsp::lsp_hierarchy_members(&state.host, window.label(), request, doc, pos, kind).await
+}
+
+/// Checks Pull Members Up / Push Members Down and computes the edit without applying it.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+pub async fn lsp_hierarchy_refactor(
+    window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    doc: DocId,
+    pos: Pos,
+    kind: HierarchyRefactoring,
+    target: Option<String>,
+    choices: Vec<HierarchyChoice>,
+) -> IdeResult<HierarchyRefactored> {
+    ide_host::ops::lsp::lsp_hierarchy_refactor(&state.host, window.label(), request, doc, pos, kind, target, choices)
+        .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn lsp_format(
@@ -348,8 +390,30 @@ pub async fn lsp_restart(window: Window, state: State<'_, AppState>, server: Ser
 /// Applies a (previewed) workspace edit, e.g. after rename confirmation.
 #[tauri::command]
 #[specta::specta]
-pub fn apply_workspace_edit(window: Window, state: State<'_, AppState>, edit: WorkspaceEdit) -> IdeResult<()> {
-    ide_host::ops::lsp::apply_workspace_edit(&state.host, window.label(), edit)
+pub async fn apply_workspace_edit(window: Window, state: State<'_, AppState>, edit: WorkspaceEdit) -> IdeResult<()> {
+    ide_host::ops::lsp::apply_workspace_edit(&state.host, window.label(), edit).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn prepare_workspace_edit(
+    window: Window,
+    state: State<'_, AppState>,
+    edit: WorkspaceEdit,
+) -> IdeResult<WorkspaceEdit> {
+    ide_host::ops::lsp::prepare_workspace_edit(&state.host, window.label(), edit).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn undo_workspace_edit(window: Window, state: State<'_, AppState>, id: u32) -> IdeResult<()> {
+    ide_host::ops::lsp::undo_workspace_edit(&state.host, window.label(), id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn redo_workspace_edit(window: Window, state: State<'_, AppState>, id: u32) -> IdeResult<()> {
+    ide_host::ops::lsp::redo_workspace_edit(&state.host, window.label(), id).await
 }
 
 /// Runs a server command (`workspace/executeCommand`), e.g. a completion item's
@@ -363,4 +427,31 @@ pub async fn lsp_execute_command(
     command: Command,
 ) -> IdeResult<()> {
     ide_host::ops::lsp::lsp_execute_command(&state.host, window.label(), doc, command).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn lsp_resolve_command(
+    window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    doc: DocId,
+    server: ServerId,
+    command: Command,
+    answers: Vec<FormAnswer>,
+) -> IdeResult<Option<CommandForm>> {
+    ide_host::ops::lsp::lsp_resolve_command(&state.host, window.label(), request, doc, server, command, answers).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn lsp_execute_code_action(
+    window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    doc: DocId,
+    action: CodeAction,
+    answers: Vec<FormAnswer>,
+) -> IdeResult<Vec<ide_core::IpcPath>> {
+    ide_host::ops::lsp::lsp_execute_code_action(&state.host, window.label(), request, doc, action, answers).await
 }

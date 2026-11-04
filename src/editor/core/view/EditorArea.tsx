@@ -13,6 +13,9 @@ import { setContext } from "@/platform/context";
 import { useEditorPrefs } from "@/platform/editorSettings";
 import { basename, dirname } from "@/platform/project";
 import {
+  EDITOR_TAB_MIME,
+  acceptsEditorDrop,
+  dropOnEditor,
   getFileDecoration,
   prepareMenuGroups,
   textEditorWrapperFor,
@@ -43,6 +46,7 @@ import { editorController, isTextInput, tabIcon, tabTitle, useTabs, type Virtual
 import { useDocMeta } from "../model/document";
 import { inputDirty } from "../model/customDocuments";
 import type { LayoutNode, SplitEdge, Tab } from "../model/tabs";
+import { dropZoneAt } from "@/ui/pointerDrag";
 import { disambiguateTitles } from "../model/tabTitles";
 import { TextEditorHost } from "./TextEditorHost";
 import { FindBar } from "./FindBar";
@@ -54,10 +58,46 @@ import { tx } from "@/platform/i18n";
 export function EditorAreaView() {
   const layout = useTabs((s) => s.layout);
   const empty = useTabs((s) => Object.values(s.panes).every((p) => p.tabs.length === 0));
-  if (empty && layout.kind === "pane") return <EmptyEditor />;
+  if (empty && layout.kind === "pane") return <EmptyEditorArea />;
   return (
     <div className={styles.area}>
       <LayoutView node={layout} />
+    </div>
+  );
+}
+
+/** The empty editor still accepts drops: reopening tabs, opening files, feature drags (agent tasks). */
+function EmptyEditorArea() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return registerDropTarget(el, {
+      accepts: (type) => type === EDITOR_TAB_MIME || type === FILES_DRAG || acceptsEditorDrop(type),
+      over: () => setOver(true),
+      leave: () => setOver(false),
+      drop: (data) => {
+        setOver(false);
+        const paneId = Object.keys(useTabs.getState().panes)[0];
+        if (!paneId) return;
+        if (data.type === FILES_DRAG) {
+          void editorController().openFilesIn(data.payload.split("\n").filter(Boolean), paneId, "center");
+          return;
+        }
+        if (data.type !== EDITOR_TAB_MIME) {
+          dropOnEditor(data);
+          return;
+        }
+        const p = parseTabPayload(data.payload);
+        if (p) editorController().moveTab(p.paneId, p.tabId, paneId, 0);
+      },
+    });
+  }, []);
+  return (
+    <div ref={ref} className={styles.area}>
+      <EmptyEditor />
+      {over && <div className={clsx(styles.dropZone, styles["drop-center"])} aria-hidden="true" />}
     </div>
   );
 }
@@ -78,28 +118,7 @@ function LayoutView({ node }: { node: LayoutNode }): ReactNode {
   );
 }
 
-/** MIME type of a dragged editor tab: `{"paneId","tabId"}` JSON. */
-export const EDITOR_TAB_MIME = "application/x-openidea-editor-tab";
-
 type DropZone = SplitEdge | "center";
-
-/** Where a tab dropped at (x, y) over an editor goes: an edge (new split) or the pane itself. */
-export function dropZoneAt(
-  x: number,
-  y: number,
-  rect: { left: number; top: number; width: number; height: number },
-): DropZone {
-  const fx = (x - rect.left) / Math.max(1, rect.width);
-  const fy = (y - rect.top) / Math.max(1, rect.height);
-  const edges: Array<[SplitEdge, number]> = [
-    ["left", fx],
-    ["right", 1 - fx],
-    ["top", fy],
-    ["bottom", 1 - fy],
-  ];
-  const [edge, dist] = edges.reduce((a, b) => (b[1] < a[1] ? b : a));
-  return dist < 0.25 ? edge : "center";
-}
 
 function parseTabPayload(raw: string): { paneId: string; tabId: string } | null {
   try {
@@ -232,14 +251,19 @@ function PaneView({ paneId }: { paneId: string }) {
     if (!el) return;
     const zoneAt = (x: number, y: number) => dropZoneAt(x, y, el.getBoundingClientRect());
     return registerDropTarget(el, {
-      accepts: (type) => type === EDITOR_TAB_MIME || type === FILES_DRAG,
-      over: (_, x, y) => setDropZone(zoneAt(x, y)),
+      accepts: (type) => type === EDITOR_TAB_MIME || type === FILES_DRAG || acceptsEditorDrop(type),
+      over: (data, x, y) =>
+        setDropZone(data.type === EDITOR_TAB_MIME || data.type === FILES_DRAG ? zoneAt(x, y) : "center"),
       leave: () => setDropZone(null),
       drop: (data, x, y) => {
         const zone = zoneAt(x, y);
         setDropZone(null);
         if (data.type === FILES_DRAG) {
           void ctrl.openFilesIn(data.payload.split("\n").filter(Boolean), paneId, zone);
+          return;
+        }
+        if (data.type !== EDITOR_TAB_MIME) {
+          dropOnEditor(data);
           return;
         }
         const p = parseTabPayload(data.payload);
@@ -257,6 +281,7 @@ function PaneView({ paneId }: { paneId: string }) {
   const onFocus = () => {
     setContext("editorFocus", true);
     if (!isActivePane) useTabs.setState((s) => ({ ...s, activePane: paneId }), true);
+    ctrl.publishContext();
   };
   const onBlur = (e: FocusEvent) => {
     if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setContext("editorFocus", false);
@@ -278,6 +303,7 @@ function PaneView({ paneId }: { paneId: string }) {
       onSelect={(id) => ctrl.activate(paneId, id)}
       onClose={(id) => void ctrl.closeTab(paneId, id)}
       onCloseOthers={(id) => void ctrl.closeOthers(paneId, id)}
+      closeOnShiftClick
       onDoubleClick={(id) => {
         // IDEA: a preview tab becomes a regular one; any other tab maximizes the editor.
         if (pane.tabs.find((t) => t.id === id)?.preview) ctrl.keepTab(paneId, id);
@@ -298,7 +324,7 @@ function PaneView({ paneId }: { paneId: string }) {
       trailing={trailing}
     />
   );
-  const actions = active ? <EditorTabActions paneId={paneId} tab={active} /> : undefined;
+  const actions = active && !hidden ? <EditorTabActions paneId={paneId} tab={active} /> : undefined;
 
   return (
     <section
@@ -330,7 +356,7 @@ function PaneView({ paneId }: { paneId: string }) {
         aria-labelledby={active ? `editor-${paneId}-tab-${active.id}` : undefined}
         ref={contentRef}
       >
-        {active ? <PaneContent paneId={paneId} tab={active} /> : <EmptyEditor />}
+        {active ? <PaneContent paneId={paneId} tab={active} tabsVisible={!hidden} /> : <EmptyEditor />}
         {dropZone && <div className={clsx(styles.dropZone, styles[`drop-${dropZone}`])} aria-hidden="true" />}
       </div>
     </section>
@@ -344,7 +370,7 @@ function virtualTooltip(input: EditorInput): string | null {
   return [d?.description, input.path].filter(Boolean).join("\n");
 }
 
-function PaneContent({ paneId, tab }: { paneId: string; tab: Tab }) {
+function PaneContent({ paneId, tab, tabsVisible }: { paneId: string; tab: Tab; tabsVisible: boolean }) {
   const kinds = useContributions((s) => s.editorKinds);
   const crumbs = !useDistractionFree((s) => s.active);
   const wrappers = useTextEditorWrappers((s) => s.wrappers);
@@ -356,6 +382,7 @@ function PaneContent({ paneId, tab }: { paneId: string; tab: Tab }) {
       <>
         {virtual ? (
           <VirtualBanner
+            path={tab.input.path!}
             decompiled={virtual.decompiled}
             generated={!!virtual.generated}
             description={virtual.description}
@@ -366,7 +393,12 @@ function PaneContent({ paneId, tab }: { paneId: string; tab: Tab }) {
         <FindBar paneId={paneId} />
         {crumbs && <CodeBreadcrumbs path={tab.input.path!} tabId={tab.id} position="top" />}
         {wrapper ? (
-          <wrapper.component key={tab.id} path={tab.input.path} tabId={tab.id}>
+          <wrapper.component
+            key={tab.id}
+            path={tab.input.path}
+            tabId={tab.id}
+            actionsInTabs={tabsVisible && !!wrapper.tabActions}
+          >
             {host}
           </wrapper.component>
         ) : (
@@ -389,10 +421,16 @@ function PaneContent({ paneId, tab }: { paneId: string; tab: Tab }) {
 /** Actions at the right end of the tab row (IDEA: split, tab actions ⋮). */
 function EditorTabActions({ paneId, tab }: { paneId: string; tab: Tab }) {
   const ctrl = editorController();
+  const wrappers = useTextEditorWrappers((s) => s.wrappers);
+  const LayoutActions =
+    tab.input.kind === "file" && tab.input.path
+      ? textEditorWrapperFor(wrappers, tab.input.path)?.tabActions
+      : undefined;
   const [open, setOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement>(null);
   return (
     <div className={styles.tabActions}>
+      {LayoutActions && <LayoutActions path={tab.input.path!} tabId={tab.id} />}
       <IconButton
         icon="split"
         title="Split Right"

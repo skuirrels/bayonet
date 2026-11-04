@@ -2,7 +2,7 @@
  * The base extension set of every text editor, with compartments for the
  * parts that change at runtime (language, settings, contributions).
  */
-import { Compartment, EditorState, Prec, type Extension, type Range } from "@codemirror/state";
+import { Compartment, EditorState, Facet, Prec, type Extension, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -28,7 +28,7 @@ import type { EditorConfigProps } from "@/bindings";
 import type { EditorSettings } from "@/platform/ipc";
 import { editorPrefs, lineCommentStyleFor, type EditorExtras } from "@/platform/editorSettings";
 import { BUNDLED_MONO_FAMILY, monoFontFamily } from "@/platform/fonts";
-import { editorContributions, formatIndent, type EditorDocContext } from "@/editor/api";
+import { editorContributions, HEAVY_LIMIT, type EditorDocContext } from "@/editor/api";
 import { distractionFreeWidth, isDistractionFree } from "@/workbench/distractionFree";
 import { openideaHighlightStyle } from "./highlight";
 import { openideaTheme } from "./theme";
@@ -51,6 +51,7 @@ import { editorBaseKeymap } from "./baseKeymap";
 import { occurrenceSearch } from "./editing";
 import { gutterLineDrag } from "./gutterDrag";
 import { overwriteField } from "./overwrite";
+import { clipboardDocumentPath, clipboardFilesExtension } from "./clipboard";
 import { clipboardHistoryExtension } from "../clipboardHistory";
 import type { LanguageInfo } from "../backend";
 import { tx } from "@/platform/i18n";
@@ -77,8 +78,7 @@ export function prefsOf(settings: EditorSettings | undefined): EditorExtras {
   return editorPrefs({ editor: settings });
 }
 
-/** Documents above this size (UTF-16 units) skip per-line decorations. */
-export const HEAVY_LIMIT = 8_000_000;
+export { HEAVY_LIMIT } from "@/editor/api";
 
 export interface EffectiveIndent {
   tabSize: number;
@@ -156,13 +156,25 @@ export function hardWrapAt(settings: EditorSettings | undefined, info: LanguageI
   return (info && style.languages[info.id]?.hardWrapAt) || style.hardWrapAt;
 }
 
-export function indentExtension(indent: EffectiveIndent, style?: EffectiveIndent): Extension {
+/** `format`: the indent Reformat Code asks for (see `formatIndentFacet`); `null` keeps the editor's. */
+export function indentExtension(indent: EffectiveIndent, format: EffectiveIndent | null = null): Extension {
   return [
-    formatIndent.of(style ?? indent),
+    formatIndentFacet.of(format),
     EditorState.tabSize.of(indent.tabSize),
     indentUnit.of(indent.insertSpaces ? " ".repeat(Math.max(1, indent.indentSize ?? indent.tabSize)) : "\t"),
   ];
 }
+
+/**
+ * Indentation explicit reformat requests use: the Code Style without the file's
+ * detected indents (detection affects editing, reformatting uses the configured
+ * style, as in IDEA). Set only when the language has an explicit Tabs and Indents
+ * override — unset, formatting keeps the editor's indent, the status bar choice
+ * included.
+ */
+export const formatIndentFacet = Facet.define<EffectiveIndent | null>({
+  combine: (values) => [values.find((v) => v !== null) ?? null],
+});
 
 export function fontExtension(settings: EditorSettings | undefined): Extension {
   const vars: string[] = [];
@@ -300,8 +312,8 @@ export interface SetupOptions {
   docLength: number;
   /** Effective indentation of the document (detected / overridden); computed when absent. */
   indent?: EffectiveIndent;
-  /** Code Style indentation for Reformat Code (`indent` when absent). */
-  formatIndent?: EffectiveIndent;
+  /** Indentation for Reformat Code (`formatIndentFacet`); the editor's when absent. */
+  formatIndent?: EffectiveIndent | null;
   /** Soft wraps toggled for this file (View › Active Editor › Soft-Wrap). */
   wrapOverride?: boolean | null;
   /** Extra extensions owned by the slot (update listeners, focus handlers). */
@@ -341,6 +353,8 @@ export function baseExtensions(o: SetupOptions): Extension {
     overwriteField,
     gutterLineDrag,
     clipboardHistoryExtension,
+    clipboardDocumentPath.of(o.ctx.path),
+    clipboardFilesExtension,
     indentOnInput(),
     syntaxHighlighting(openideaHighlightStyle),
     syntaxHighlightField,

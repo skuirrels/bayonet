@@ -10,6 +10,34 @@ changes can keep flowing in.
   (v0.1.29), with full history.
 - Merge `upstream/main` regularly (spec risk K6).
 
+## Upstream merges
+
+- **2026-11-04, `48e23c01` (v0.1.35 and 309 commits).** Conflicts were mostly two
+  sides adding to the same list (CMake beside .NET, Ruby beside the .NET SDK kind,
+  Docker beside `ops::dotnet`, plugin `pinned` beside the pull-diagnostics flags).
+  Decisions worth knowing for the next merge:
+  - **Upstream's .NET run configurations are removed** (`245fe3cd`, #686, part of
+    upstream issue #615). They registered the same `dotnet` type id as ours, and also
+    `dotnet-test`, with their own project detection (`crates/ide-run/src/detect/dotnet.rs`,
+    `crates/ide-run/src/dotnet.rs`), a `run_dotnet_resolve` command, a "Build .NET
+    project" before-launch task and `src/features/run/dotnetTypes.ts`. Ours stays the
+    only one: detection in `crates/ide-run/src/detect.rs`, the type in
+    `src/features/dotnet/runType.ts`, debugging through `crates/ide-dap/src/dotnet.rs`.
+    When upstream changes those files again, the merge reports modify/delete
+    conflicts: keep them deleted, and port anything useful into ours instead. Their
+    `file-csharp` run icon, the `netcoredbg` missing-adapter notice and the
+    netcoredbg entry in the debugger list are kept.
+  - **Reformat indent.** Upstream now sends the Code Style indent only when the
+    language has a Tabs and Indents override (`fcfe2647`). DotnetIDEA keeps sending it
+    always (`DocModel.formatIndent`), as recorded under Roslyn features, but uses
+    upstream's `formatIndentFacet` and the indent re-detection after Reformat Code
+    (`c599265c`).
+  - **Virtual documents.** Roslyn source-generated files are a branch beside upstream's
+    Kotlin `decompile` in `virtual_document`, and go through upstream's
+    `store_virtual`, which skips the cache for them.
+  - App icons, product name, identifier and version in `tauri.conf.json`, and the
+    README stay ours.
+
 ## What was renamed
 
 User-visible names only:

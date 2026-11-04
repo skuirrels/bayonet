@@ -4,7 +4,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { activateFeatures } from "@/features";
 import { useContributions } from "@/workbench/contributions";
-import { Icon, ICON_NAMES, SymbolBadge, fileIconName, hasIcon, iconMarkup, iconMarkupOrFallback } from "./icons";
+import {
+  Icon,
+  ICON_NAMES,
+  SymbolBadge,
+  fileIconName,
+  hasIcon,
+  iconMarkup,
+  iconMarkupOrFallback,
+  registerExternalIcons,
+  setFileIconTheme,
+} from "./icons";
 
 describe("tool window icons", () => {
   let dispose: () => void = () => {};
@@ -46,9 +56,33 @@ describe("Icon", () => {
 
   it("falls back like <Icon> for unknown names, without React", () => {
     const { container } = render(<Icon name="symbol-macro" />);
-    expect(iconMarkupOrFallback("symbol-macro")).toBe(container.innerHTML);
-    const withoutIds = (html: string) => html.replace(/\bm\d+-/g, "");
+    const withoutData = (html: string) => html.replace(/ data-icon(?:-[a-z]+)?="[^"]*"/g, "");
+    expect(withoutData(iconMarkupOrFallback("symbol-macro"))).toBe(container.innerHTML);
+    const withoutIds = (html: string) => withoutData(html).replace(/\bm\d+-/g, "");
     expect(withoutIds(iconMarkupOrFallback("no-such-icon"))).toBe(withoutIds(iconMarkup("file")!));
+  });
+
+  it("keeps the requested name on markup so a theme change can repaint it", () => {
+    expect(iconMarkupOrFallback("no-such-icon", 14, "x")).toContain(
+      'data-icon="no-such-icon" data-icon-size="14" data-icon-class="x"',
+    );
+    expect(iconMarkupOrFallback("symbol-macro")).toContain('data-icon="symbol-macro"');
+  });
+
+  it("repaints markup outside React when the icon theme changes", () => {
+    const unregister = registerExternalIcons([["ext:t/arrow", '<svg viewBox="0 0 16 16"><path d="M1 1h9z"/></svg>']]);
+    document.body.innerHTML = `<div>${iconMarkupOrFallback("chevron-right", 14)}</div>`;
+    setFileIconTheme({
+      file: () => null,
+      folder: () => null,
+      icon: (n) => (n === "chevron-right" ? "ext:t/arrow" : null),
+    });
+    expect(document.body.innerHTML).toContain("M1 1h9z");
+    expect(document.body.querySelector("[data-icon]")?.getAttribute("data-icon")).toBe("chevron-right");
+    setFileIconTheme(null);
+    expect(document.body.innerHTML).not.toContain("M1 1h9z");
+    unregister();
+    document.body.innerHTML = "";
   });
 
   it("renders monochrome icons with currentColor and coloured ones with both theme variants", () => {
@@ -62,6 +96,21 @@ describe("Icon", () => {
     expect(mono!.innerHTML).toContain("currentColor");
     expect(mono!.innerHTML).not.toMatch(/#6C707E/i);
     expect(colour!.querySelectorAll("g")).toHaveLength(2);
+  });
+
+  it("preserves the dedicated read/write palettes in both themes", () => {
+    for (const [name, light, dark] of [
+      ["show-read-access", "#369650", "#57965C"],
+      ["show-write-access", "#DB3B4B", "#DB5C5C"],
+    ] as const) {
+      const { container, unmount } = render(<Icon name={name} size={16} />);
+      const svg = container.querySelector("svg")!;
+      expect(svg.getAttribute("width")).toBe("16");
+      expect(svg.querySelectorAll("g")).toHaveLength(2);
+      expect(svg.innerHTML).toContain(light);
+      expect(svg.innerHTML).toContain(dark);
+      unmount();
+    }
   });
 
   it("uses the 20px variant for large tool window icons", () => {
@@ -112,7 +161,7 @@ describe("fileIconName", () => {
     ["yarn.lock", "file-lock"],
     ["pnpm-lock.yaml", "file-lock"],
     ["Cargo.toml", "file-cargo"],
-    ["Cargo.lock", "file-lock"],
+    ["Cargo.lock", "file-cargo-lock"],
     ["poetry.lock", "file-lock"],
     ["Gemfile", "file-ruby"],
     ["Gemfile.lock", "file-lock"],
@@ -157,6 +206,9 @@ describe("fileIconName", () => {
     ["main.dart", "file-dart"],
     ["App.vue", "file-vue"],
     ["App.svelte", "file-svelte"],
+    ["index.jsp", "file-jsp"],
+    ["footer.jspf", "file-jsp"],
+    ["card.tag", "file-jsp"],
     ["styles.scss", "file-scss"],
     ["styles.sass", "file-sass"],
     ["styles.less", "file-less"],
@@ -174,7 +226,7 @@ describe("fileIconName", () => {
     ["config.hcl", "file-hcl"],
     ["Jenkinsfile", "file-jenkins"],
     ["BUILD.bazel", "file-bazel"],
-    [".gitignore", "file-git"],
+    [".gitignore", "file-ignored"],
     [".editorconfig", "file-config"],
     [".env", "file-dotenv"],
     [".env.example", "file-dotenv"],

@@ -10,7 +10,7 @@ vi.mock("@/platform/virtualDocs", async (importOriginal) => {
   return {
     ...actual,
     virtualDocument: vi.fn(async (uri: string): Promise<VirtualDocument> => {
-      if (uri !== JDT) throw new Error(`no contents for ${uri}`);
+      if (uri !== JDT && uri !== "file:///p/target/classes/Lib.class") throw new Error(`no contents for ${uri}`);
       return {
         uri,
         text: TEXT,
@@ -29,6 +29,10 @@ const { createMemoryBackend } = await import("./backend");
 const { initialTabsState } = await import("./model/tabs");
 const { serializeSession } = await import("./model/session");
 const { useDocMeta } = await import("./model/document");
+const { registerMenuGroup } = await import("@/workbench/contributions");
+const { registerActions } = await import("@/platform/actions");
+const { commands } = await import("@/platform/ipc");
+const { resolveMenuItems } = await import("@/ui");
 
 let ctrl: InstanceType<typeof EditorController> | null = null;
 
@@ -65,6 +69,24 @@ describe("virtual editor input", () => {
     expect(input.data).toEqual({ title: "Names.g.cs", description: "Gen.Names", decompiled: false, generated: true });
   });
 
+  it.each([
+    ["/m2/lib.jar!/org/example/Lib.class", JDT, "virtual"],
+    ["/p/target/classes/Lib.class", "/p/Lib.java", "file"],
+    ["/p/build/classes/Lib.class", "file:///p/target/classes/Lib.class", "virtual"],
+  ])("routes %s before choosing a binary viewer", async (path, target, kind) => {
+    const resolve = vi.spyOn(commands, "lspResolveClassFile").mockResolvedValue({ status: "ok", data: target });
+    ctrl = new EditorController(createMemoryBackend({ [target]: TEXT }));
+    ctrl.start();
+    try {
+      await ctrl.openFile(path!, { focus: false });
+      expect(resolve).toHaveBeenCalledWith(path);
+      expect(activeTab().input).toMatchObject({ path: target, kind });
+      expect(ctrl.slotFor(activeTab().id)!.model.ctx().readOnly).toBe(kind === "virtual");
+    } finally {
+      resolve.mockRestore();
+    }
+  });
+
   it("opens a URI read-only at the target and keeps it out of the saved session", async () => {
     ctrl = new EditorController(createMemoryBackend({ "/p/App.java": "class App {}\n", [JDT]: TEXT }));
     ctrl.start();
@@ -98,6 +120,25 @@ describe("virtual editor input", () => {
         .tabMenu(useTabs.getState().activePane, activeTab())
         .some((i) => "label" in i && i.label === "Reveal in Project"),
     ).toBe(false);
+
+    // Pathless tabs still get contributed groups, with the tab's input in the context.
+    const disposeAction = registerActions([{ id: "test.tab", title: "Test Item", run: () => undefined }]);
+    const disposeGroup = registerMenuGroup({
+      id: "test.tab",
+      menus: ["editorTab"],
+      order: 50,
+      items: (_menu, { paths, input }) =>
+        paths.length || input?.kind !== "virtual"
+          ? []
+          : [{ kind: "action", action: "test.tab", label: "Test Item", arg: input.key }],
+    });
+    try {
+      const items = resolveMenuItems(ctrl.tabMenu(useTabs.getState().activePane, activeTab()));
+      expect(items.some((i) => "label" in i && i.label === "Test Item")).toBe(true);
+    } finally {
+      disposeGroup();
+      disposeAction();
+    }
   });
 
   it("does not open a tab when the server has no contents", async () => {

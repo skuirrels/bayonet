@@ -13,6 +13,8 @@ const KIND_LABELS: Record<string, string> = {
   go: "Go",
   python: "Python",
   pytest: "pytest",
+  phpunit: "PHPUnit",
+  composer: "Composer",
   make: "Make",
   cmake: "CMake",
   just: "Just",
@@ -67,6 +69,9 @@ export function configIcon(config: Pick<RunConfig, "kind" | "isTest">): string {
       return "file-gradle";
     case "maven":
       return "file-maven";
+    case "dotnet":
+    case "dotnet-test":
+      return "file-csharp";
     case "go":
       return "file-go";
     case "node":
@@ -108,6 +113,9 @@ export function configIcon(config: Pick<RunConfig, "kind" | "isTest">): string {
     case "python":
     case "pytest":
       return "file-python";
+    case "phpunit":
+    case "composer":
+      return "file-php";
     default:
       return useRunConfigTypes.getState().types.get(config.kind)?.icon ?? "terminal";
   }

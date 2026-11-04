@@ -9,7 +9,10 @@
 //! * server → client notification `event` `{ window, event }` (an `IdeEvent`
 //!   for that window, or every window when `window` is null);
 //! * server → client notification `channel` `{ id, data }`: one value of a
-//!   streaming argument.
+//!   streaming argument;
+//! * server → client notification `plugin` `{ window, event }` and request
+//!   `plugin_secret` `{ plugin, name }` → `string | null`: code plugins of the
+//!   remote project (`plugins::remote_host`).
 
 use crate::Host;
 use crate::ops::{self, Emit};
@@ -24,7 +27,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,6 +141,15 @@ impl Dispatcher {
     /// terminals, runs and VCS status.
     pub fn standard() -> Self {
         let mut d = Self::default();
+        d.add("project_trust_status", |c| async move { c.host.trust.status(&c.arg::<PathBuf>("path")?) })
+            .add("project_trust_list", |c| async move { c.host.trust.decisions() })
+            .add("project_trust_set", |c| async move {
+                c.host.set_project_trust(&c.arg::<PathBuf>("path")?, c.arg("trusted")?, c.arg("folder")?).await
+            })
+            .add("project_trust_remove_location", |c| async move {
+                c.host.trust.remove_location(&c.arg::<PathBuf>("path")?)?;
+                c.host.refresh_project_trust().await
+            });
         d.add("open_project", |c| async move {
             let path: PathBuf = c.arg("path")?;
             let project = ops::project::open(&c.host, &c.window, &path).await?;
@@ -169,7 +181,8 @@ impl Dispatcher {
             Ok(())
         })
         .add("cancel_task", |c| async move { Ok(ide_core::task::cancel(c.arg::<TaskId>("id")?)) })
-        .add("fs_read_dir", |c| async move { ops::fs::read_dir(&c.host, &c.window, c.arg("path")?) })
+        .add("fs_read_dir", |c| async move { ops::fs::read_dir(&c.host, &c.window, c.arg("path")?).await })
+        .add("fs_entry_kind", |c| async move { ops::fs::entry_kind(&c.host, c.arg("path")?).await })
         .add("fs_create_file", |c| async move { ops::fs::create_file(&c.host, &c.window, c.arg("path")?) })
         .add("fs_create_file_bytes", |c| async move {
             ops::fs::create_file_bytes(&c.host, c.arg("path")?, c.arg("data")?).await
@@ -181,14 +194,42 @@ impl Dispatcher {
         })
         .add("fs_delete", |c| async move { ops::fs::delete(&c.host, &c.window, c.arg("path")?).await })
         .add("fs_copy", |c| async move { ops::fs::copy(&c.host, c.arg("from")?, c.arg("to")?).await })
+        .add("fs_copy_merge", |c| async move {
+            ops::fs::copy_merge(
+                &c.host,
+                &c.window,
+                c.arg("sourceRoot")?,
+                c.arg("destinationRoot")?,
+                c.arg("path")?,
+                c.arg("overwrite")?,
+            )
+            .await
+        })
+        .add("fs_compare_directories", |c| async move {
+            ops::fs::compare_directories(
+                &c.host,
+                &c.window,
+                c.arg("left")?,
+                c.arg("right")?,
+                c.arg("request")?,
+                c.sender("onProgress")?,
+            )
+            .await
+        })
         .add("fs_read_text", |c| async move { ops::fs::read_text(&c.host, &c.window, c.arg("path")?).await })
         .add("doc_open", |c| async move { ops::doc::open(&c.host, &c.window, c.arg("path")?).await })
-        .add("doc_close", |c| async move { ops::doc::close(&c.host, &c.window, c.arg("doc")?) })
+        .add("doc_close", |c| async move {
+            ops::doc::blocking(move || ops::doc::close(&c.host, &c.window, c.arg("doc")?)).await
+        })
         .add("doc_edit", |c| async move {
-            ops::doc::edit(&c.host, &c.window, c.arg("doc")?, c.arg("baseVersion")?, c.arg("changes")?)
+            ops::doc::blocking(move || {
+                ops::doc::edit(&c.host, &c.window, c.arg("doc")?, c.arg("baseVersion")?, c.arg("changes")?)
+            })
+            .await
         })
         .add("doc_save", |c| async move { ops::doc::save(&c.host, &c.window, c.arg("doc")?).await })
         .add("doc_save_all", |c| async move { ops::doc::save_all(&c.host, &c.window).await })
+        .add("doc_sync_from_disk", |c| async move { ops::doc::sync_from_disk(&c.host, &c.window).await })
         .add("doc_snapshot", |c| async move { ops::doc::snapshot(&c.host, &c.window, c.arg("doc")?).await })
         .add("search_start", |c| async move {
             let on_event = c.channel("onEvent")?;
@@ -197,6 +238,9 @@ impl Dispatcher {
         .add("term_spawn", |c| async move {
             let on_output = c.channel("onOutput")?;
             ops::term::spawn(&c.host, &c.window, c.arg("options")?, on_output)
+        })
+        .add("term_store_image", |c| async move {
+            ops::term::store_image(&c.host, c.arg("id")?, c.arg("data")?, c.arg("mime")?).await
         })
         .add("term_write", |c| async move { ops::term::write(&c.host, c.arg("id")?, &c.arg::<String>("data")?) })
         .add("term_resize", |c| async move { ops::term::resize(&c.host, c.arg("id")?, c.arg("cols")?, c.arg("rows")?) })
@@ -213,6 +257,8 @@ impl Dispatcher {
                 &c.arg::<Option<Vec<String>>>("removedDetectedIds")?.unwrap_or_default(),
             )
         })
+        .add("run_without_derived", |c| async move { ops::run::without_derived(&c.host, &c.window, c.arg("configs")?) })
+        .add("run_apply_settings", |c| async move { ops::run::apply_settings(&c.host, &c.window, c.arg("configs")?) })
         .add("run_system_env", |_| async move { Ok(ide_run::system_env()) })
         .add("run_start", |c| async move {
             let on_output = c.channel("onOutput")?;
@@ -290,6 +336,7 @@ impl Handler for ServerHandler {
                 let Some(handler) = self.dispatcher.handlers.get(call.cmd.as_str()).cloned() else {
                     return Err((codes::METHOD_NOT_FOUND, format!("command {} is not available remotely", call.cmd)));
                 };
+                self.host.authorize_command(&call.window, &call.cmd).map_err(error_reply)?;
                 let c = Call { host: self.host.clone(), window: call.window, args: call.args, peer: self.peer.clone() };
                 // Requests run on blocking-capable threads: wait for the command here.
                 self.host.runtime.block_on(handler(c)).map_err(error_reply)

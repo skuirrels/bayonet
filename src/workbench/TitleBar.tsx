@@ -24,8 +24,10 @@ import { WindowControls } from "./WindowControls";
 import { usePlatform } from "@/platform/platformInfo";
 import { projectInitials } from "./projectColor";
 import { keymapItems, themeItems, VIEW_MODE_ITEMS } from "./quickSwitch";
-import { currentThemeId, useThemeOverride } from "./theme";
+import { useContributedThemes } from "@/platform/themes";
+import { currentThemeChoice, useThemeOverride } from "./theme";
 import styles from "./TitleBar.module.css";
+import { useNativeTitlebar } from "./nativeTitlebar";
 
 export function orderTitleItems(items: Iterable<TitleItemContribution>) {
   const all = [...items];
@@ -201,8 +203,9 @@ function GearButton({ customize }: { customize: MenuItem[] }) {
   useActions((s) => s.actions);
   const preset = useKeymap((s) => s.preset);
   const customs = settings?.customKeymaps;
+  useContributedThemes((s) => s.themes);
   const items = gearMenuItems(
-    currentThemeId(),
+    currentThemeChoice(),
     typeof settings?.keymap === "string" ? settings.keymap : preset,
     customs && typeof customs === "object" ? Object.keys(customs) : [],
     customize,
@@ -277,12 +280,14 @@ export function TitleBar({
   const frameless = usePlatform((s) => s.framelessTitleBar);
   const { map, shown, menu } = useToolbar();
   const [menuExpanded, setMenuExpanded] = useState(false);
+  const [bar, setBar] = useState<HTMLElement | null>(null);
+  useNativeTitlebar(bar);
   const className = clsx(styles.bar, overlay && styles.overlay, frameless && styles.frameless);
   // Distraction Free Mode: the window frame only. Where the title bar carries the
   // main menu (Windows, Linux) it stays, or nothing would lead back out of the mode.
   if (bare)
     return (
-      <header className={className} data-tauri-drag-region data-titlebar="bare">
+      <header ref={setBar} className={className} data-tauri-drag-region data-titlebar="bare">
         {frameless && (
           <>
             <MainMenu />
@@ -296,6 +301,7 @@ export function TitleBar({
   const toolbar = !minimal && !lightEdit;
   return (
     <header
+      ref={setBar}
       className={clsx(className, minimal && styles.minimal, dialog && styles.dialogBar)}
       data-tauri-drag-region
       onContextMenu={(e) => {
@@ -314,10 +320,12 @@ export function TitleBar({
       <div className={styles.drag} data-tauri-drag-region />
       {!minimal && (
         <>
-          {toolbar && shown.right.map(entry)}
-          <div className={styles.tools}>
-            <GearButton customize={menu} />
-          </div>
+          {toolbar && !menuExpanded && shown.right.map(entry)}
+          {!menuExpanded && (
+            <div className={styles.tools}>
+              <GearButton customize={menu} />
+            </div>
+          )}
         </>
       )}
       {frameless && <WindowControls dialog={dialog} />}

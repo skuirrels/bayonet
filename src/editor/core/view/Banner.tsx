@@ -3,6 +3,7 @@ import { Icon, T } from "@/ui";
 import { useEditorBanners, type EditorBannerContribution } from "@/workbench/contributions";
 import { useDocMeta } from "../model/document";
 import styles from "./EditorArea.module.css";
+import { classFileBreakpointReason } from "@/platform/classFiles";
 import { tx } from "@/platform/i18n";
 
 const TEXT = {
@@ -33,20 +34,26 @@ export function VirtualBanner({
   decompiled,
   generated = false,
   description,
+  path,
 }: {
   decompiled: boolean;
   generated?: boolean;
   description: string | null;
+  path: string;
 }) {
   const text = generated
     ? tx("Generated source (read-only); it changes when the code it is generated from does.")
     : decompiled
       ? tx("Decompiled .class file: sources are not available.")
       : tx("Library source (read-only).");
+  const reason = generated ? null : classFileBreakpointReason(path);
   return (
     <div className={`${styles.banner} ${styles.libraryBanner}`} role="status">
       <Icon name={decompiled ? "info" : "lock"} size={14} className={styles.bannerIcon} />
-      <span className={styles.bannerText}>{text}</span>
+      <span className={styles.virtualBannerText}>
+        {text}
+        {reason && ` ${tx(reason)}`}
+      </span>
       {description && (
         <span className={styles.bannerDetail} title={description}>
           {description}

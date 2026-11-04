@@ -15,6 +15,9 @@ import {
   updateBreakpoint,
   useBreakpoints,
 } from "../breakpoints/store";
+import { classFileBreakpointReason } from "@/platform/classFiles";
+import { tx } from "@/platform/i18n";
+import { showStatusInfo } from "@/workbench/contributions";
 import { canPlaceBreakpoint } from "../breakpoints/languages";
 import {
   removeSpecial,
@@ -32,6 +35,7 @@ import styles from "./editor.module.css";
 export type BreakpointLook =
   | "normal"
   | "disabled"
+  | "muted"
   | "unverified"
   | "verified"
   | "conditional"
@@ -44,7 +48,9 @@ export type BreakpointLook =
   | "fieldVerified";
 
 export function lookOf(b: BreakpointEntry, status: BreakpointStatus | undefined, muted: boolean, running: boolean) {
-  if (!b.enabled || muted) return "disabled";
+  if (!b.enabled) return "disabled";
+  // Mute Breakpoints: IDEA's grey dot, so it isn't taken for a disabled breakpoint.
+  if (muted) return "muted";
   if (running && status && !status.verified) return "unverified";
   if (!suspends(b)) return "log";
   if (isConditional(b)) return "conditional";
@@ -58,7 +64,8 @@ export function specialLook(
   muted: boolean,
   running: boolean,
 ): BreakpointLook {
-  if (!b.enabled || muted) return b.kind === "method" ? "methodDisabled" : "fieldDisabled";
+  if (!b.enabled) return b.kind === "method" ? "methodDisabled" : "fieldDisabled";
+  if (muted) return "muted";
   if (running && status && !status.verified) return "unverified";
   if (running && status?.verified) return b.kind === "method" ? "methodVerified" : "fieldVerified";
   return b.kind;
@@ -78,7 +85,7 @@ class BreakpointMarker extends GutterMarker {
 }
 
 const bpLine = Decoration.line({ class: styles.bpLine });
-const DISABLED_LOOKS = new Set<BreakpointLook>(["disabled", "methodDisabled", "fieldDisabled"]);
+const DISABLED_LOOKS = new Set<BreakpointLook>(["disabled", "muted", "methodDisabled", "fieldDisabled"]);
 
 const setMarkers = StateEffect.define<RangeSet<BreakpointMarker>>();
 
@@ -129,6 +136,31 @@ function inBreakpointArea(e: MouseEvent): boolean {
 }
 
 export function breakpointGutter(ctx: EditorDocContext): Extension {
+  const reason = classFileBreakpointReason(ctx.path);
+  if (reason) {
+    const message = tx(reason);
+    return ViewPlugin.fromClass(
+      class {
+        constructor(readonly view: EditorView) {
+          view.dom.addEventListener("mouseover", this.hover);
+          view.dom.addEventListener("mousedown", this.down, true);
+        }
+        hover = (e: MouseEvent) => {
+          if (inBreakpointArea(e)) (e.target as HTMLElement).closest(".cm-gutters")?.setAttribute("title", message);
+        };
+        down = (e: MouseEvent) => {
+          if (!inBreakpointArea(e)) return;
+          showStatusInfo(message);
+        };
+        destroy() {
+          this.view.dom.removeEventListener("mouseover", this.hover);
+          this.view.dom.removeEventListener("mousedown", this.down, true);
+          const gutters = this.view.dom.querySelector(".cm-gutters");
+          if (gutters?.getAttribute("title") === message) gutters.removeAttribute("title");
+        }
+      },
+    );
+  }
   const path = ctx.path;
   const field = StateField.define<RangeSet<BreakpointMarker>>({
     create: (state) => buildMarkers(state, path),

@@ -447,7 +447,7 @@ fn build_tools_get_the_console_encoding_for_every_jvm() {
 
 #[test]
 fn python_scripts_import_sibling_packages_and_preserve_env_file_paths() {
-    for (kind, source_dir) in [("python", ""), ("pytest", "src")] {
+    for (kind, source_dir) in [("python", ""), ("pytest", "src"), ("django-test", "")] {
         let h = harness();
         let root = h.root.path();
         let source = root.join(source_dir);
@@ -465,6 +465,11 @@ fn python_scripts_import_sibling_packages_and_preserve_env_file_paths() {
         let mut config = cfg("python-imports", "python3", &["app/main.py"]);
         config.kind = kind.into();
         config.extras.env_files = vec![".env".into()];
+        // Unbuffered, so output printed by a test stays next to its result line.
+        assert_eq!(
+            ide_run::resolved_env(root, &config).unwrap().get("PYTHONUNBUFFERED").map(String::as_str),
+            Some("1")
+        );
         let options = StartOptions { python_paths: vec![root.to_owned(), source], ..Default::default() };
         let chunks: Chunks = Arc::default();
         let sink = chunks.clone();
@@ -472,6 +477,26 @@ fn python_scripts_import_sibling_packages_and_preserve_env_file_paths() {
         assert_eq!(wait_exit(&h, info.id, Duration::from_secs(10)), Some(0), "{}", text(&chunks, stderr));
         assert_eq!(text(&chunks, stdout), "import OK vendor OK\n");
     }
+}
+
+#[test]
+fn revoking_one_project_stops_only_its_runs() {
+    let h = harness();
+    let other = tempfile::tempdir().unwrap();
+    let (mine, _) = start(&h, &cfg("mine", "/bin/sh", &["-c", "sleep 30"]));
+    let theirs =
+        h.pm.start(
+            other.path(),
+            &cfg("theirs", "/bin/sh", &["-c", "sleep 30"]),
+            &StartOptions::default(),
+            h.sink.clone(),
+            Box::new(|_| {}),
+        )
+        .unwrap();
+    h.pm.kill_project(h.root.path());
+    wait_exit(&h, mine, Duration::from_secs(5));
+    assert!(h.pm.list().iter().any(|run| run.id == theirs.id && run.running));
+    h.pm.stop(theirs.id).unwrap();
 }
 
 #[test]

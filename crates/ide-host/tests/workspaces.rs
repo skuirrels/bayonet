@@ -22,6 +22,7 @@ async fn linked_projects_share_navigation_but_keep_files_repositories_and_run_di
     let host = Host::new(HostConfig {
         config_dir: base.join("config"),
         data_dir: base.join("data"),
+        local_data_dir: base.join("data"),
         languages: Arc::new(ide_language::LanguageRegistry::load(None).unwrap()),
         syntax: Arc::default(),
         sink_for: Box::new(|_| Arc::new(NullSink)),
@@ -30,6 +31,7 @@ async fn linked_projects_share_navigation_but_keep_files_repositories_and_run_di
         project_environment: false,
     });
     std::fs::write(root.join("internal-needle.txt"), "needle").unwrap();
+    host.trust.decide(&root, true, false).unwrap();
     let project = host.open_project("main", &root).unwrap();
     assert_eq!(ops::project::info(&project).name, "Full stack");
     assert_eq!(ops::project::attach_workspace(&host, "main", &roots[1]).unwrap().as_ref(), root.as_path());
