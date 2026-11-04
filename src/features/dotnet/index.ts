@@ -24,6 +24,7 @@ import { registerEditorContribution } from "@/editor/api";
 import { loadInstalled, resetNuget } from "./nuget/store";
 import { testGutter } from "./tests/gutter";
 import { msbuildNavigation } from "./msbuild/navigation";
+import { traceHeat } from "./diagnostics/heatGutter";
 import { SolutionDialogs } from "./projects/SolutionDialogs";
 import {
   addExistingProject,
@@ -208,6 +209,15 @@ export function activate(): () => void {
     id: "dotnet.msbuild",
     order: 57,
     extensions: (ctx) => [msbuildNavigation(ctx), msbuildCompletion(ctx)],
+  });
+  const disposeTraceHeat = registerEditorContribution({
+    id: "dotnet.traceHeat",
+    order: 66,
+    extensions: (ctx) =>
+      traceHeat(ctx, (frame) => {
+        activateToolWindow(DIAGNOSTICS_WINDOW);
+        void diagnostics().then((m) => m.revealTraceFrame(frame));
+      }),
   });
   const disposeDialogs = registerOverlay({
     id: "dotnet.solutionDialogs",
@@ -537,6 +547,7 @@ export function activate(): () => void {
     disposeActions();
     disposeGutter();
     disposeMsbuild();
+    disposeTraceHeat();
     disposeDialogs();
     disposeNewMenu();
     disposeProjectMenu();

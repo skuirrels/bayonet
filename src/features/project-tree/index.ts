@@ -1,6 +1,7 @@
 /** Project view: the "project" tool window, its file operations and actions. */
 import { onEditorEvent, openEditorPaths } from "@/editor/api";
 import { onIdeEvent } from "@/platform/ipc";
+import { useBuildModel } from "@/platform/buildModel";
 import { validateProjectStructure, type RootFolder } from "@/platform/languageSettings";
 import { useProject } from "@/platform/project";
 import { initProjectRoots, useProjectRoots } from "@/platform/projectRoots";
@@ -11,19 +12,22 @@ import {
   registerOverlay,
   registerProjectViewRoot,
   registerToolWindow,
+  registerUndoHandler,
   useLocalChanges,
   useProjectViewRoots,
 } from "@/workbench/contributions";
 import { registerProjectActions } from "./actions";
+import { gradleModuleGroups } from "./moduleGroups";
 import { FileRefactorDialogHost } from "./FileRefactorDialogs";
 import { NewPopupHost } from "./NewPopup";
 import { RefactoringPreviewHost } from "./RefactoringPreview";
 import { ProjectHeaderActions, useProjectHeaderMenu, useProjectTitleMenu } from "./HeaderActions";
 import { loadHomeDir } from "./home";
-import { selectedNodes } from "./operations";
+import { selectedNodes, undoLastFileOperation } from "./operations";
 import { ProjectView } from "./ProjectView";
 import {
   applyFsChange,
+  dropOutlines,
   initProjectTree,
   reloadAll,
   reloadLoadedDirs,
@@ -64,14 +68,20 @@ export function activate(): () => void {
     if (s.root && s.root === prev.root && detectedExcluded(s) !== detectedExcluded(prev)) void reloadAll();
   });
 
-  // Project Structure content roots besides the project folder, listed after it.
+  // Project Structure content roots after the project folder, and IDEA's module groups of
+  // a Gradle build with modules outside it (as of the last sync) before it.
   let contentRoots: Array<() => void> = [];
   let shownRoots = "";
   const syncContentRoots = () => {
     const { project, settings } = useProject.getState();
-    const paths =
-      project && !project.workspace ? validateProjectStructure(settings?.projectStructure).contentRoots : [];
-    const key = JSON.stringify(paths);
+    const own = project && !project.workspace;
+    const paths = own ? validateProjectStructure(settings?.projectStructure).contentRoots : [];
+    // The Build tool window's model (one load per build change), not a load of our own.
+    const build = useBuildModel.getState();
+    const gradleProjects = build.root === project?.root ? (build.model?.gradle?.projects ?? []) : [];
+    const rootName = gradleProjects.find((p) => p.path === ":")?.name ?? "";
+    const groups = own && project ? gradleModuleGroups(gradleProjects, rootName, project.root) : [];
+    const key = JSON.stringify([paths, groups]);
     if (key === shownRoots) return;
     shownRoots = key;
     contentRoots.forEach((d) => d());
@@ -85,8 +95,14 @@ export function activate(): () => void {
         order: -100 + i,
       }),
     );
+    groups.forEach((g, i) =>
+      contentRoots.push(registerProjectViewRoot({ ...g, id: g.id!, order: -200 + i, beforeProject: true })),
+    );
   };
   syncContentRoots();
+  const unsubGradleRoots = useBuildModel.subscribe((s, prev) => {
+    if (s.model !== prev.model || s.root !== prev.root) syncContentRoots();
+  });
   const unsubContentRoots = useProject.subscribe((s, prev) => {
     if (s.settings !== prev.settings || s.project !== prev.project) syncContentRoots();
   });
@@ -106,6 +122,7 @@ export function activate(): () => void {
   syncOpenFiles();
   const unsubEditor = onEditorEvent((e) => {
     if (e.type === "docOpened" || e.type === "docClosed" || e.type === "activeEditorChanged") syncOpenFiles();
+    if (e.type === "docSaved") dropOutlines([e.path]);
   });
   // "All Changed Files": change-list files still on disk (IDEA leaves out unversioned, ignored and deleted ones).
   const syncChanged = () => setChangedFiles(localChangedPaths(useLocalChanges.getState().lists, null, true));
@@ -122,6 +139,7 @@ export function activate(): () => void {
     unsubExtraRoots,
     unsubExcludes,
     unsubContentRoots,
+    unsubGradleRoots,
     () => contentRoots.forEach((d) => d()),
     disposeRoots,
     unsubRoots,
@@ -140,6 +158,14 @@ export function activate(): () => void {
     registerOverlay({ id: "project.refactoringPreview", component: RefactoringPreviewHost }),
     registerOverlay({ id: "project.newPopup", component: NewPopupHost }),
     registerProjectActions(),
+    // Edit › Undo while the Project view has focus.
+    registerUndoHandler(
+      (command, focused) =>
+        command === "undo" &&
+        focused.getAttribute("role") === "tree" &&
+        !!focused.closest("[data-project-view]") &&
+        undoLastFileOperation(),
+    ),
     provideProjectViewSelection(() =>
       selectedNodes()
         .filter((n) => !n.group)

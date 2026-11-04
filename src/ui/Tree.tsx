@@ -33,6 +33,9 @@ import { T } from "./T";
 import { tx } from "@/platform/i18n";
 import { useTreeReorder, type TreeReorder } from "./treeReorder";
 import { useTreeDirectoryContext } from "./treeDirectoryContext";
+import { useIconRowHeight } from "./iconAppearance";
+
+const DEFAULT_ROW_HEIGHT = 24;
 export type { TreeReorder } from "./treeReorder";
 
 export interface TreeRowState {
@@ -223,7 +226,7 @@ export function Tree<T>(props: TreeProps<T>) {
     onContextMenu,
     speedSearch = true,
     speedSearchMode = "highlight",
-    rowHeight = 24,
+    rowHeight: fixedRowHeight,
     indent = 20,
     className,
     rowClassName,
@@ -299,6 +302,8 @@ export function Tree<T>(props: TreeProps<T>) {
   const indexOfKey = useMemo(() => new Map(rows.map((r, i) => [r.key, i])), [rows]);
   const leadIndex = lead != null ? (indexOfKey.get(lead) ?? -1) : -1;
 
+  const themedRowHeight = useIconRowHeight();
+  const rowHeight = fixedRowHeight ?? themedRowHeight ?? DEFAULT_ROW_HEIGHT;
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -306,10 +311,26 @@ export function Tree<T>(props: TreeProps<T>) {
     overscan: 12,
     getItemKey: (i) => rows[i]!.key,
   });
+  useEffect(() => virtualizer.measure(), [virtualizer, rowHeight]);
 
+  // Keep the keyboard lead in view when the lead changes — not when its index
+  // shifts because expanding or collapsing elsewhere inserted rows above it:
+  // following the index would yank the viewport from the folder the user just
+  // opened back to the selection.
+  const pendingScrollToLead = useRef<string | null>(null);
   useEffect(() => {
-    if (leadIndex >= 0) virtualizer.scrollToIndex(leadIndex, { align: "auto" });
-  }, [leadIndex, virtualizer]);
+    pendingScrollToLead.current = lead;
+  }, [lead]);
+  // A preselected lead may arrive before its row is loaded. Retry until it
+  // appears, then stop following index changes for that selection.
+  useEffect(() => {
+    const key = pendingScrollToLead.current;
+    if (key == null) return;
+    const i = indexOfKey.get(key);
+    if (i === undefined) return;
+    virtualizer.scrollToIndex(i, { align: "auto" });
+    pendingScrollToLead.current = null;
+  }, [lead, indexOfKey, virtualizer]);
 
   // Speed search owns Escape while active.
   useEffect(() => {

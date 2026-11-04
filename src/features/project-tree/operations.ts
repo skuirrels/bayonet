@@ -8,10 +8,11 @@ import { executeAction, getAction } from "@/platform/actions";
 import { maybeEditorService, notifications } from "@/workbench/contributions";
 import { ask, confirmChecked } from "@/workbench/messages";
 import { osClipboard } from "./clipboard";
-import { runFileRefactoring } from "./fileRefactor";
+import { lastFileRefactoring, nextFileOperation, runFileRefactoring, undoFileRefactoring } from "./fileRefactor";
 import { openFileRefactorDialog, rememberedOptions } from "./FileRefactorDialogs";
-import { projectFs } from "./fs";
-import type { ProjectNode } from "./model";
+import { beginLocalImport, projectFs } from "./fs";
+import { call, commands, isCancelled } from "@/platform/ipc";
+import { MEMBER_PREFIX, type ProjectNode } from "./model";
 import {
   isInside,
   isSameOrInside,
@@ -38,6 +39,7 @@ import {
   useProjectTree,
 } from "./store";
 import { tx } from "@/platform/i18n";
+import { isRemoteWindow } from "@/platform/remote";
 
 /** Nodes that may be renamed, moved or deleted (not roots, groups or library sources). */
 const mutable = (n: ProjectNode) => !n.root && !n.placeholder && !n.readOnly;
@@ -88,6 +90,7 @@ export function topLevelPaths(nodes: ProjectNode[] = selectedNodes()): string[] 
 
 /** Folder that receives new / pasted items: the selected folder or the selected file's parent. */
 export function targetFolder(node: ProjectNode | null = leadNode()): string | null {
+  if (!node && get().lead?.startsWith(MEMBER_PREFIX)) return null;
   const { root } = get();
   if (!root) return null;
   if (!node) return get().members?.[0] ?? (get().members ? null : root);
@@ -263,7 +266,7 @@ export async function commitEditing(name: string): Promise<boolean> {
           // An existing intermediate package keeps its own `__init__.py`.
           await fs.createFile(joinPath(dir, "__init__.py")).catch(() => {});
     } catch (e) {
-      fail(editing.nodeKind === "file" ? "Cannot create file" : "Cannot create folder", e);
+      fail(editing.nodeKind === "file" ? tx("Cannot create file") : tx("Cannot create folder"), e);
       return true;
     }
     await refreshAfterCreate(editing.parent, path);
@@ -291,8 +294,14 @@ async function refreshAfterCreate(parent: string, path: string) {
 // ---------------------------------------------------------------------------
 // Delete
 
-function describe(paths: string[]): string {
-  return paths.length === 1 ? `'${nameOf(paths[0]!)}'` : `${paths.length} items`;
+/** The Delete dialog's question, e.g. "Delete 'src' and its contents?". */
+function deleteQuestion(paths: string[], folders: boolean): string {
+  if (paths.length === 1) {
+    const name = nameOf(paths[0]!);
+    return folders ? tx`Delete '${name}' and its contents?` : tx`Delete '${name}'?`;
+  }
+  const count = paths.length;
+  return folders ? tx`Delete ${count} items (including folder contents)?` : tx`Delete ${count} items?`;
 }
 
 /** Visible rows in display order (roots, then children of expanded folders). */
@@ -438,9 +447,9 @@ export async function deleteSelection(nodes: ProjectNode[] = selectedNodes()) {
     message: createElement(
       Fragment,
       null,
-      `Delete ${describe(paths)}${folders ? (paths.length === 1 ? " and its contents" : " (including folder contents)") : ""}?`,
+      deleteQuestion(paths, folders > 0),
       createElement("br"),
-      "Items are moved to the Trash.",
+      tx("Items are moved to the Trash."),
     ),
   });
   if (!answer) return;
@@ -456,18 +465,78 @@ export async function deleteSelection(nodes: ProjectNode[] = selectedNodes()) {
   const fs = projectFs(root);
   const parents = new Set<string>();
   const errors: string[] = [];
+  const deleted: string[] = [];
   for (const p of paths) {
     try {
       await fs.delete(p);
       parents.add(parentOf(p));
+      deleted.push(p);
     } catch (e) {
       errors.push(`${nameOf(p)}: ${errorMessage(e)}`);
     }
+  }
+  if (deleted.length) {
+    const dirs = new Set(nodes.filter((n) => n.dir).map((n) => n.path));
+    lastDelete = { paths: deleted, dirs: deleted.filter((p) => dirs.has(p)), seq: nextFileOperation() };
   }
   if (errors.length)
     notifications().notify({ level: "error", title: "Some items could not be deleted", body: errors.join("\n") });
   await Promise.all([...parents].map((d) => loadDir(d, true)));
   if (next) revealPath(next, refocus);
+}
+
+/** The last Delete in the Project view; Undo brings its files back from Local History. */
+let lastDelete: { paths: string[]; dirs: string[]; seq: number } | null = null;
+
+/** Undo in the Project view: reverts the latest delete or move / rename; false when there is none. */
+export function undoLastFileOperation(): boolean {
+  const move = lastFileRefactoring();
+  if (lastDelete && (!move || lastDelete.seq > move.seq)) {
+    void undoDelete();
+    return true;
+  }
+  if (!move) return false;
+  void undoFileRefactoring();
+  return true;
+}
+
+/** Restores the deleted files (and folders) from their last Local History snapshots. */
+export async function undoDelete(): Promise<boolean> {
+  const op = lastDelete;
+  const { root } = get();
+  if (!op || !root) return false;
+  lastDelete = null;
+  const fs = projectFs(root);
+  const failed: string[] = [];
+  const parents = new Set<string>();
+  for (const p of op.paths) {
+    try {
+      const history = await call(commands.historyListDir(p));
+      const gone = new Set(history.deleted);
+      const latest = new Map<string, string>();
+      for (const e of history.entries)
+        if (e.kind === "snapshot" && e.id && gone.has(e.path) && !latest.has(e.path)) latest.set(e.path, e.id);
+      const dir = op.dirs.includes(p);
+      if (!latest.size && !dir) throw new Error("no Local History snapshot");
+      if (dir) await fs.createDir(p);
+      for (const [path, id] of latest) await call(commands.historyRestore(path, id));
+      parents.add(parentOf(p));
+    } catch {
+      failed.push(nameOf(p));
+    }
+  }
+  await Promise.all([...parents].map((d) => loadDir(d, true)));
+  const restored = op.paths.find((p) => !failed.includes(nameOf(p)));
+  if (restored) revealPath(restored, true);
+  const names = failed.join(", ");
+  if (failed.length)
+    notifications().notify({
+      level: "warning",
+      title: "Some items could not be restored",
+      body: tx`Not in Local History: ${names}. They are in the Trash.`,
+      key: "project.undoDelete",
+    });
+  return !failed.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -476,9 +545,14 @@ export async function deleteSelection(nodes: ProjectNode[] = selectedNodes()) {
 export function copySelection(cut: boolean) {
   const paths = topLevelPaths(selectedNodes().filter((n) => (cut ? mutable(n) : !n.root && !n.group)));
   if (!paths.length) return;
-  setClipboard({ paths, cut });
-  // Hand the files to the OS too, so Explorer can paste them (as IDEA does).
-  void osClipboard().setFiles(paths);
+  // Remote paths are useful as text, but do not name files on the client.
+  const remote = isRemoteWindow();
+  const osWrite = (async () => {
+    if (!remote) return osClipboard().setFiles(paths);
+    await navigator.clipboard.writeText(paths.join("\n"));
+    return true;
+  })().catch(() => false);
+  setClipboard({ paths, cut, remote, osWrite });
 }
 
 /** Files on the OS clipboard, cached: `canPaste` runs while a menu renders. */
@@ -486,7 +560,25 @@ let osHasFiles = false;
 
 /** Keeps Paste enabled for what Explorer copied; called when the window gains focus. */
 export async function refreshOsClipboard() {
-  osHasFiles = await osClipboard().hasFiles();
+  try {
+    await readOsClipboard();
+  } catch {
+    // A busy clipboard is not evidence that the user's copy has changed.
+  }
+}
+
+async function readOsClipboard(): Promise<string[] | null> {
+  const { clipboard } = get();
+  const handedOff = await clipboard?.osWrite;
+  const external = await osClipboard().files();
+  // A newer Copy/Cut owns the state if this read (or its hand-off) was delayed.
+  if (get().clipboard !== clipboard) return null;
+  osHasFiles = external.length > 0;
+  // Our remote text write removes file URLs, so any files were copied later.
+  // A failed write leaves ownership uncertain; retain the remote copy then.
+  if (handedOff && (clipboard?.remote ? external.length > 0 : !sameFiles(external, clipboard?.paths)))
+    setClipboard(null);
+  return external;
 }
 
 export function canPaste(): boolean {
@@ -498,13 +590,27 @@ export function canPaste(): boolean {
  * dialog (IDEA). Files copied in Explorer paste as copies.
  */
 export async function paste(target = targetFolder()) {
-  const { clipboard } = get();
   if (!target || isReadOnlyPath(target)) return;
-  const external = await osClipboard().files();
+  let external: string[] = [];
+  try {
+    const files = await readOsClipboard();
+    if (files === null) return;
+    external = files;
+  } catch (e) {
+    if (!get().clipboard?.paths.length) {
+      fail(tx("Cannot access the clipboard"), e);
+      return;
+    }
+  }
+  const { clipboard } = get();
   // The last copy is the one the user expects to paste, so another app's files
   // win over ours — unless they are the copy we handed to the OS ourselves.
-  if (external.length && !sameFiles(external, clipboard?.paths)) return pasteFromOsClipboard(external, target);
-  if (!clipboard?.paths.length) return;
+  if (!clipboard?.remote && external.length && !sameFiles(external, clipboard?.paths))
+    return pasteFromOsClipboard(external, target);
+  if (!clipboard?.paths.length) {
+    notifications().notify({ level: "info", title: "No files on the clipboard" });
+    return;
+  }
   const isDir = (p: string) =>
     get().listings.has(p) || currentModel().byKey.get(currentModel().keyOfPath.get(p) ?? p)?.dir === true;
   const single = clipboard.paths.length === 1 && isDir(clipboard.paths[0]!);
@@ -519,7 +625,7 @@ export async function paste(target = targetFolder()) {
 /** Pasting from Explorer copies, whatever the source: never a move or a refactoring. */
 async function pasteFromOsClipboard(paths: string[], target: string) {
   osHasFiles = true;
-  await transfer(paths, target, "copy");
+  await transfer(paths, target, "copy", undefined, "local");
 }
 
 /** The same files, as the clipboard keeps them (`/`-separated, any order). */
@@ -559,6 +665,7 @@ export async function transfer(
   target: string,
   mode: "move" | "copy",
   name?: string,
+  source: "project" | "local" = "project",
 ): Promise<string | boolean> {
   if (mode === "move") return moveInto(paths, target);
   const { root } = get();
@@ -571,23 +678,38 @@ export async function transfer(
   const errors: string[] = [];
   let first: string | null = null;
   const newName = name;
-  for (const src of paths) {
-    const name = nameOf(src);
-    if (isSameOrInside(target, src) && target !== parentOf(src) && src !== target) {
-      errors.push(`${name}: cannot copy a folder into itself`);
-      continue;
+  const upload = source === "local" && isRemoteWindow() ? beginLocalImport() : undefined;
+  try {
+    for (const src of paths) {
+      if (upload?.cancelled) break;
+      const name = nameOf(src);
+      if (
+        !(source === "local" && isRemoteWindow()) &&
+        isSameOrInside(target, src) &&
+        target !== parentOf(src) &&
+        src !== target
+      ) {
+        errors.push(`${name}: cannot copy a folder into itself`);
+        continue;
+      }
+      const srcIsDir =
+        get().listings.has(src) || currentModel().byKey.get(currentModel().keyOfPath.get(src) ?? src)?.dir === true;
+      const finalName = paths.length === 1 && newName ? newName : uniqueName(name, isTaken, srcIsDir);
+      const to = joinPath(target, finalName);
+      try {
+        if (source === "local") {
+          const skipped = await fs.importLocal(src, to, upload);
+          errors.push(...skipped);
+        } else await fs.copy(src, to);
+        taken.add(caseInsensitive ? finalName.toLowerCase() : finalName);
+        first ??= to;
+      } catch (e) {
+        if (isCancelled(e)) break;
+        errors.push(`${name}: ${errorMessage(e)}`);
+      }
     }
-    const srcIsDir =
-      get().listings.has(src) || currentModel().byKey.get(currentModel().keyOfPath.get(src) ?? src)?.dir === true;
-    const finalName = paths.length === 1 && newName ? newName : uniqueName(name, isTaken, srcIsDir);
-    const to = joinPath(target, finalName);
-    try {
-      await fs.copy(src, to);
-      taken.add(caseInsensitive ? finalName.toLowerCase() : finalName);
-      first ??= to;
-    } catch (e) {
-      errors.push(`${name}: ${errorMessage(e)}`);
-    }
+  } finally {
+    upload?.finish();
   }
   if (errors.length)
     notifications().notify({ level: "error", title: "Some items could not be copied", body: errors.join("\n") });
@@ -650,10 +772,11 @@ export async function dropPaths(paths: string[], target: string, copy: boolean) 
 export async function importExternal(paths: string[], target: string) {
   const { root } = get();
   if (!root || !paths.length || isReadOnlyPath(target)) return;
+  if (isRemoteWindow()) return void (await transfer(paths, target, "copy", undefined, "local"));
   const inside = paths.filter((p) => isSameOrInside(p, root));
   const outside = paths.filter((p) => !isSameOrInside(p, root));
   if (inside.length) await dropPaths(inside, target, false);
-  if (outside.length) await transfer(outside, target, "copy");
+  if (outside.length) await transfer(outside, target, "copy", undefined, "local");
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +797,7 @@ export async function copyPaths(kind: PathKind, nodes: ProjectNode[] = selectedN
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
-    fail("Cannot access the clipboard", e);
+    fail(tx("Cannot access the clipboard"), e);
   }
 }
 

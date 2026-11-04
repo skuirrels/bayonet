@@ -19,6 +19,7 @@ import {
 } from "react";
 import type { FileMatches, SearchQuery, RunConfig } from "@/bindings";
 import type { MenuItem } from "@/ui/Menu";
+import type { DragData } from "@/ui/pointerDrag";
 import type { TreeReorder } from "@/ui/Tree";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -270,7 +271,13 @@ export interface EditorInput {
   data?: unknown;
 }
 
+export interface WorkbenchBannerContribution {
+  id: string;
+  component: ComponentType;
+}
+
 interface Contributions {
+  workbenchBanners: Map<string, WorkbenchBannerContribution>;
   toolWindows: Map<string, ToolWindowContribution>;
   statusItems: Map<string, StatusItemContribution>;
   overlays: Map<string, OverlayContribution>;
@@ -280,6 +287,7 @@ interface Contributions {
 }
 
 export const useContributions = create<Contributions>(() => ({
+  workbenchBanners: new Map(),
   toolWindows: new Map(),
   statusItems: new Map(),
   overlays: new Map(),
@@ -310,6 +318,7 @@ function register<K extends keyof Contributions>(
     });
 }
 
+export const registerWorkbenchBanner = (c: WorkbenchBannerContribution) => register("workbenchBanners", c.id, c);
 export const registerToolWindow = (c: ToolWindowContribution) => register("toolWindows", c.id, c);
 export const registerStatusItem = (c: StatusItemContribution) => register("statusItems", c.id, c);
 export const registerOverlay = (c: OverlayContribution) => register("overlays", c.id, c);
@@ -450,11 +459,9 @@ export async function resolveFileEditor(path: string): Promise<FileEditorResolut
 export interface TextEditorWrapperContribution {
   id: string;
   matches(path: string): boolean;
-  component: ComponentType<{
-    path: string;
-    tabId: string;
-    children: ReactNode;
-  }>;
+  component: ComponentType<{ path: string; tabId: string; children: ReactNode; actionsInTabs?: boolean }>;
+  /** Layout controls in the tab strip; the wrapper supplies a floating fallback when tabs are hidden. */
+  tabActions?: ComponentType<{ path: string; tabId: string }>;
 }
 
 export const useTextEditorWrappers = create<{
@@ -517,6 +524,9 @@ export interface OpenEditorTab {
   lastActive: number;
 }
 
+/** MIME of a dragged editor tab: the payload is `{ paneId, tabId }` as JSON. */
+export const EDITOR_TAB_MIME = "application/x-openidea-editor-tab";
+
 export interface EditorService {
   openFile(path: string, options?: OpenOptions): Promise<void>;
   openInput(input: EditorInput, options?: OpenOptions): Promise<void>;
@@ -540,6 +550,8 @@ export interface EditorService {
   openPaths?(): string[];
   /** Every open tab, files or not, most recently active first (Switcher). */
   openTabs?(): OpenEditorTab[];
+  /** Input of the tab `tabId` in pane `paneId` (dragging tabs between views), null if there is none. */
+  tabInput?(paneId: string, tabId: string): EditorInput | null;
   /** Input of the active tab (any kind), if any. */
   activeInput?(): EditorInput | null;
   /** Calls `fn` whenever the active tab changes; returns the unsubscribe. */
@@ -655,6 +667,40 @@ export const notifications = (): NotificationService =>
 export const maybeEditorService = (): EditorService | undefined => services.editor;
 /** Creates terminal widgets; provided by the terminal feature. */
 export const embeddedTerminal = (): EmbeddedTerminalFactory | undefined => services.embeddedTerminal;
+
+/**
+ * Handles a pointer drag dropped on the editor content: features register handlers for
+ * their own drag types (e.g. an agent task dragged from the tool window) without the
+ * editor depending on them. The editor shows its center drop-zone for accepted types.
+ */
+export interface EditorDropHandler {
+  accepts(type: string): boolean;
+  drop(data: DragData): void;
+}
+
+const editorDropHandlers: EditorDropHandler[] = [];
+
+/** Registers a handler for drags dropped on editor content; returns the unregister. */
+export function registerEditorDropHandler(handler: EditorDropHandler): () => void {
+  editorDropHandlers.push(handler);
+  return () => {
+    const i = editorDropHandlers.indexOf(handler);
+    if (i >= 0) editorDropHandlers.splice(i, 1);
+  };
+}
+
+/** Whether any registered handler takes this drag type. */
+export function acceptsEditorDrop(type: string): boolean {
+  return editorDropHandlers.some((h) => h.accepts(type));
+}
+
+/** Hands a drag dropped on editor content to its registered handler, if any. */
+export function dropOnEditor(data: DragData): boolean {
+  const handler = editorDropHandlers.find((h) => h.accepts(data.type));
+  if (!handler) return false;
+  handler.drop(data);
+  return true;
+}
 
 /** Editor-backed results, recomputed on rerun without reading files from disk. */
 export interface FindResultsSource {
@@ -806,6 +852,17 @@ export interface SettingsForm {
   useValue(key: string): unknown;
   /** Stages a value; `null` removes the key on Apply. */
   set(key: string, value: unknown): void;
+  /** Values stored outside settings JSON; the writer runs on Apply / OK and returns the saved value. */
+  useExternal<T>(
+    key: string,
+    base: T,
+    apply: (value: T) => Promise<T>,
+  ): {
+    value: T;
+    current: T;
+    set(value: T): void;
+    saving: boolean;
+  };
 }
 
 export const SettingsFormContext = createContext<SettingsForm | null>(null);
@@ -893,6 +950,8 @@ export interface ProjectViewRootContribution extends ProjectViewRootEntry {
    * "solution" roots show only in the Solution pane.
    */
   scope?: "scratches" | "solution";
+  /** Listed above the project folder (IDEA's module group of the build). */
+  beforeProject?: boolean;
 }
 
 export const useProjectViewRoots = create<{
@@ -942,6 +1001,26 @@ export type ContextMenuId =
   | "selectIn"
   | "new";
 
+/**
+ * Entries of the native main menu's open slots (src-tauri/src/menu.rs
+ * `Entry::Dynamic`), e.g. `pluginTools` at the end of Tools: each runs `action`.
+ */
+export interface MenuSlotItem {
+  action: string;
+  arg?: string | null;
+  label: string;
+}
+
+export const useMenuSlotItems = create<{ slots: Record<string, MenuSlotItem[]> }>(() => ({ slots: {} }));
+
+export function registerMenuSlotItem(slot: string, item: MenuSlotItem): () => void {
+  useMenuSlotItems.setState((s) => ({ slots: { ...s.slots, [slot]: [...(s.slots[slot] ?? []), item] } }));
+  return () =>
+    useMenuSlotItems.setState((s) => ({
+      slots: { ...s.slots, [slot]: (s.slots[slot] ?? []).filter((i) => i !== item) },
+    }));
+}
+
 export interface MenuGroupContext {
   /** Files / directories the menu is for (absolute paths; a virtual URI for virtual documents). */
   paths: string[];
@@ -951,6 +1030,8 @@ export interface MenuGroupContext {
   text?: string;
   /** Editor menu: 0-based caret line; gutter menu: the clicked line. */
   line?: number;
+  /** The tab's input, when the menu is for an editor tab without a path. */
+  input?: EditorInput;
 }
 
 export interface MenuGroupContribution {
@@ -1090,7 +1171,9 @@ export interface RunConfigTypeField {
   /** Visible lines of a `textarea` (default 4). */
   rows?: number;
   placeholder?: string;
-  options?: ReadonlyArray<{ value: string; label: string }>;
+  options?: ReadonlyArray<{ value: string; label: string; detail?: string }>;
+  /** A `select`'s further options, read when the form shows it (installed JDKs, build modules). */
+  loadOptions?(): Promise<ReadonlyArray<{ value: string; label: string; detail?: string }>>;
   /** Values offered while typing (e.g. the scripts of detected configurations). */
   suggestions?(configs: readonly RunConfig[], params: Readonly<Record<string, string>>): string[];
   required?: boolean;
@@ -1101,6 +1184,8 @@ export interface RunConfigTypeField {
   validate?(value: string, params: Readonly<Record<string, string>>): string | null;
   /** Shown under the control. */
   hint?: string;
+  /** A text field holding a path: a button next to it picks a file or a directory (absolute path). */
+  browse?: "file" | "directory" | ((params: Readonly<Record<string, string>>) => "file" | "directory");
 }
 
 export interface RunConfigTypeContribution {
@@ -1199,6 +1284,24 @@ export function registerOccurrenceNavigator(toolWindow: string, nav: OccurrenceN
 
 export function occurrenceNavigator(toolWindow: string): OccurrenceNavigator | null {
   return occurrenceNavigators.get(toolWindow)?.at(-1) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Edit › Undo / Redo outside text fields and editors
+
+/** Undo / Redo for `focused` in a view with its own history (Project view file operations); true when handled. */
+export type UndoHandler = (command: "undo" | "redo", focused: Element) => boolean;
+
+const undoHandlers = new Set<UndoHandler>();
+
+export function registerUndoHandler(handler: UndoHandler): () => void {
+  undoHandlers.add(handler);
+  return () => void undoHandlers.delete(handler);
+}
+
+/** Offers Undo / Redo to the registered views, latest first. */
+export function runUndoHandlers(command: "undo" | "redo", focused: Element): boolean {
+  return [...undoHandlers].reverse().some((h) => h(command, focused));
 }
 
 /** Registers `nav` (the latest render's) for `toolWindow` while the calling view is mounted. */
@@ -1351,6 +1454,41 @@ export function runAnythingProviderList(): RunAnythingProvider[] {
 }
 
 // ---------------------------------------------------------------------------
+// Project endpoints supplied by framework features for request-path search.
+
+export interface EndpointEntry {
+  /** `GET`, `POST`, … */
+  method: string;
+  /** Class-level and method-level mapping joined; `{var}` kept. */
+  url: string;
+  controller: string;
+  methodName: string;
+  path: string;
+  rel: string;
+  line: number;
+  col: number;
+}
+
+export interface EndpointProvider {
+  id: string;
+  endpoints(root: string): Promise<EndpointEntry[]>;
+}
+
+const endpointProviders = new Map<string, EndpointProvider>();
+
+export function registerEndpointProvider(p: EndpointProvider): () => void {
+  endpointProviders.set(p.id, p);
+  return () => {
+    if (endpointProviders.get(p.id) === p) endpointProviders.delete(p.id);
+  };
+}
+
+export async function searchEndpoints(root: string | null): Promise<EndpointEntry[]> {
+  if (!root) return [];
+  return (await Promise.all([...endpointProviders.values()].map((p) => p.endpoints(root)))).flat();
+}
+
+// ---------------------------------------------------------------------------
 // Status bar info text (IDEA's status bar message, e.g. "3 of 12" after Next
 // Occurrence). Cleared by the next message or after a while.
 
@@ -1396,3 +1534,46 @@ export const useDebugRunSessions = create<{
   serviceSessions: DebugServiceSession[];
   Console: ComponentType<{ sessionId: number }> | null;
 }>(() => ({ sessions: [], serviceSessions: [], Console: null }));
+
+// ---------------------------------------------------------------------------
+// "Get from Version Control" sources besides a plain URL (IDEA: GitHub, GitLab…),
+// listed in the Clone Repository dialog's sidebar.
+
+export interface CloneSourceProps {
+  /** The repository URL the dialog clones. */
+  url: string;
+  /** Picks a repository: the dialog clones `url` (and derives its directory from it). */
+  onUrl(url: string): void;
+  /** Picks a repository and clones it right away (double-click, Enter). */
+  onClone(url: string): void;
+  disabled: boolean;
+}
+
+export interface CloneSourceContribution {
+  id: string;
+  label: string;
+  icon: string;
+  /** Lower first; "Repository URL" always comes first. */
+  order?: number;
+  component: ComponentType<CloneSourceProps>;
+}
+
+export const useCloneSources = create<{ sources: ReadonlyMap<string, CloneSourceContribution> }>(() => ({
+  sources: new Map(),
+}));
+
+export function registerCloneSource(source: CloneSourceContribution): () => void {
+  useCloneSources.setState((s) => ({ sources: new Map(s.sources).set(source.id, source) }));
+  return () =>
+    useCloneSources.setState((s) => {
+      if (s.sources.get(source.id) !== source) return s;
+      const sources = new Map(s.sources);
+      sources.delete(source.id);
+      return { sources };
+    });
+}
+
+/** Registered clone sources in order. */
+export function cloneSourceList(sources = useCloneSources.getState().sources): CloneSourceContribution[] {
+  return [...sources.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || a.id.localeCompare(b.id));
+}

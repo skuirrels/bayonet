@@ -10,6 +10,34 @@ changes can keep flowing in.
   (v0.1.29), with full history.
 - Merge `upstream/main` regularly (spec risk K6).
 
+## Upstream merges
+
+- **2026-11-04, `48e23c01` (v0.1.35 and 309 commits).** Conflicts were mostly two
+  sides adding to the same list (CMake beside .NET, Ruby beside the .NET SDK kind,
+  Docker beside `ops::dotnet`, plugin `pinned` beside the pull-diagnostics flags).
+  Decisions worth knowing for the next merge:
+  - **Upstream's .NET run configurations are removed** (`245fe3cd`, #686, part of
+    upstream issue #615). They registered the same `dotnet` type id as ours, and also
+    `dotnet-test`, with their own project detection (`crates/ide-run/src/detect/dotnet.rs`,
+    `crates/ide-run/src/dotnet.rs`), a `run_dotnet_resolve` command, a "Build .NET
+    project" before-launch task and `src/features/run/dotnetTypes.ts`. Ours stays the
+    only one: detection in `crates/ide-run/src/detect.rs`, the type in
+    `src/features/dotnet/runType.ts`, debugging through `crates/ide-dap/src/dotnet.rs`.
+    When upstream changes those files again, the merge reports modify/delete
+    conflicts: keep them deleted, and port anything useful into ours instead. Their
+    `file-csharp` run icon, the `netcoredbg` missing-adapter notice and the
+    netcoredbg entry in the debugger list are kept.
+  - **Reformat indent.** Upstream now sends the Code Style indent only when the
+    language has a Tabs and Indents override (`fcfe2647`). DotnetIDEA keeps sending it
+    always (`DocModel.formatIndent`), as recorded under Roslyn features, but uses
+    upstream's `formatIndentFacet` and the indent re-detection after Reformat Code
+    (`c599265c`).
+  - **Virtual documents.** Roslyn source-generated files are a branch beside upstream's
+    Kotlin `decompile` in `virtual_document`, and go through upstream's
+    `store_virtual`, which skips the cache for them.
+  - App icons, product name, identifier and version in `tauri.conf.json`, and the
+    README stay ours.
+
 ## What was renamed
 
 User-visible names only:
@@ -164,6 +192,8 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - **Threads**: `dotnet-stack report`, with identical stacks grouped and named after their innermost user-code frame. **SOS Shell on Live Process** opens `dotnet-debug attach` in the terminal.
 - **Memory**: `dotnet-gcdump` snapshots by type with size bars; compare with an earlier snapshot to see growth by type.
 - **Dumps**: `dotnet-dump collect` (heap, mini, triage or full); each dump is summarised with SOS `clrthreads` and `dumpheap -stat`. **Open SOS Console** opens `dotnet-dump analyze` in the terminal for `clrstack`, `dumpheap`, `eeheap` and the rest; **Download Symbols** runs `dotnet-symbol` into a folder next to the dump.
-- **CPU Trace**: `dotnet-trace collect --format Speedscope` for 5 to 60 seconds, merged across threads into a flame graph (callers on top; click to zoom), coloured by your code, .NET libraries and native frames, with a self-time hot-spot table.
+- **CPU Trace** (PRF-2, `src/features/dotnet/diagnostics/TraceView.tsx`, `crates/ide-dotnet/src/trace_source.rs`): `dotnet-trace collect --format Speedscope` for 5 to 60 seconds, merged across threads and shown as a **Flame Graph** (callers on top, coloured by your code, .NET libraries and native frames; click selects, double-click zooms), a **Call Tree** opened along the path where your own code spends its time (dotnet-trace's `CPU_TIME` samples count as their method's own time), or a sortable **Methods** list (self and total time, "only your code"). The selected method's panel shows its total and self time and what calls it and what it calls, each clickable.
+  - Frames of the solution's own code are found in its C# files: the symbol index gives the files that declare a member of that name in that type, and the file's outline the declaration with the frame's namespace, nesting and parameter count. Compiler-generated names map back to what was written: async and iterator state machines (`<RunAsync>d__0.MoveNext`), lambdas (`<>c.<Main>b__0_0`), local functions, property accessors and primary constructors. Double-click, F4 or the edit icon opens the source.
+  - **Show times in the editor** (on by default) puts a lens above each sampled method (`18 % · 1.24 s · self 412 ms`) and a heat bar over its lines in the change lane, warm to hot by its share of thread time. Clicking the lens shows the method in the CPU Trace tab.
 - **Triggers**: rules such as "CPU above 80 % for 10 s, then record a CPU trace", checked against the live counters every second, with a cool-down. dotnet-monitor applies its own collection rules only in listen mode, where each app has to be started pointed at the monitor, so the IDE evaluates the rules itself; they work for any process.
 - **Files** lists what was collected for the project (kept in its cache), to reopen or delete. **Tools** shows which diagnostics tools are installed, installs missing ones with `dotnet tool install --global`, and runs `dotnet-sos install` for LLDB.

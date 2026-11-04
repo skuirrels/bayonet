@@ -682,6 +682,8 @@ fn file_at_in_a_blobless_clone() {
     fx.write("f.txt", "v2\n");
     fx.commit_all("v2");
     fx.git(&["config", "uploadpack.allowFilter", "true"]);
+    // Git refuses a clone source with a local hooks-path override.
+    fx.git(&["config", "--unset", "core.hooksPath"]);
     let clone = fx.dir.parent().unwrap().join("clone");
     let url = format!("file://{}", fx.dir.display());
     git_in(fx.dir.parent().unwrap(), &["clone", "-q", "--filter=blob:none", &url, "clone"]);
@@ -1258,6 +1260,62 @@ fn errors_carry_git_messages() {
 }
 
 #[test]
+fn packed_refs_reload_without_a_newer_modification_time() {
+    for keep_time in [false, true] {
+        for linked in [false, true] {
+            let fx = Fixture::new();
+            fx.write("file.txt", "one\n");
+            let first = fx.commit_all("one");
+            fx.git(&["branch", "-m", "master"]);
+            let root = if linked {
+                let path = fx._tmp.path().join("linked");
+                fx.git(&["worktree", "add", "-qb", "agent/check", path.to_str().unwrap()]);
+                path
+            } else {
+                fx.dir.clone()
+            };
+            let packed = fx.path(".git/packed-refs");
+            std::fs::write(
+                &packed,
+                format!("# pack-refs with: peeled fully-peeled sorted \n{first} refs/remotes/origin/master\n"),
+            )
+            .unwrap();
+            let set_modified = |time| {
+                std::fs::OpenOptions::new().write(true).open(&packed).unwrap().set_modified(time).unwrap();
+            };
+            set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600));
+            let original_time = std::fs::metadata(&packed).unwrap().modified().unwrap();
+            let original_len = std::fs::metadata(&packed).unwrap().len();
+            let repo = Repo::discover(&root).unwrap().unwrap();
+            let query = LogQuery { branches: vec!["HEAD".into()], limit: 1, ..Default::default() };
+            assert_eq!(repo.log(&query).unwrap()[0].id, first);
+
+            std::fs::write(root.join("file.txt"), "two\n").unwrap();
+            git_in(&root, &["add", "file.txt"]);
+            git_in(&root, &["commit", "-qm", "two"]);
+            let second = git_in(&root, &["rev-parse", "HEAD"]);
+            fx.git(&["pack-refs", "--all", "--prune"]);
+            set_modified(if keep_time { original_time } else { original_time - std::time::Duration::from_secs(60) });
+            assert_ne!(std::fs::metadata(&packed).unwrap().len(), original_len);
+            let branch = if linked { "agent/check" } else { "master" };
+            assert!(!fx.path(&format!(".git/refs/heads/{branch}")).exists());
+            for revision in ["HEAD", "@", branch] {
+                let q = LogQuery { branches: vec![revision.into()], ..query.clone() };
+                let rows = repo.log(&q).unwrap_or_else(|error| {
+                    panic!("linked={linked}, keep_time={keep_time}, revision={revision}: {error}")
+                });
+                assert_eq!(rows[0].id, second);
+            }
+            assert_eq!(repo.head().unwrap().1.as_deref(), Some(second.as_str()));
+            assert_eq!(
+                repo.file_at(Path::new("file.txt"), Some("HEAD"), encoding_rs::UTF_8).unwrap().as_deref(),
+                Some("two\n")
+            );
+        }
+    }
+}
+
+#[test]
 fn status_reflects_external_changes_without_reopen() {
     let fx = Fixture::new();
     fx.write("a", "1\n");
@@ -1533,4 +1591,63 @@ fn gbk_text_patch_keeps_utf8_paths_and_encoded_payload() {
     let patch = build_partial_patch("中文.java", new, "// 😀\n", &[0]);
     assert!(repo.stage_patch(&patch, &|_| Ok(encoding_rs::GBK)).is_err());
     assert_eq!(repo.file_bytes_at(&path, Some(":0")).unwrap().unwrap(), encoding_rs::GBK.encode(new).0.as_ref());
+}
+
+#[cfg(unix)]
+#[test]
+fn restricted_reads_ignore_executable_repository_configuration() {
+    let f = Fixture::new();
+    f.write("a.txt", "one\ntwo\n");
+    f.commit_all("initial");
+    f.write(".gitattributes", "*.txt filter=evil diff=evil\n");
+    f.write("a.txt", "one\nchanged\n");
+    for key in ["filter.evil.clean", "diff.evil.textconv", "diff.external", "core.fsmonitor"] {
+        f.git(&["config", key, "touch execution.marker; cat"]);
+    }
+    let repo = f.repo();
+    repo.set_execution_allowed(false);
+    assert!(!repo.status().unwrap().is_empty());
+    assert!(repo.diff_text(&f.path("a.txt"), false, encoding_rs::UTF_8).unwrap().contains("changed"));
+    assert_eq!(repo.blame(&f.path("a.txt"), None, None, encoding_rs::UTF_8).unwrap().len(), 2);
+    assert!(!repo.diff_with_worktree("HEAD").unwrap().is_empty());
+    assert!(!repo.log(&LogQuery::default()).unwrap().is_empty());
+    repo.merge_versions(&f.path("a.txt"), encoding_rs::UTF_8).unwrap();
+    assert!(!f.path("execution.marker").exists());
+    let repos = ide_vcs::Repos::discover(&f.dir, &|_| false).unwrap();
+    for r in repos.all() {
+        r.set_execution_allowed(false);
+    }
+    let compared =
+        repos.compare_paths(std::slice::from_ref(&f.dir), "HEAD", None, &ide_core::CancellationToken::new()).unwrap();
+    assert!(compared.repositories.iter().all(|r| r.error.is_none()));
+    assert!(!f.path("execution.marker").exists());
+    // Positive control: the same filter really executes without restriction.
+    f.git(&["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--no-textconv"]);
+    assert!(f.path("execution.marker").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn restricted_conflict_preview_uses_host_owned_temporary_files() {
+    let f = Fixture::new();
+    f.write("a.txt", "base\n");
+    f.commit_all("base");
+    f.git(&["checkout", "-b", "other"]);
+    f.write("a.txt", "other\n");
+    f.commit_all("other");
+    f.git(&["checkout", "main"]);
+    f.write("a.txt", "mine\n");
+    f.commit_all("mine");
+    let output = Command::new("git").current_dir(&f.dir).args(["merge", "other"]).output().unwrap();
+    assert!(!output.status.success());
+    let trap = f.path(&format!(".git/openidea-merge-{}", std::process::id()));
+    std::fs::create_dir_all(&trap).unwrap();
+    let marker = f._tmp.path().join("user-data");
+    std::fs::write(&marker, "untouched").unwrap();
+    std::os::unix::fs::symlink(&marker, trap.join("ours")).unwrap();
+    let repo = f.repo();
+    repo.set_execution_allowed(false);
+    let versions = repo.merge_versions(&f.path("a.txt"), encoding_rs::UTF_8).unwrap();
+    assert!(versions.merged.unwrap().contains("<<<<<<<"));
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "untouched");
 }

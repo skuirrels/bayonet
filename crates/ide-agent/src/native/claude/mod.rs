@@ -904,6 +904,7 @@ impl Session {
                     if info.get("status").and_then(Value::as_str) == Some("rejected") {
                         st.limit_resets_ms = info.get("resetsAt").and_then(Value::as_f64).map(|s| s * 1000.0);
                     }
+                    updates.extend(st.tr.on_rate_limit(&info));
                 }
                 "command_lifecycle" => {
                     let uuid = msg.get("command_uuid").and_then(Value::as_str);
@@ -915,7 +916,11 @@ impl Session {
                         } else {
                             "end_turn"
                         };
-                        finished = st.turn.take().map(|t| (t, TurnEnd::Stop(stop)));
+                        finished = st.turn.take().map(|mut t| {
+                            // Claude Code reports a turn that failed as cancelled here.
+                            let failure = t.failure.take().filter(|_| !t.cancelled);
+                            (t, failure.unwrap_or(TurnEnd::Stop(stop)))
+                        });
                     }
                 }
                 "assistant" if msg.get("parent_tool_use_id").is_none_or(Value::is_null) => {
@@ -1139,7 +1144,8 @@ where
 /// Whether `result` ends `turn`: it answers the turn's last message, or (stopped) any of
 /// its messages, or names none (the CLI's own error before the turn began).
 fn belongs(turn: &Turn, result: &Value) -> bool {
-    if result.get("origin").is_some_and(|o| !o.is_null()) {
+    // Prompts are sent with the origin `human`, and their results echo it.
+    if result.get("origin").is_some_and(|o| !o.is_null() && o.get("kind").and_then(Value::as_str) != Some("human")) {
         return false;
     }
     let mut uuids = strings(result.get("user_message_uuids"));

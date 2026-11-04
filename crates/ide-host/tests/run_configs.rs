@@ -6,6 +6,7 @@ fn host(base: &std::path::Path) -> Arc<Host> {
     Arc::new(Host::new(HostConfig {
         config_dir: base.join("config"),
         data_dir: base.join("data"),
+        local_data_dir: base.join("data"),
         languages: Arc::new(ide_language::LanguageRegistry::load(None).unwrap()),
         syntax: Arc::default(),
         sink_for: Box::new(|_| Arc::new(NullSink)),
@@ -21,6 +22,7 @@ async fn removed_detections_stay_removed_and_overrides_restore() {
     let root = dunce::canonicalize(tmp.path()).unwrap();
     std::fs::write(root.join("package.json"), r#"{"scripts":{"dev":"node app.js","test":"node test.js"}}"#).unwrap();
     let host = host(&root.join("app"));
+    host.trust.decide(&root, true, false).unwrap();
     host.open_project("main", &root).unwrap();
     let detected = ops::run::configs(&host, "main").unwrap();
     assert!(detected.len() >= 2);
@@ -58,6 +60,7 @@ async fn gradle_defaults_are_not_saved_as_explicit_run_choices() {
     let root = dunce::canonicalize(tmp.path()).unwrap();
     std::fs::write(root.join("build.gradle"), "plugins { id 'java' }").unwrap();
     let host = host(&root.join("app"));
+    host.trust.decide(&root, true, false).unwrap();
     host.open_project("main", &root).unwrap();
     ops::project::set_settings(
         &host,
@@ -79,6 +82,46 @@ async fn gradle_defaults_are_not_saved_as_explicit_run_choices() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn maven_defaults_are_resolved_at_launch_and_explicit_choices_survive_reload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(tmp.path()).unwrap();
+    std::fs::write(root.join("pom.xml"), "<project/>").unwrap();
+    let home = root.join("maven");
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    let launcher = home.join("bin").join(if cfg!(windows) { "mvn.cmd" } else { "mvn" });
+    std::fs::write(&launcher, "").unwrap();
+    let host = host(&root.join("app"));
+    host.trust.decide(&root, true, false).unwrap();
+    host.open_project("main", &root).unwrap();
+    for (key, value) in [
+        ("languages.java.maven.home", home.to_string_lossy().into_owned()),
+        ("languages.java.maven.userSettings", "settings.xml".into()),
+    ] {
+        ops::project::set_settings(
+            &host,
+            "main",
+            ide_workspace::settings::SettingsScope::Project,
+            key,
+            &serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut config = ops::run::configs(&host, "main").unwrap().into_iter().find(|c| c.id == "maven:test").unwrap();
+    assert_eq!(config.command, "mvn");
+    assert_eq!(config.args, ["test"]);
+    assert!(config.env.is_empty());
+    config.command = launcher.to_string_lossy().into_owned();
+    config.args = vec!["-s".into(), "own-settings.xml".into(), "test".into()];
+    config.env.insert("JAVA_HOME".into(), "own-jdk".into());
+    config.detected = false;
+    ops::run::save_configs(&host, "main", &[config.clone()], &[]).unwrap();
+    let saved = ops::run::configs(&host, "main").unwrap().into_iter().find(|c| c.id == config.id).unwrap();
+    assert_eq!(saved.command, config.command);
+    assert_eq!(saved.args, config.args);
+    assert_eq!(saved.env, config.env);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_cmake_before_launch_tasks_resolve_in_the_member() {
     let tmp = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(tmp.path()).unwrap();
@@ -88,6 +131,8 @@ async fn workspace_cmake_before_launch_tasks_resolve_in_the_member() {
     let workspace = root.join("workspace");
     ide_workspace::workspace::Workspace::save(&workspace, "Native", vec![member.clone()], true).unwrap();
     let host = host(&root.join("app"));
+    host.trust.decide(&workspace, true, false).unwrap();
+    host.trust.decide(&member, true, false).unwrap();
     host.open_project("main", &workspace).unwrap();
     let configs = ops::run::configs(&host, "main").unwrap();
     let build = configs.iter().find(|c| c.kind == "cmake" && c.args.first().is_some_and(|a| a == "--build")).unwrap();

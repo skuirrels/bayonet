@@ -15,6 +15,7 @@ mod sln;
 mod slnx;
 pub mod templates;
 pub mod testing;
+pub mod trace_source;
 
 pub use project::{LaunchProfile, ProjectInfo, launch_profiles, read_project};
 

@@ -34,8 +34,12 @@ import {
   type TriggerAction,
   type TriggerRule,
 } from "./model";
+import { setTraceHeat } from "./heat";
+import { heatByFile } from "./trace";
 
 export type DiagTab = "live" | "threads" | "memory" | "dumps" | "trace" | "triggers" | "files" | "tools";
+/** How the CPU Trace tab shows the trace. */
+export type TraceView = "flame" | "tree" | "methods";
 export type Job = "stacks" | "gcdump" | "dump" | "analyze" | "trace" | "counters" | "symbols";
 
 export interface Firing {
@@ -64,6 +68,9 @@ export interface DiagnosticsState {
   baseline: HeapSnapshot | null;
   dump: DumpAnalysis | null;
   trace: TraceProfile | null;
+  traceView: TraceView;
+  /** The method (frame name) the CPU Trace tab shows callers and callees of. */
+  traceMethod: string | null;
   counters: CounterRecording | null;
   busy: Partial<Record<Job, RequestId>>;
   artifacts: DiagArtifact[];
@@ -112,6 +119,8 @@ const initial = (): DiagnosticsState => ({
   baseline: null,
   dump: null,
   trace: null,
+  traceView: "flame",
+  traceMethod: null,
   counters: null,
   busy: {},
   artifacts: [],
@@ -134,6 +143,7 @@ export function resetDiagnostics() {
   stopLive();
   for (const r of Object.values(get().busy)) if (r != null) void commands.cancelRequest(r);
   set({ ...initial(), rules: get().rules });
+  setTraceHeat(null, {});
 }
 
 export const setTab = (tab: DiagTab) => set({ tab });
@@ -141,6 +151,19 @@ export const setTraceSeconds = (traceSeconds: number) => set({ traceSeconds });
 export const setDumpType = (dumpType: DumpType) => set({ dumpType });
 export const selectSeries = (selectedSeries: string | null) => set({ selectedSeries });
 export const setBaseline = (baseline: HeapSnapshot | null) => set({ baseline });
+export const setTraceView = (traceView: TraceView) => set({ traceView });
+export const selectTraceMethod = (traceMethod: string | null) => set({ traceMethod });
+
+/** Shows `trace` in the CPU Trace tab and its times in the editors. */
+export function showTrace(trace: TraceProfile) {
+  set({ trace, traceMethod: null });
+  setTraceHeat(trace.path, heatByFile(trace));
+}
+
+/** Shows the CPU Trace tab with the callers and callees of `frame` (from an editor lens). */
+export function revealTraceFrame(frame: string) {
+  set({ tab: "trace", traceMethod: frame, traceView: get().traceView === "flame" ? "flame" : "methods" });
+}
 
 // ---------------------------------------------------------------- tools and processes
 
@@ -308,7 +331,7 @@ export async function downloadSymbols(dump: string) {
 export async function collectTrace(pid = selectedPid(), seconds = get().traceSeconds) {
   if (pid == null) return null;
   const trace = await job("trace", "trace", (r) => call(commands.diagTrace(r, pid, seconds)));
-  if (trace) set({ trace });
+  if (trace) showTrace(trace);
   return trace;
 }
 
@@ -400,7 +423,7 @@ export async function openArtifact(a: DiagArtifact) {
     case "trace": {
       set({ tab: "trace" });
       const trace = await read(() => call(commands.diagTraceRead(a.path)));
-      if (trace) set({ trace });
+      if (trace) showTrace(trace);
       return;
     }
     case "counters": {

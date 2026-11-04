@@ -1,0 +1,370 @@
+/*
+ * CPU Trace tab. Bars and dots take their frame category's colour from the
+ * `cat-*` classes of Diagnostics.module.css (`--cat`); numbers use tabular figures.
+ */
+.tab {
+  container-type: inline-size;
+}
+
+.muted {
+  color: var(--fg-secondary);
+}
+
+.views {
+  margin: 4px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.withPanel {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+}
+
+@container (max-width: 680px) {
+  .withPanel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.main {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- frames */
+
+.frameLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.frameLabel > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.frameLabel .muted {
+  flex: 0 1 auto;
+  font-size: var(--fs-small);
+}
+
+.method {
+  flex: 0 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--fg);
+}
+
+.dot {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--cat, var(--fg-faint));
+}
+
+.track {
+  display: block;
+  flex: none;
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  min-width: 1px;
+  border-radius: 3px;
+  background: var(--cat, var(--series-1));
+  transition: width 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+}
+
+.weight {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.sourceIcon {
+  flex: none;
+  color: var(--fg-muted);
+}
+
+/* ---------------------------------------------------------------- call tree */
+
+.tree {
+  height: min(60vh, 560px);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.share {
+  flex: none;
+  width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-secondary);
+  font-size: var(--fs-small);
+}
+
+/* Other calls of the selected method. */
+.sameMethod {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.dim {
+  opacity: 0.45;
+}
+
+/* ---------------------------------------------------------------- methods */
+
+.methods td {
+  height: 22px;
+}
+
+.methodCell {
+  position: relative;
+  max-width: 0;
+  width: 55%;
+}
+
+.methodCell .frameLabel {
+  max-width: calc(100% - 24px);
+}
+
+.inlineAction {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+tr:hover .inlineAction,
+tr[aria-selected="true"] .inlineAction,
+.inlineAction:focus-visible {
+  opacity: 1;
+}
+
+.methods .track {
+  width: 100%;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sortButton:hover {
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- method panel */
+
+.panel {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 160px);
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev, var(--bg-app));
+  animation: panel-in 150ms ease-out;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}
+
+.panelHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.panelHead .dot {
+  margin-top: 6px;
+}
+
+.panelTitle {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.panelTitle .muted {
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelMethod {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg-strong);
+  overflow-wrap: anywhere;
+}
+
+.openButton {
+  align-self: flex-start;
+}
+
+.note {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: var(--fs-small);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat dt {
+  font-size: var(--fs-small);
+}
+
+.stat dd {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .track {
+  width: 100%;
+}
+
+.statValue {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+
+.neighbours {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panelHeading {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.neighbourList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.neighbour {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.neighbour:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.neighbour:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.neighbour:disabled {
+  cursor: default;
+}
+
+.neighbour .track {
+  width: 36px;
+}
+
+.neighbourSelf {
+  display: flex;
+  align-items: center;
+  padding: 3px 4px 3px 48px;
+  font-size: var(--fs-small);
+}

@@ -1,5 +1,8 @@
-import { call, commands, type RunConfig } from "@/platform/ipc";
+import { tx } from "@/platform/i18n";
+import { call, commands, nextRequestId, type RunConfig } from "@/platform/ipc";
 import type { RunConfigTypeContribution } from "@/workbench/contributions";
+import { updatePolicyDefaults, updatePolicyFields } from "./updatePolicies";
+import { runUpdateBuild } from "./buildUpdate";
 
 export const tomcatType: RunConfigTypeContribution = {
   id: "tomcat",
@@ -9,9 +12,16 @@ export const tomcatType: RunConfigTypeContribution = {
   description: "Run a WAR application in a local Tomcat server",
   debugAdapter: "java-debug",
   terminal: false,
-  defaults: { deployment: "artifact", httpPort: "8080", buildArtifact: "true", openBrowser: "true" },
+  defaults: {
+    deployment: "artifact",
+    httpPort: "8080",
+    buildArtifact: "true",
+    openBrowser: "true",
+    ...updatePolicyDefaults,
+  },
   fields: [
-    { key: "tomcatHome", label: "Tomcat installation directory", required: true, mono: true },
+    ...updatePolicyFields(true),
+    { key: "tomcatHome", label: "Tomcat installation directory", required: true, mono: true, browse: "directory" },
     {
       key: "deployment",
       label: "Deployment",
@@ -26,6 +36,7 @@ export const tomcatType: RunConfigTypeContribution = {
       key: "deploymentPath",
       label: "Deployment path",
       mono: true,
+      browse: (p) => (p.deployment === "war" ? "file" : "directory"),
       required: true,
       visible: (p) => p.deployment !== "artifact",
     },
@@ -50,6 +61,7 @@ export const tomcatType: RunConfigTypeContribution = {
       key: "jre",
       label: "JRE",
       mono: true,
+      browse: "directory",
       placeholder: "Project JDK",
       hint: "Java installation directory; empty uses the project JDK",
     },
@@ -82,15 +94,26 @@ export const tomcatType: RunConfigTypeContribution = {
 export async function buildTomcatArtifact(config: RunConfig): Promise<void> {
   const build = await call(commands.runTomcatBuild(config));
   if (!build) return;
-  const { startRun } = await import("./store");
-  let finish!: (ok: boolean) => void;
-  const exited = new Promise<boolean>((resolve) => {
-    finish = resolve;
-  });
-  const session = await startRun(build, undefined, undefined, {
-    onExit: (code, stopped) => finish(code === 0 && !stopped),
-  });
-  if (!session || session.status === "failed" || !(await exited)) throw new Error("WAR artifact build failed");
+  await runUpdateBuild(build);
+}
+
+/**
+ * Updates a running artifact deployment without rebuilding the WAR: compiles the WAR module
+ * incrementally and copies its changed classes, resources and web files into the deployment.
+ * `false` when that isn't possible (other deployment kinds, no Java language server, a changed
+ * dependency module): the caller rebuilds the WAR.
+ */
+export async function syncTomcatOutputs(config: RunConfig, resourcesOnly: boolean): Promise<boolean> {
+  const p = config.params ?? {};
+  if ((p.deployment ?? "artifact") !== "artifact") return false;
+  const artifacts = await call(commands.runTomcatArtifacts());
+  const artifact = p.artifact ? artifacts.find((a) => a.id === p.artifact) : artifacts[0];
+  if (!artifact) return false;
+  const info = await call(commands.javaResolveLaunch(artifact.module, false, true, nextRequestId())).catch(() => null);
+  if (!info) return false;
+  if (info.build === "failed" || info.build === "withErrors" || info.build === "cancelled")
+    throw new Error(tx("Application update build failed"));
+  return call(commands.runTomcatSync(config, artifact.module, info.classPaths, resourcesOnly));
 }
 
 export function tomcatBrowserUrl(config: RunConfig): string {

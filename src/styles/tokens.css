@@ -15,10 +15,21 @@ html {
   --fw-code-bold: 700;
 }
 :root {
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --splash-logo-size: 56px;
+  --splash-bar-width: 120px;
+  --splash-bar-height: 2px;
+  --splash-gap: 14px;
+  --splash-offset: 38px;
+  --splash-progress-duration: 4s;
+  --splash-progress-easing: cubic-bezier(0.1, 0.7, 0.3, 1);
   /* surfaces */
   --bg-app: #191a1c;
   --bg-elev: #212326;
   --bg-popup: #26282c;
+  --bg-floating-toolbar: #33353b;
   --bg-hover: #2e2f30;
   --bg-selected: #2a4371;
   --bg-selected-strong: #2e4d89;
@@ -82,6 +93,12 @@ html {
   --coverage-covered: var(--gutter-added);
   --coverage-partial: var(--warning);
   --coverage-uncovered: var(--danger);
+  /* CPU trace heat in the editor, warm to hot, from the theme's status colours */
+  --perf-heat-1: color-mix(in oklab, var(--warning) 40%, transparent);
+  --perf-heat-2: color-mix(in oklab, var(--warning) 75%, transparent);
+  --perf-heat-3: var(--warning);
+  --perf-heat-4: color-mix(in oklab, var(--warning) 45%, var(--danger));
+  --perf-heat-5: var(--danger);
   /* profiler flame graph: warm, low-contrast frames; search matches in the accent */
   --flame-1: color-mix(in srgb, var(--warning) 45%, var(--bg-elev));
   --flame-2: color-mix(in srgb, var(--warning) 32%, var(--bg-elev));
@@ -237,6 +254,14 @@ html {
   --radius-control: 4px;
   --radius-tab: 6px;
   --radius-toolbar-button: 6px;
+  --radius-floating-toolbar: 3px;
+  --h-floating-toolbar-button: 22px;
+  --floating-toolbar-top: 25px;
+  --floating-toolbar-browser-top: 32px;
+  --floating-toolbar-right: 20px;
+  --floating-toolbar-opacity: 55%;
+  --dur-floating-toolbar-show: 500ms;
+  --dur-floating-toolbar-hide: 1000ms;
   --radius-tooltip: 6px;
 
   --shadow-popup: 0 6px 20px rgba(0, 0, 0, 0.45);
@@ -302,6 +327,8 @@ html {
   --bg-tree-selected: #2a4371;
   --bg-tree-selected-inactive: #33353b;
   --bg-tree-hover: #ffffff10;
+  /* IDEA's "Tests" file colour (FileColor.Green), derived so every theme gets a matching tint. */
+  --bg-file-tests: color-mix(in srgb, var(--success) 14%, var(--bg-island));
   --bg-list-selected: var(--bg-tree-selected);
   --bg-toolbar-hover: #ffffff17;
   --bg-toolbar-pressed: #ffffff29;
@@ -400,6 +427,7 @@ html {
   --bg-app: #ffffff;
   --bg-elev: #f7f8f9;
   --bg-popup: #ffffff;
+  --bg-floating-toolbar: #ffffff;
   --bg-hover: #ededed;
   --bg-selected: #d0dffe;
   --bg-selected-strong: #bdd3ff;
@@ -660,6 +688,8 @@ html {
   --bg-app: #000000;
   --bg-elev: #0e0f11;
   --bg-popup: #111214;
+  --bg-floating-toolbar: #1a1b1e;
+  --floating-toolbar-opacity: 100%;
   --bg-hover: #1c1e22;
   --bg-selected: #1f3a73;
   --bg-selected-strong: #2a4b8f;
@@ -914,6 +944,7 @@ html {
   --bg-inlay: var(--palette-panel);
   --bg-fold-placeholder: var(--palette-panel);
   --bg-popup: var(--palette-popup);
+  --bg-floating-toolbar: var(--palette-popup);
   --bg-tooltip: var(--palette-popup);
   --bg-hover: var(--palette-hover);
   --bg-control-hover: var(--palette-hover);

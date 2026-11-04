@@ -738,6 +738,50 @@ async fn a_stop_ahead_of_its_prompt_cancels_it() {
     assert!(cli.sent.lock()[0].iter().all(|m| m["type"] != "user"), "nothing was sent");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_turn_reports_its_failure() {
+    let text = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    let lifecycle = |uuid: &str, state: &str| {
+        Frame::Cli(json!({ "type": "command_lifecycle", "command_uuid": uuid, "state": state }))
+    };
+    let result = |uuid: &str| {
+        Frame::Cli(json!({
+            "type": "result", "subtype": "success", "is_error": true, "result": text, "stop_reason": "stop_sequence",
+            "terminal_reason": "api_error", "origin": { "kind": "human" }, "user_message_uuids": [uuid],
+        }))
+    };
+    // As Claude Code sends it, and with the turn's end ahead of its result.
+    for lifecycle_first in [false, true] {
+        let mut process = load_fixture("simple").remove(0);
+        process.truncate(6);
+        let Some(Frame::Shim(prompt)) = process.last() else { panic!("the fixture's prompt") };
+        let uuid = prompt["uuid"].as_str().unwrap().to_owned();
+        process.push(Frame::Cli(json!({
+            "type": "assistant", "error": "authentication_failed", "parent_tool_use_id": null,
+            "message": { "id": "m", "model": "<synthetic>", "content": [{ "type": "text", "text": text }] },
+        })));
+        if lifecycle_first {
+            process.extend([lifecycle(&uuid, "cancelled"), result(&uuid)]);
+        } else {
+            process.extend([result(&uuid), lifecycle(&uuid, "cancelled")]);
+        }
+        let cli = Arc::new(Replay {
+            processes: Mutex::new(VecDeque::from([process])),
+            sent: Arc::default(),
+            launched: Mutex::default(),
+            errors: Arc::default(),
+        });
+        let (dir, cwd) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let h =
+            Harness::connect(cli.clone(), dir.path().into(), dir.path().join("p"), cwd.path().into(), Vec::new()).await;
+        let s = h.new_session().await;
+        let Err(RpcError::Server { message, .. }) = h.prompt(&s, "hi").await else {
+            panic!("the turn should fail (lifecycle first: {lifecycle_first})");
+        };
+        assert_eq!(message, format!("Claude Code authentication failed: {text}"));
+    }
+}
+
 /// Fork and undo against the real CLI, across connections, in a symlinked directory
 /// (macOS `/tmp`).
 #[tokio::test(flavor = "multi_thread")]
@@ -829,6 +873,7 @@ fn which_result_ends_a_turn() {
     assert!(!belongs(&t, &json!({"user_message_uuids": ["a"]})), "a steer superseded it");
     assert!(belongs(&t, &json!({"subtype": "error_during_execution"})), "names no message");
     assert!(!belongs(&t, &json!({"origin": {"kind": "task-notification"}})), "Claude Code's own turn");
+    assert!(belongs(&t, &json!({"origin": {"kind": "human"}, "user_message_uuids": ["b"]})), "the prompt's own result");
     assert!(belongs(&turn(&["a", "b"], true), &json!({"user_message_uuids": ["a"]})));
 }
 
@@ -966,6 +1011,39 @@ fn streamed_text_is_not_sent_twice() {
     // Usage needs the window, which a result reports.
     let usage = t.on_result(&json!({"modelUsage": {"x": {"contextWindow": 1000}}}));
     assert_eq!(usage[0].update, json!({"sessionUpdate": "usage_update", "used": 15, "size": 1000}));
+}
+
+#[test]
+fn rate_limits_and_cost() {
+    let mut t = Translator::new("s", PathBuf::from("/w"), false);
+    let info = json!({"status": "allowed", "rateLimitType": "five_hour", "unifiedWindows": {
+        "five_hour": {"utilization": 0.19, "resetsAt": 100, "status": "allowed"},
+        "seven_day": {"utilization": 0.09, "resetsAt": 200, "status": "allowed"},
+    }});
+    let limits = t.on_rate_limit(&info).unwrap();
+    assert_eq!(limits.session, "s");
+    assert_eq!(limits.update["sessionUpdate"], crate::LIMITS_UPDATE);
+    let windows: Vec<(&str, i64, f64)> = limits.update["limits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            (
+                l["window"].as_str().unwrap(),
+                l["usedPercent"].as_f64().unwrap().round() as i64,
+                l["resetsMs"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(windows, [("five_hour", 19, 100_000.0), ("seven_day", 9, 200_000.0)]);
+    // Older versions report the window that applies, alone.
+    let single = t.on_rate_limit(&json!({"rateLimitType": "seven_day", "utilization": 0.5})).unwrap();
+    assert_eq!(single.update["limits"], json!([{"window": "seven_day", "usedPercent": 50.0, "resetsMs": null}]));
+    assert_eq!(t.on_rate_limit(&json!({"status": "allowed", "resetsAt": 100})), None, "no utilization, no update");
+
+    t.used = Some(10);
+    let usage = t.on_result(&json!({"total_cost_usd": 0.5, "modelUsage": {"x": {"contextWindow": 1000}}}));
+    assert_eq!(usage[0].update["cost"], json!({"amount": 0.5, "currency": "USD"}));
 }
 
 #[test]

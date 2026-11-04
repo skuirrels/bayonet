@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { RunConfig } from "@/platform/ipc";
-import { findJavaModule } from "@/platform/javaLaunch";
+import { IpcError, type RunConfig } from "@/platform/ipc";
+import { findJavaModule, prepareJavaLaunch } from "@/platform/javaLaunch";
+import { _resetI18nForTests, setLocale } from "@/platform/i18n";
 import { provideNotificationService } from "@/workbench/contributions";
 import { applicationConfig } from "./application";
-import { resetRuns, saveUserConfigs, startRun } from "./store";
+import { resetRuns, runtime, saveUserConfigs, startRun } from "./store";
 import { applicationType } from "./jvmTypes";
 import { withParams } from "./types";
 
@@ -63,7 +64,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   provideNotificationService({ notify: vi.fn() });
 });
-afterEach(() => resetRuns());
+afterEach(() => {
+  resetRuns();
+  _resetI18nForTests();
+});
 
 it.each(["sibling", "/outside/modules"])("runs from %s using the stored module's classpath", async (cwd) => {
   const session = await startRun({ ...config, module: "app", cwd });
@@ -81,6 +85,44 @@ it("finds the source module for an old saved configuration without a module", as
   expect(ipc.findFiles).toHaveBeenCalledWith("Main.java", 1000);
   expect(ipc.javaResolveLaunch).toHaveBeenCalledWith("app", false, true, expect.any(Number));
   expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/outside/modules" }), expect.anything());
+});
+
+it.each([["-cp", "lib/*"], []])("colours Spring Boot runs without classpath resolution (%j)", async (...classpath) => {
+  const args = ["-Xmx256m", ...classpath, "a.Main", "--spring.profiles.active=dev"];
+  const boot = { ...config, kind: "spring-boot", args };
+  const session = await startRun(boot);
+  expect(session?.status).toBe("running");
+  expect(ipc.runStart).toHaveBeenCalledWith(
+    expect.objectContaining({ args: ["-Dspring.output.ansi.enabled=always", ...args] }),
+    expect.anything(),
+  );
+  expect(ipc.javaResolveLaunch).not.toHaveBeenCalled();
+  expect(boot.args).toBe(args);
+  expect(args).not.toContain("-Dspring.output.ansi.enabled=always");
+});
+
+it.each(["never", "detect", "always"])("preserves an explicit Spring Boot console setting (%s)", async (value) => {
+  const args = [`-Dspring.output.ansi.enabled=${value}`, "-cp", "lib/*", "a.Main"];
+  await startRun({ ...config, kind: "spring-boot", args });
+  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything());
+  expect(ipc.javaResolveLaunch).not.toHaveBeenCalled();
+});
+
+it("keeps plain Java runs with an explicit classpath free of Spring Boot options", async () => {
+  const args = ["-cp", "lib/*", "a.Main"];
+  await startRun({ ...config, args });
+  expect(ipc.runStart).toHaveBeenCalledWith(expect.objectContaining({ args }), expect.anything());
+  expect(ipc.javaResolveLaunch).not.toHaveBeenCalled();
+});
+
+it("adds the Spring Boot console option once when resolving the module classpath", async () => {
+  await startRun({ ...config, kind: "spring-boot", module: "app" });
+  expect(ipc.runStart).toHaveBeenCalledWith(
+    expect.objectContaining({
+      args: ["-Dspring.output.ansi.enabled=always", "-cp", "/p/app/target/classes", "a.Main"],
+    }),
+    expect.anything(),
+  );
 });
 
 it("keeps an explicitly stored root module", async () => {
@@ -111,4 +153,47 @@ it("does not substitute the working directory when sources are missing or ambigu
     ],
   });
   expect(await findJavaModule(config)).toBeNull();
+});
+
+it.each([
+  "jdtls: Given URI does not belong to any Java project.",
+  "jdtls: Launch configuration 1793460461218 references non-existing project parent.",
+])("explains how to import a module when Run fails with %s", async (message) => {
+  ipc.javaResolveLaunch.mockResolvedValueOnce({ status: "error", error: { kind: "protocol", message } } as never);
+  const session = await startRun({ ...config, module: "web" });
+  expect(session?.status).toBe("failed");
+  const output = runtime(session!.id)!
+    .console.lines.map((line) => line.text)
+    .join("\n");
+  expect(output).toContain("Java module 'web' is not imported.");
+  expect(output).toContain("parent Maven or Gradle build");
+  expect(output).toContain("open its folder as a project");
+  expect(ipc.runStart).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["unavailable", "jdtls is not installed (Settings › Languages & Frameworks › Language Servers)"],
+  ["unavailable", "jdtls exited with code 1: wrong Java version"],
+  ["protocol", "jdtls: workspace/executeCommand timed out after 90 s"],
+  ["internal", "Build failed"],
+  ["cancelled", "jdtls: Given URI does not belong to any Java project."],
+] as const)("preserves other launch errors (%s: %s)", async (kind, message) => {
+  const error = new IpcError({ kind, message });
+  ipc.javaResolveLaunch.mockRejectedValueOnce(error);
+  await expect(
+    prepareJavaLaunch({ ...config, module: "web" }, { request: 1, signal: new AbortController().signal }),
+  ).rejects.toBe(error);
+});
+
+it("translates import recovery guidance for a root Spring Boot configuration", async () => {
+  await setLocale("zh");
+  ipc.javaResolveLaunch.mockRejectedValueOnce(
+    new IpcError({ kind: "protocol", message: "jdtls: Given URI does not belong to any Java project." }),
+  );
+  await expect(
+    prepareJavaLaunch(
+      { ...config, kind: "spring-boot", module: "" },
+      { request: 1, signal: new AbortController().signal },
+    ),
+  ).rejects.toThrow("Java 模块 '.' 尚未导入");
 });

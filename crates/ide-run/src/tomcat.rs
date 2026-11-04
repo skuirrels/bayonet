@@ -203,6 +203,94 @@ pub fn explode(war: &Path, destination: &Path, resources_only: bool) -> IdeResul
     remove_stale(destination, destination, &expected, resources_only)
 }
 
+/// Updates the exploded artifact deployment from the module's own class output directories and
+/// its web resources (`src/main/webapp`), file by file and only what changed, instead of
+/// rebuilding and re-exploding the WAR. `module` and `class_paths` are absolute.
+/// `Ok(false)`: not possible this way (not deployed from the artifact yet, the module's output
+/// isn't on the classpath, or a module it depends on was compiled since the last update, whose
+/// archive in `WEB-INF/lib` would be stale) — rebuild the WAR instead.
+pub fn sync_outputs(base: &Path, module: &Path, class_paths: &[PathBuf], resources_only: bool) -> IdeResult<bool> {
+    let dest = base.join("deployment");
+    let manifest = base.join("synced-files.json");
+    let since = [base.join("artifact-path.txt"), manifest.clone()]
+        .iter()
+        .filter_map(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
+        .max();
+    let Some(since) = since else { return Ok(false) };
+    if !dest.join("WEB-INF").is_dir() {
+        return Ok(false);
+    }
+    let (own, others): (Vec<&PathBuf>, Vec<&PathBuf>) =
+        class_paths.iter().filter(|p| p.is_dir()).partition(|p| p.starts_with(module));
+    if own.is_empty() || others.iter().any(|d| modified_since(d, since)) {
+        return Ok(false);
+    }
+    let previous: Vec<String> =
+        fs::read(&manifest).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut current = std::collections::BTreeSet::new();
+    let classes = dest.join("WEB-INF/classes");
+    for dir in own {
+        sync_tree(dir, dir, &classes, Path::new("WEB-INF/classes"), resources_only, &mut current)?;
+    }
+    let webapp = module.join("src/main/webapp");
+    if webapp.is_dir() {
+        sync_tree(&webapp, &webapp, &dest, Path::new(""), resources_only, &mut current)?;
+    }
+    for rel in previous.iter().filter(|p| !current.contains(*p)) {
+        let path = dest.join(rel);
+        if path.is_file() {
+            fs::remove_file(path)?;
+        }
+    }
+    fs::write(manifest, serde_json::to_vec(&current).map_err(invalid)?)?;
+    Ok(true)
+}
+
+fn modified_since(dir: &Path, since: std::time::SystemTime) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return false };
+    entries.flatten().any(|e| match e.file_type() {
+        Ok(t) if t.is_dir() => modified_since(&e.path(), since),
+        Ok(t) if t.is_file() => e.metadata().and_then(|m| m.modified()).is_ok_and(|m| m > since),
+        _ => false,
+    })
+}
+
+/// Copies changed files of `from` (below `root`) to `to`; unchanged files keep their timestamps,
+/// so Tomcat only reloads when a class really changed. Records each source file as `prefix/rel`.
+fn sync_tree(
+    root: &Path,
+    from: &Path,
+    to: &Path,
+    prefix: &Path,
+    resources_only: bool,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> IdeResult<()> {
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            sync_tree(root, &path, to, prefix, resources_only, seen)?;
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let rel = path.strip_prefix(root).map_err(invalid)?;
+        seen.insert(prefix.join(rel).to_string_lossy().replace('\\', "/"));
+        if resources_only && rel.extension().is_some_and(|e| e == "class") {
+            continue;
+        }
+        let target = to.join(rel);
+        let bytes = fs::read(&path)?;
+        if fs::read(&target).ok().as_deref() != Some(&bytes) {
+            fs::create_dir_all(target.parent().unwrap_or(to))?;
+            fs::write(target, bytes)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn deployment(root: &Path, base: &Path, config: &RunConfig, resources_only: bool) -> IdeResult<PathBuf> {
     let p = &config.extras.params;
     match p.get("deployment").map(String::as_str).unwrap_or("artifact") {
@@ -228,8 +316,7 @@ pub fn deployment(root: &Path, base: &Path, config: &RunConfig, resources_only: 
                 .filter(|v| !v.trim().is_empty())
                 .ok_or_else(|| invalid("Choose a WAR file or exploded directory"))?;
             let path = root.join(value);
-            let path = path
-                .canonicalize()
+            let path = dunce::canonicalize(&path)
                 .map_err(|e| invalid(format!("Invalid Tomcat deployment: {} ({e})", path.display())))?;
             if (kind == "war" && (!path.is_file() || !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("war"))))
                 || (kind == "directory" && !path.is_dir())
@@ -264,13 +351,14 @@ pub fn script_command(home: &Path, windows: bool, verb: &str) -> (String, Vec<St
 }
 
 pub fn prepare(root: &Path, cache: &Path, config: &mut RunConfig) -> IdeResult<()> {
-    let home = root
-        .join(config.extras.params.get("tomcatHome").ok_or_else(|| invalid("Choose a Tomcat installation directory"))?)
-        .canonicalize()?;
+    // Batch scripts and their environment variables require ordinary Windows paths.
+    let home = dunce::canonicalize(root.join(
+        config.extras.params.get("tomcatHome").ok_or_else(|| invalid("Choose a Tomcat installation directory"))?,
+    ))?;
     validate_home(&home)?;
     let base = base_dir(cache, &config.id);
     fs::create_dir_all(&base)?;
-    let base = base.canonicalize()?;
+    let base = dunce::canonicalize(&base)?;
     let doc = deployment(root, &base, config, false)?;
     let context = effective_context(config, &doc);
     let context = context_name(&context)?;
@@ -304,7 +392,7 @@ pub fn prepare(root: &Path, cache: &Path, config: &mut RunConfig) -> IdeResult<(
     config.env.insert("CATALINA_HOME".into(), home.to_string_lossy().into_owned());
     config.env.insert("CATALINA_BASE".into(), base.to_string_lossy().into_owned());
     if let Some(jre) = config.extras.params.get("jre").filter(|s| !s.trim().is_empty()) {
-        let jre = root.join(jre).canonicalize()?;
+        let jre = dunce::canonicalize(root.join(jre))?;
         config.env.insert("JAVA_HOME".into(), jre.to_string_lossy().into_owned());
         config.env.insert("JRE_HOME".into(), jre.to_string_lossy().into_owned());
     } else if let Some(java) = config.env.get("JAVA_HOME").cloned() {
@@ -432,11 +520,59 @@ mod tests {
         assert_eq!(fs::read_to_string(dest.join("WEB-INF/classes/App.class")).unwrap(), "class2");
         c.extras.params.insert("deployment".into(), "war".into());
         c.extras.params.insert("deploymentPath".into(), "web app.war".into());
-        assert_eq!(deployment(tmp.path(), &base, &c, false).unwrap(), war.canonicalize().unwrap());
+        assert_eq!(deployment(tmp.path(), &base, &c, false).unwrap(), dunce::canonicalize(&war).unwrap());
         fs::create_dir_all(tmp.path().join("WebContent")).unwrap();
         c.extras.params.insert("deployment".into(), "directory".into());
         c.extras.params.insert("deploymentPath".into(), "WebContent".into());
         assert!(deployment(tmp.path(), &base, &c, false).unwrap().ends_with("WebContent"));
+    }
+    #[test]
+    fn updates_the_exploded_deployment_from_module_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (base, module) = (root.join("base"), root.join("web"));
+        let (dest, out, dep) =
+            (base.join("deployment"), module.join("target/classes"), root.join("core/target/classes"));
+        let webapp = module.join("src/main/webapp");
+        for dir in [dest.join("WEB-INF/classes/a"), out.join("a"), webapp.clone(), dep.clone()] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        for (path, text) in [
+            (dest.join("WEB-INF/classes/a/Same.class"), "same"),
+            (dest.join("WEB-INF/classes/a/App.class"), "old"),
+            (dest.join("index.jsp"), "old"),
+            (out.join("a/Same.class"), "same"),
+            (out.join("a/App.class"), "new"),
+            (out.join("app.properties"), "new"),
+            (webapp.join("index.jsp"), "new"),
+        ] {
+            fs::write(path, text).unwrap();
+        }
+        let paths = [out.clone(), dep.clone(), root.join("lib.jar")];
+        // Not deployed from the artifact yet.
+        assert!(!sync_outputs(&base, &module, &paths, false).unwrap());
+        fs::write(base.join("artifact-path.txt"), "web.war").unwrap();
+        let same = || fs::metadata(dest.join("WEB-INF/classes/a/Same.class")).unwrap().modified().unwrap();
+        let before = same();
+
+        assert!(sync_outputs(&base, &module, &paths, true).unwrap());
+        assert_eq!(fs::read_to_string(dest.join("WEB-INF/classes/a/App.class")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(dest.join("WEB-INF/classes/app.properties")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(dest.join("index.jsp")).unwrap(), "new");
+
+        assert!(sync_outputs(&base, &module, &paths, false).unwrap());
+        assert_eq!(fs::read_to_string(dest.join("WEB-INF/classes/a/App.class")).unwrap(), "new");
+        assert_eq!(same(), before);
+
+        fs::remove_file(out.join("app.properties")).unwrap();
+        assert!(sync_outputs(&base, &module, &paths, false).unwrap());
+        assert!(!dest.join("WEB-INF/classes/app.properties").exists());
+        assert!(dest.join("WEB-INF/classes/a/Same.class").exists());
+
+        // A dependency module compiled since: its archive in WEB-INF/lib is stale.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        fs::File::create(dep.join("Core.class")).unwrap().set_modified(later).unwrap();
+        assert!(!sync_outputs(&base, &module, &paths, false).unwrap());
     }
     #[test]
     fn deployment_errors_identify_the_checked_path() {
@@ -463,11 +599,22 @@ mod tests {
     #[test]
     fn prepares_isolated_base_and_jdwp_only_for_run() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("Tomcat Home");
+        check_prepared_paths(tmp.path());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn prepares_plain_windows_paths_from_verbatim_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = PathBuf::from(format!(r"\\?\{}", dunce::canonicalize(tmp.path()).unwrap().display()));
+        check_prepared_paths(&root);
+    }
+    fn check_prepared_paths(root: &Path) {
+        let home = root.join("Tomcat Home");
         fs::create_dir_all(home.join("bin")).unwrap();
         fs::create_dir_all(home.join("conf")).unwrap();
-        fs::create_dir_all(tmp.path().join("WebRoot")).unwrap();
+        fs::create_dir_all(root.join("WebRoot")).unwrap();
         fs::write(home.join("bin/catalina.sh"), "").unwrap();
+        fs::write(home.join("bin/catalina.bat"), "").unwrap();
         archive(
             &home.join("lib/catalina.jar"),
             &[("org/apache/catalina/util/ServerInfo.properties", "server.info=Apache Tomcat/10.1")],
@@ -486,17 +633,35 @@ mod tests {
             c.extras.params.insert(k.into(), v.into());
         }
         c.env.insert("JAVA_HOME".into(), "/jdk with spaces".into());
-        prepare(tmp.path(), &tmp.path().join("cache"), &mut c).unwrap();
+        let cache = root.join("cache");
+        prepare(root, &cache, &mut c).unwrap();
         assert_eq!(fs::read_to_string(home.join("conf/server.xml")).unwrap(), server);
         let base = PathBuf::from(&c.env["CATALINA_BASE"]);
-        assert!(base.join("conf/Catalina/localhost/app.xml").is_file());
+        let context = base.join("conf/Catalina/localhost/app.xml");
+        let doc = dunce::canonicalize(root.join("WebRoot")).unwrap();
+        assert_eq!(fs::read_to_string(&context).unwrap(), context_xml(&doc, false));
+        assert_eq!(c.env["CATALINA_HOME"], dunce::canonicalize(&home).unwrap().to_string_lossy());
+        assert_eq!(base, dunce::canonicalize(base_dir(&cache, &c.id)).unwrap());
         assert!(c.env["CATALINA_OPTS"].contains("suspend=n,address=127.0.0.1:0"));
         assert!(c.env["CATALINA_OPTS"].contains("-Xmx256m"));
         assert!(!c.env.get("JAVA_OPTS").is_some_and(|s| s.contains("jdwp")));
         assert_eq!(c.env["JRE_HOME"], "/jdk with spaces");
-        let stop = c.extras.stop_command.unwrap();
+        let stop = c.extras.stop_command.as_ref().unwrap();
         assert!(stop.contains("stop"));
         let script = if cfg!(windows) { "catalina.bat" } else { "catalina.sh" };
         assert!(stop.contains(script));
+
+        fs::create_dir_all(root.join("JDK Home")).unwrap();
+        c.extras.params.insert("jre".into(), "JDK Home".into());
+        prepare(root, &cache, &mut c).unwrap();
+        let jre = dunce::canonicalize(root.join("JDK Home")).unwrap();
+        for key in ["JAVA_HOME", "JRE_HOME"] {
+            assert_eq!(c.env[key], jre.to_string_lossy());
+        }
+        assert!(!c.command.contains(r"\\?\"));
+        assert!(c.args.iter().all(|arg| !arg.contains(r"\\?\")));
+        assert!(!c.extras.stop_command.as_ref().unwrap().contains(r"\\?\"));
+        assert!(c.env.values().all(|value| !value.contains(r"\\?\")));
+        assert!(!fs::read_to_string(context).unwrap().contains(r"\\?\"));
     }
 }
