@@ -77,8 +77,7 @@ jobs:
       - run: dotnet build DotnetFixture.sln
         working-directory: fixtures/dotnet
 
-  # The remote development server ships as a static Linux binary (release.yml):
-  # keep that build working.
+  # The remote development server ships as a static Linux binary: keep that build working.
   server:
     name: Remote server (linux musl)
     runs-on: ubuntu-22.04
