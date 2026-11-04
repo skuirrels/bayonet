@@ -1,0 +1,149 @@
+/**
+ * PyCharm's top-level "Python" group (Interpreter), "Project Structure", and
+ * Languages & Frameworks › .NET / Go / Java / Node.js / Rust / TypeScript. Pages live in
+ * `../languages/`; settings are `languages.*` / `projectStructure.*`.
+ */
+import { DotnetPage, GoPage, JavaPage, NodePage, RustPage, TypeScriptPage } from "../languages/LanguagePages";
+import { ProjectStructurePage } from "../languages/ProjectStructurePage";
+import { PythonInterpreterPage } from "../languages/PythonInterpreterPage";
+import { GoBuildTagsPage, GO_BUILD_TAG_SECTIONS } from "../languages/GoBuildTags";
+import { GoModulesPage, GO_MODULE_SECTIONS } from "../languages/GoModules";
+import type { PageSpec } from "./spec";
+
+export const LANGUAGES_GROUP = "Languages & Frameworks";
+
+export const LANGUAGE_PAGES: PageSpec[] = [
+  {
+    id: "python.interpreter",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Python Interpreter",
+    group: LANGUAGES_GROUP,
+    order: 403,
+    keywords: [
+      "python interpreter",
+      "sdk",
+      "virtualenv",
+      "venv",
+      "conda",
+      "pyenv",
+      "packages",
+      "pip",
+      "install package",
+      "add interpreter",
+      "activate virtualenv",
+    ],
+    component: PythonInterpreterPage,
+  },
+  {
+    id: "projectStructure",
+    title: "Project Structure",
+    // IntelliJ IDEA order: … Version Control, Project Structure, Build, Execution, Deployment, Languages & Frameworks …
+    order: 350,
+    keywords: ["content root", "sources root", "test sources", "resources", "excluded", "mark directory as"],
+    component: ProjectStructurePage,
+  },
+  {
+    id: "languages.dotnet",
+    projectScope: true,
+    defaultScope: "project",
+    title: ".NET",
+    group: LANGUAGES_GROUP,
+    order: 385,
+    keywords: ["dotnet", "dotnet root", "sdk", "global.json", "c#", "csharp", "f#", "fsharp", "roslyn"],
+    component: DotnetPage,
+  },
+  {
+    id: "languages.go",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Go",
+    group: LANGUAGES_GROUP,
+    order: 390,
+    keywords: ["goroot", "gopath", "go sdk", "gopls"],
+    component: GoPage,
+  },
+  {
+    id: "languages.go.buildTags",
+    title: "Build Tags",
+    group: LANGUAGES_GROUP,
+    order: 391,
+    projectScope: true,
+    defaultScope: "project",
+    ownScopeSwitch: true,
+    sections: GO_BUILD_TAG_SECTIONS,
+    component: GoBuildTagsPage,
+  },
+  {
+    id: "languages.go.modules",
+    title: "Go Modules",
+    group: LANGUAGES_GROUP,
+    order: 392,
+    projectScope: true,
+    defaultScope: "project",
+    ownScopeSwitch: true,
+    sections: GO_MODULE_SECTIONS,
+    component: GoModulesPage,
+  },
+  {
+    id: "languages.java",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Java",
+    group: LANGUAGES_GROUP,
+    order: 395,
+    keywords: [
+      "jdk",
+      "project sdk",
+      "java home",
+      "jdtls",
+      "language server jdk",
+      "jdk for importer",
+      "jvm options",
+      "vmargs",
+      "lombok",
+      "javaagent",
+      "eclipse jdt",
+    ],
+    component: JavaPage,
+  },
+  {
+    id: "languages.node",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Node.js",
+    group: LANGUAGES_GROUP,
+    order: 402,
+    keywords: ["node interpreter", "package manager", "npm", "pnpm", "yarn", "bun", "nvm"],
+    component: NodePage,
+  },
+  {
+    id: "languages.rust",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Rust",
+    group: LANGUAGES_GROUP,
+    order: 404,
+    keywords: [
+      "toolchain",
+      "rustup",
+      "standard library",
+      "external linter",
+      "clippy",
+      "cargo check",
+      "rustfmt",
+      "rust-analyzer",
+    ],
+    component: RustPage,
+  },
+  {
+    id: "languages.typescript",
+    projectScope: true,
+    defaultScope: "project",
+    title: "TypeScript",
+    group: LANGUAGES_GROUP,
+    order: 405,
+    keywords: ["typescript version", "tsdk", "tsserver", "node_modules", "vtsls"],
+    component: TypeScriptPage,
+  },
+];

@@ -1,0 +1,145 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FileEntry } from "@/bindings";
+import { registerProjectViewRoot } from "@/workbench/contributions";
+
+vi.mock("@/workbench/messages", () => ({
+  confirm: async () => true,
+  confirmChecked: async () => ({ checked: false }),
+  ask: async () => ({ button: "cancel", checked: false }),
+}));
+vi.mock("@/editor/refactor", () => ({
+  fileUsages: async () => ({ status: "ok", usages: [] }),
+  askUsagesDetected: async () => "cancel",
+  viewUsages: () => {},
+}));
+
+const { MemoryFs, setProjectFsForTests } = await import("./fs");
+const { DEFAULT_TREE_OPTIONS, buildModel, withExtraRoots } = await import("./model");
+const { currentModel, initProjectTree, loadDir, revealPath, useProjectTree } = await import("./store");
+const { beginRename, commitEditing, deleteSelection } = await import("./operations");
+
+const entry = (path: string, kind: "file" | "dir" = "file"): FileEntry => ({
+  name: path.slice(path.lastIndexOf("/") + 1),
+  path,
+  kind,
+  size: 0,
+  mtimeMs: 1,
+  ignored: false,
+  excluded: false,
+  hidden: false,
+});
+
+describe("withExtraRoots", () => {
+  it("appends contributed roots after the project root with their own children", () => {
+    const listings = new Map([
+      ["/p", [entry("/p/a.txt")]],
+      ["/data/scratches", [entry("/data/scratches/scratch.java")]],
+    ]);
+    const base = buildModel({ path: "/p", name: "proj" }, listings, DEFAULT_TREE_OPTIONS);
+    const m = withExtraRoots(
+      base,
+      [{ path: "/data/scratches", label: "Scratches", icon: "scratches" }],
+      listings,
+      DEFAULT_TREE_OPTIONS,
+    );
+    expect(m.roots.map((r) => [r.label, r.root, r.icon])).toEqual([
+      ["proj", true, undefined],
+      ["Scratches", true, "scratches"],
+    ]);
+    expect(m.children.get("/data/scratches")!.map((n) => n.label)).toEqual(["scratch.java"]);
+    expect(m.keyOfPath.get("/data/scratches/scratch.java")).toBe("/data/scratches/scratch.java");
+    // The base model is untouched.
+    expect(base.roots).toHaveLength(1);
+  });
+
+  it("leaves out the names a root hides until hidden files are shown", () => {
+    const listings = new Map([
+      ["/s/App", [entry("/s/App/bin", "dir"), entry("/s/App/obj", "dir"), entry("/s/App/Program.cs")]],
+    ]);
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    const extras = [{ path: "/s/App", label: "App", icon: "file-csharp", hide: ["bin", "obj"] }];
+    const m = withExtraRoots(base, extras, listings, DEFAULT_TREE_OPTIONS);
+    expect(m.children.get("/s/App")!.map((n) => n.label)).toEqual(["Program.cs"]);
+    const all = withExtraRoots(base, extras, listings, { ...DEFAULT_TREE_OPTIONS, showHidden: true });
+    expect(all.children.get("/s/App")!.map((n) => n.label)).toEqual(["bin", "obj", "Program.cs"]);
+  });
+
+  it("lists a project's Dependencies before its files, with read-only generated sources", () => {
+    const gen = "/c/generated/out/s/App/App.csproj";
+    const listings = new Map([
+      ["/s/App", [entry("/s/App/Program.cs")]],
+      [gen, [entry(`${gen}/Gen`, "dir")]],
+      [`${gen}/Gen`, [entry(`${gen}/Gen/Names.g.cs`)]],
+    ]);
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    const deps = {
+      id: "dependencies",
+      label: "Dependencies",
+      icon: "library",
+      children: [{ label: "Analyzers", icon: "analyzer", path: gen, readOnly: true }],
+    };
+    const extras = [{ path: "/s/App", label: "App", icon: "project-csharp", prepend: [deps] }];
+    const m = withExtraRoots(base, extras, listings, DEFAULT_TREE_OPTIONS);
+    const kids = m.children.get("/s/App")!;
+    expect(kids.map((n) => n.label)).toEqual(["Dependencies", "Program.cs"]);
+    expect(kids[0]!.group).toBe(true);
+    const [analyzers] = m.children.get(kids[0]!.key)!;
+    expect(analyzers!.label).toBe("Analyzers");
+    expect(analyzers!.readOnly).toBe(true);
+    const [assembly] = m.children.get(analyzers!.key)!;
+    const [file] = m.children.get(assembly!.key)!;
+    expect([file!.path, file!.readOnly]).toEqual([`${gen}/Gen/Names.g.cs`, true]);
+    // Not listed yet: nothing to prepend to, so expanding still reads the folder.
+    expect(withExtraRoots(base, extras, new Map(), DEFAULT_TREE_OPTIONS).children.get("/s/App")).toBeUndefined();
+  });
+
+  it("returns the model itself without extra roots", () => {
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    expect(withExtraRoots(base, [], new Map(), DEFAULT_TREE_OPTIONS)).toBe(base);
+  });
+});
+
+describe("project view with a scratches root", () => {
+  let unregister = () => {};
+  beforeEach(() => {
+    localStorage.clear();
+    const fs = new MemoryFs({ "/p/README.md": "x", "/data/scratches/scratch.py": "x" }, "/p");
+    setProjectFsForTests(fs, "/p");
+    initProjectTree("/p", "proj");
+    unregister = registerProjectViewRoot({
+      id: "scratches",
+      label: "Scratches",
+      icon: "scratches",
+      path: "/data/scratches",
+    });
+  });
+  afterEach(() => {
+    unregister();
+    setProjectFsForTests(null);
+    initProjectTree(null);
+  });
+
+  const scratchLabels = () => (currentModel().children.get("/data/scratches") ?? []).map((n) => n.label);
+
+  it("lists, reveals, renames and deletes scratch files", async () => {
+    await loadDir("/data/scratches");
+    expect(currentModel().roots.map((r) => r.label)).toEqual(["proj", "Scratches"]);
+    expect(scratchLabels()).toEqual(["scratch.py"]);
+
+    expect(revealPath("/data/scratches/scratch.py")).toBe(true);
+    expect(useProjectTree.getState().expanded.has("/data/scratches")).toBe(true);
+
+    beginRename(currentModel().byKey.get("/data/scratches/scratch.py")!);
+    expect(await commitEditing("notes.py")).toBe(true);
+    expect(scratchLabels()).toEqual(["notes.py"]);
+
+    await deleteSelection([currentModel().byKey.get("/data/scratches/notes.py")!]);
+    expect(scratchLabels()).toEqual([]);
+  });
+
+  it("never deletes the scratches root itself", async () => {
+    await loadDir("/data/scratches");
+    await deleteSelection([currentModel().byKey.get("/data/scratches")!]);
+    expect(scratchLabels()).toEqual(["scratch.py"]);
+  });
+});

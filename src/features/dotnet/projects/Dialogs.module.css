@@ -1,0 +1,97 @@
+.newProject {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) 3fr;
+  gap: 16px;
+  height: 460px;
+  min-height: 0;
+}
+.templates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.templateList {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  color: var(--fg-muted);
+}
+.templateRow {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 4px;
+}
+.templateName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.templateMeta {
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+.templateTitle {
+  font-weight: 600;
+  font-size: var(--fs-input-large);
+}
+.templateDescription {
+  margin: -4px 0 0;
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+.field {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.field > span:first-child {
+  color: var(--fg-muted);
+}
+.row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.hint {
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.error {
+  color: var(--danger);
+  font-size: var(--fs-small);
+  white-space: pre-wrap;
+}
+.references {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}

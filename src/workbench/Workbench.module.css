@@ -1,0 +1,45 @@
+.workbench {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-app);
+  color: var(--fg);
+}
+/* Islands frame; the project colour washes in from the top-left corner (IDEA project gradient). */
+.framed {
+  background:
+    radial-gradient(
+      600px 300px at 0 0,
+      color-mix(in srgb, var(--project-color) var(--project-gradient-strength, 22%), transparent),
+      transparent
+    ),
+    var(--bg-frame);
+}
+
+/* LightEdit: the editor as the only island, inset like the project frame's. */
+.lightEditFrame {
+  background: var(--bg-frame);
+}
+.lightEdit {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--island-gap);
+}
+.lightEditIsland {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-island);
+  border-radius: var(--island-radius);
+}
+
+/* Settings › Appearance › "Use project colors in main toolbar" off. */
+:global(:root[data-project-colors="off"]) .framed {
+  background: var(--bg-frame);
+}

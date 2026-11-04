@@ -1,0 +1,26 @@
+[package]
+name = "ide-vfs"
+description = "File system access: directory listing, text loading/saving with encoding detection, watching, project walking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dunce.workspace = true
+gix = { workspace = true, features = ["sha1", "sha256"] }
+ide-core.workspace = true
+serde.workspace = true
+specta.workspace = true
+ignore.workspace = true
+globset.workspace = true
+notify-debouncer-full.workspace = true
+encoding_rs.workspace = true
+chardetng.workspace = true
+trash.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

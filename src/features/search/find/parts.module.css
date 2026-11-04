@@ -1,0 +1,130 @@
+.text {
+  white-space: pre;
+}
+/* Lezer classHighlighter tokens of result lines (same colours as Search Everywhere's text hits). */
+.code :global(.tok-keyword),
+.code :global(.tok-modifier),
+.code :global(.tok-controlKeyword),
+.code :global(.tok-operatorKeyword) {
+  color: var(--syn-keyword);
+}
+.code :global(.tok-string),
+.code :global(.tok-string2) {
+  color: var(--syn-string);
+}
+.code :global(.tok-number),
+.code :global(.tok-bool),
+.code :global(.tok-atom) {
+  color: var(--syn-number);
+}
+.code :global(.tok-typeName),
+.code :global(.tok-className),
+.code :global(.tok-namespace) {
+  color: var(--syn-type);
+}
+.code :global(.tok-comment) {
+  color: var(--syn-comment);
+}
+.code :global(.tok-meta),
+.code :global(.tok-macroName) {
+  color: var(--syn-annotation);
+}
+.code :global(.tok-propertyName) {
+  color: var(--syn-property);
+}
+.code :global(.tok-variableName.tok-definition) {
+  color: var(--syn-function);
+}
+.match {
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+  border-radius: 2px;
+}
+.matchActive {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.removed {
+  color: var(--fg-subtle);
+  text-decoration: line-through;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.inserted {
+  color: var(--fg-strong);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+}
+.preview {
+  /* offsetParent for the scroll-to-line math in ReplaceDiffPreview. */
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-app);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-code);
+  font-size: var(--fs-ui);
+  line-height: 19px;
+  color: var(--fg);
+}
+.previewEditor {
+  position: absolute;
+  inset: 0;
+}
+.previewHidden {
+  visibility: hidden;
+}
+.previewEmpty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+}
+.pre {
+  margin: 0;
+  padding: 4px 0;
+  font: inherit;
+  min-width: max-content;
+}
+.codeLine {
+  display: flex;
+  white-space: pre;
+}
+.currentLine {
+  background: var(--bg-current-line);
+}
+.gutter {
+  flex: none;
+  position: sticky;
+  left: 0;
+  width: 48px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--fg-gutter);
+  background: inherit;
+  background-color: var(--bg-app);
+}
+.currentLine .gutter {
+  color: var(--fg-muted);
+  background-color: var(--bg-current-line);
+}
+.code {
+  padding-right: 16px;
+}
+.lineDeleted {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.lineAdded {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.lineDeleted .gutter,
+.lineAdded .gutter {
+  background-color: transparent;
+}
+.sign {
+  flex: none;
+  width: 14px;
+  color: var(--fg-faint);
+}

@@ -1,0 +1,99 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { EditorView } from "@codemirror/view";
+import { history, undo } from "@codemirror/commands";
+import { editorsFor } from "@/editor/api";
+import { createMemoryBackend } from "../backend";
+import { _resetLanguages } from "../cm/languages";
+import { attachDocument } from "./attachment";
+import { DocumentManager, useDocMeta } from "./document";
+import { EditorSlot, type SlotHost } from "./slot";
+
+const host: SlotHost = {
+  onFocus: () => {},
+  onBlur: () => {},
+  onSelection: () => {},
+  onUserEdit: () => {},
+  onContextMenu: () => {},
+};
+
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+function setup(files: Record<string, string>) {
+  _resetLanguages();
+  const backend = createMemoryBackend(files);
+  const scheduled: Array<() => void> = [];
+  const manager = new DocumentManager(backend, { settings: () => ({}), notify: vi.fn() }, (fn) => scheduled.push(fn));
+  manager.start();
+  const frame = async () => {
+    scheduled.splice(0).forEach((f) => f());
+    await settle();
+  };
+  return { backend, manager, frame };
+}
+
+afterEach(() => useDocMeta.setState({}, true));
+
+describe("attached document views (editable diff side)", () => {
+  it("shares the document with editor tabs both ways and syncs to the backend", async () => {
+    const { backend, manager, frame } = setup({ "/p/a.txt": "one\ntwo\n" });
+    const model = await manager.acquire("/p/a.txt");
+    const tab = new EditorSlot(model, "t1", host);
+    const att = await attachDocument(manager, "/p/a.txt");
+    expect(att.readOnly).toBe(false);
+    const view = new EditorView({ doc: att.text(), extensions: [att.extension, history()] });
+    expect(editorsFor("/p/a.txt").some((h) => h.view === view)).toBe(true);
+
+    // Typing in the diff reaches the tab and the backend.
+    view.dispatch({ changes: { from: 0, insert: ">" }, userEvent: "input.type" });
+    expect(tab.currentState().doc.toString()).toBe(">one\ntwo\n");
+    await frame();
+    expect(backend.docs.get(model.doc)?.text).toBe(">one\ntwo\n");
+    expect(useDocMeta.getState()["/p/a.txt"]?.dirty).toBe(true);
+
+    // Typing in the tab is mirrored into the diff, without entering its undo history.
+    tab.dispatchLocal({ changes: { from: 4, insert: "!" } });
+    expect(view.state.doc.toString()).toBe(">one!\ntwo\n");
+    undo(view);
+    expect(view.state.doc.toString()).toBe("one!\ntwo\n");
+    expect(tab.currentState().doc.toString()).toBe("one!\ntwo\n");
+
+    // Save goes through the document (Save All saves it too).
+    await att.save();
+    expect(useDocMeta.getState()["/p/a.txt"]?.dirty).toBe(false);
+    view.destroy();
+    att.release();
+    tab.dispose();
+  });
+
+  it("keeps the document open while attached and makes backend patches undoable without tabs", async () => {
+    const { backend, manager } = setup({ "/p/b.txt": "abc" });
+    const att = await attachDocument(manager, "/p/b.txt");
+    const view = new EditorView({ doc: att.text(), extensions: [att.extension, history()] });
+    const model = manager.get("/p/b.txt")!;
+    backend.patch(model.doc, [{ from: 0, to: 1, insert: "X" }]);
+    expect(view.state.doc.toString()).toBe("Xbc");
+    undo(view);
+    expect(view.state.doc.toString()).toBe("abc");
+    view.destroy();
+    att.release();
+    await settle();
+    expect(manager.get("/p/b.txt")).toBeUndefined();
+  });
+
+  it("catches up when the document changed before the view was created", async () => {
+    const { manager } = setup({ "/p/c.txt": "old" });
+    const model = await manager.acquire("/p/c.txt");
+    const tab = new EditorSlot(model, "t1", host);
+    const att = await attachDocument(manager, "/p/c.txt");
+    const stale = att.text();
+    tab.dispatchLocal({ changes: { from: 0, to: 3, insert: "new" } });
+    const view = new EditorView({ doc: stale, extensions: [att.extension] });
+    await settle();
+    expect(view.state.doc.toString()).toBe("new");
+    view.destroy();
+    att.release();
+    tab.dispose();
+  });
+});

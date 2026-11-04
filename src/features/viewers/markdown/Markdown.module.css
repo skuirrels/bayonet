@@ -1,0 +1,225 @@
+.split {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+.editor {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mode-preview .editor {
+  display: none;
+}
+.mode-split .editor {
+  border-right: 1px solid var(--border-editor-tabs, var(--border));
+}
+
+.modeBar {
+  position: absolute;
+  top: 6px;
+  right: 20px;
+  z-index: 5;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--border-popup);
+  border-radius: var(--radius-toolbar-button);
+  background: var(--bg-popup);
+  box-shadow: var(--shadow-popup);
+  opacity: 0.85;
+}
+.modeBar:hover,
+.modeBar:focus-within {
+  opacity: 1;
+}
+
+.preview {
+  flex: 1 1 50%;
+  min-width: 0;
+  position: relative;
+  overflow: auto;
+  padding: 16px 28px 40vh;
+  outline: none;
+  background: var(--bg-editor, var(--bg-app));
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: calc(14px + var(--markdown-font-zoom, 0px));
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+.preview :global(h1),
+.preview :global(h2) {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border-strong);
+}
+.preview :global(h1),
+.preview :global(h2),
+.preview :global(h3),
+.preview :global(h4),
+.preview :global(h5),
+.preview :global(h6) {
+  margin: 1.2em 0 0.6em;
+  color: var(--fg-strong);
+  line-height: 1.25;
+}
+.preview :global(h1) {
+  font-size: 1.9em;
+}
+.preview :global(h2) {
+  font-size: 1.5em;
+}
+.preview :global(h3) {
+  font-size: 1.25em;
+}
+.preview > :global(div:first-child) > :first-child {
+  margin-top: 0;
+}
+.preview :global(p),
+.preview :global(ul),
+.preview :global(ol),
+.preview :global(blockquote),
+.preview :global(pre),
+.preview :global(table) {
+  margin: 0 0 1em;
+}
+.preview :global(a) {
+  color: var(--link);
+  text-decoration: none;
+  cursor: pointer;
+}
+.preview :global(a:hover) {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+.preview :global(code) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+}
+.preview :global(pre) {
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--bg-elev);
+  overflow: auto;
+  line-height: 1.45;
+}
+.preview :global(pre code) {
+  padding: 0;
+  background: none;
+  font-size: calc(var(--fs-code) + var(--markdown-font-zoom, 0px));
+}
+.preview :global(blockquote) {
+  padding: 0 1em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--fg-secondary);
+}
+.preview :global(table) {
+  border-collapse: collapse;
+}
+.preview :global(th),
+.preview :global(td) {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+}
+.preview :global(th) {
+  background: var(--bg-elev);
+}
+.preview :global(hr) {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 1.5em 0;
+}
+.preview :global(img) {
+  max-width: 100%;
+}
+.preview :global(ul.contains-task-list) {
+  list-style: none;
+  padding-left: 1.2em;
+}
+.blocked {
+  display: inline-block;
+  min-width: 16px;
+  min-height: 16px;
+  outline: 1px dashed var(--border-strong);
+}
+
+/* Lezer classHighlighter tokens in fenced code (same colours as documentation popups). */
+.preview :global(.tok-keyword),
+.preview :global(.tok-modifier),
+.preview :global(.tok-controlKeyword),
+.preview :global(.tok-operatorKeyword) {
+  color: var(--syn-keyword);
+}
+.preview :global(.tok-string),
+.preview :global(.tok-string2) {
+  color: var(--syn-string);
+}
+.preview :global(.tok-number),
+.preview :global(.tok-bool),
+.preview :global(.tok-atom) {
+  color: var(--syn-number);
+}
+.preview :global(.tok-typeName),
+.preview :global(.tok-className),
+.preview :global(.tok-namespace) {
+  color: var(--syn-type);
+}
+.preview :global(.tok-comment) {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.preview :global(.tok-meta),
+.preview :global(.tok-macroName) {
+  color: var(--syn-annotation);
+}
+.preview :global(.tok-propertyName) {
+  color: var(--syn-property);
+}
+.preview :global(.tok-variableName.tok-definition) {
+  color: var(--syn-function);
+}
+.preview :global(.tok-punctuation),
+.preview :global(.tok-operator) {
+  color: var(--syn-punct);
+}
+
+/* Mermaid diagrams: the source stays until the diagram is drawn, and next to an error. */
+.preview :global([data-mermaid]) {
+  margin: 0 0 1em;
+}
+.preview :global([data-mermaid] > pre) {
+  margin: 0;
+}
+.preview :global([data-mermaid-state="ok"] > pre) {
+  display: none;
+}
+.preview :global(.mermaid-output) {
+  overflow: hidden;
+  text-align: center;
+}
+.preview :global(.mermaid-output[data-zoomed="true"]) {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.preview :global(.mermaid-output[data-dragging="true"]) {
+  cursor: grabbing;
+}
+.preview :global([data-mermaid-state="error"] > .mermaid-output) {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-code);
+  text-align: left;
+  white-space: pre-wrap;
+}

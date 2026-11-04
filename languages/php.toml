@@ -1,0 +1,30 @@
+id = "php"
+name = "PHP"
+extensions = ["php", "phtml", "php3", "php4", "php5", "phps", "phpt"]
+first-line = "^(<\\?php|#!.*\\bphp\\b)"
+line-comment = "//"
+block-comment = ["/*", "*/"]
+indent = { tab-size = 4, insert-spaces = true }
+ui-mode = "PHP"
+tree-sitter = "php"
+
+[[language-servers]]
+name = "intelephense"
+command = "intelephense"
+args = ["--stdio"]
+root-markers = ["composer.json", ".phpactor.json", "index.php"]
+install-hint = "npm i -g intelephense"
+
+[[language-servers]]
+name = "phpactor"
+# Alternative: used only when the server above is not installed.
+fallback = true
+command = "phpactor"
+args = ["language-server"]
+root-markers = ["composer.json", ".phpactor.json"]
+install-hint = "Install phpactor (https://phpactor.readthedocs.io/en/master/usage/standalone.html)"
+
+[debugger]
+adapter = "php-debug"
+command = "php-debug-adapter"
+install-hint = "Install vscode-php-debug (Xdebug) as `php-debug-adapter` (e.g. via mason.nvim) and enable Xdebug"

@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Fixture.Api/Fixture.Api.csproj" />
+    <Project Path="src/Fixture.Cli/Fixture.Cli.csproj" />
+    <Project Path="src/Fixture.Core/Fixture.Core.csproj" />
+    <Project Path="src/Fixture.FSharp/Fixture.FSharp.fsproj" />
+    <Project Path="src/Fixture.Generators/Fixture.Generators.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Fixture.Core.MSTests/Fixture.Core.MSTests.csproj" />
+    <Project Path="tests/Fixture.Core.NUnitTests/Fixture.Core.NUnitTests.csproj" />
+    <Project Path="tests/Fixture.Core.XunitTests/Fixture.Core.XunitTests.csproj" />
+  </Folder>
+</Solution>

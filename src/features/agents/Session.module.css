@@ -1,0 +1,838 @@
+.session {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: var(--bg-editor);
+  color: var(--fg);
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-width: 0;
+}
+.title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--fg-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.headerDetail {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-subtle);
+}
+.headerText {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.providerIcon {
+  color: var(--fg-muted);
+}
+.muted {
+  color: var(--fg-subtle);
+}
+
+/* Pending permission: an editor notification banner. */
+.banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  background: var(--bg-feedback-warning);
+  border-bottom: 1px solid var(--border-feedback-warning);
+  color: var(--fg-strong);
+}
+.bannerText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bannerSpacer {
+  flex: 1;
+}
+.bannerLink {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bannerLink:hover:not(:disabled) {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+.bannerLink:disabled {
+  color: var(--fg-subtle);
+  cursor: default;
+}
+
+/* The conversation with its find bar. */
+.streamArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stream {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stream:focus {
+  outline: none;
+}
+/* Skip off-screen output layout; editable messages must repaint immediately when focus/content changes. */
+.stream > :not(.message):not(details) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 80px;
+}
+
+/* Your message with its actions, shown on hover. */
+.message {
+  position: relative;
+}
+.messageMeta {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  padding-left: 12px;
+  font-size: var(--fs-small);
+}
+.messageActions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+  opacity: 0;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.message:hover .messageActions,
+.messageActions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.findBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.findField {
+  flex: 1;
+  min-width: 0;
+}
+.findCount {
+  color: var(--fg-subtle);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+::highlight(agent-find) {
+  background-color: var(--bg-text-search-result);
+}
+::highlight(agent-find-current) {
+  background-color: var(--bg-text-search-result-current);
+}
+
+.user {
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--accent);
+  color: var(--fg-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.editMessage {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  resize: vertical;
+  font: inherit;
+  color: var(--fg-strong);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  outline: none;
+}
+
+.editBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: var(--fs-small);
+}
+
+.editButtons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.markdown {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.markdown :global(p) {
+  margin: 0 0 8px;
+}
+.markdown :global(p:last-child) {
+  margin-bottom: 0;
+}
+.markdown :global(code) {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-elev);
+}
+.markdown :global(pre) {
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+  overflow: auto;
+}
+.markdown :global(pre code) {
+  padding: 0;
+  background: none;
+}
+.markdown :global(pre) {
+  position: relative;
+}
+.codeCopy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+.markdown :global(pre:hover) .codeCopy,
+.codeCopy:focus-visible {
+  opacity: 1;
+}
+.codeCopy:hover {
+  background: var(--bg-hover);
+}
+.fileLink {
+  color: var(--link);
+  cursor: pointer;
+}
+.fileLink:hover {
+  text-decoration: underline;
+}
+
+/* Lezer classHighlighter tokens in fenced code (same colours as the Markdown preview). */
+.markdown :global(.tok-keyword),
+.markdown :global(.tok-modifier),
+.markdown :global(.tok-controlKeyword),
+.markdown :global(.tok-operatorKeyword) {
+  color: var(--syn-keyword);
+}
+.markdown :global(.tok-string),
+.markdown :global(.tok-string2) {
+  color: var(--syn-string);
+}
+.markdown :global(.tok-number),
+.markdown :global(.tok-bool),
+.markdown :global(.tok-atom) {
+  color: var(--syn-number);
+}
+.markdown :global(.tok-typeName),
+.markdown :global(.tok-className),
+.markdown :global(.tok-namespace) {
+  color: var(--syn-type);
+}
+.markdown :global(.tok-comment) {
+  color: var(--syn-comment);
+}
+.markdown :global(.tok-meta),
+.markdown :global(.tok-macroName) {
+  color: var(--syn-annotation);
+}
+.markdown :global(.tok-propertyName) {
+  color: var(--syn-property);
+}
+.markdown :global(.tok-variableName.tok-definition) {
+  color: var(--syn-function);
+}
+.markdown :global(.tok-punctuation),
+.markdown :global(.tok-operator) {
+  color: var(--syn-punct);
+}
+.markdown :global(ul),
+.markdown :global(ol) {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.markdown :global(a) {
+  color: var(--link);
+}
+
+.thought summary,
+.toolDetails > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.thought summary::-webkit-details-marker,
+.toolDetails > summary::-webkit-details-marker {
+  display: none;
+}
+.thought summary {
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+}
+.thoughtText {
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+}
+
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 8px;
+  margin-left: -8px;
+  border-radius: var(--radius-row);
+  color: var(--fg-secondary);
+  width: fit-content;
+  max-width: 100%;
+}
+.toolDetails > summary.tool:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.toolTitle {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toolDiff {
+  font: inherit;
+  font-size: var(--fs-small);
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toolDiff:hover {
+  background: var(--bg-hover);
+}
+.output {
+  margin: 4px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-small);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  white-space: pre-wrap;
+  color: var(--fg-secondary);
+}
+
+.plan {
+  display: grid;
+  gap: 2px;
+}
+.planTitle {
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.planItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.planDone {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+
+.permissionLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-secondary);
+}
+.permissionTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  color: var(--danger);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+}
+
+.retrying {
+  color: var(--warning);
+}
+
+.composerArea {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px 12px;
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.queued {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--radius-row);
+  background: var(--bg-elev);
+}
+.queuedText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meters {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-subtle);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.usageBar {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.usageBar > span {
+  display: block;
+  height: 100%;
+  background: var(--fg-muted);
+}
+
+.images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.imageItem {
+  position: relative;
+  display: inline-flex;
+}
+.imageButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.image {
+  display: block;
+  max-width: 240px;
+  max-height: 160px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+}
+.removeImage {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-popup);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+}
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.changes {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 280px;
+}
+.changesHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  flex: none;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.changesTitle {
+  font-weight: 600;
+  color: var(--fg-strong);
+}
+.changesSummary {
+  flex: none;
+  padding: 4px 10px;
+  color: var(--fg-subtle);
+  white-space: pre;
+}
+.changesList {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.changesList > * {
+  flex: 1;
+  min-height: 0;
+}
+.changesEmpty {
+  padding: 8px 10px;
+  color: var(--fg-muted);
+}
+.change {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.changeName {
+  flex: none;
+  white-space: nowrap;
+}
+.changeDir {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-left: 4px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.changeStat {
+  flex: none;
+  padding-right: 8px;
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.added {
+  color: var(--vcs-added);
+}
+.removed {
+  color: var(--danger);
+}
+
+/* Subagents: a card per subagent in its parent's conversation, and the way into its own. */
+.subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+}
+.subagentHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.subagentOpen {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border: 0;
+  border-radius: var(--radius-row);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.subagentOpen:hover {
+  background: var(--bg-hover);
+}
+.subagentTitle {
+  flex: none;
+  max-width: 50%;
+  font-weight: 600;
+  color: var(--fg-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subagentDescription {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subagentMeta {
+  flex: none;
+  margin-left: auto;
+  color: var(--fg-subtle);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.subagentActivity {
+  padding-left: 22px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subagentSection > summary {
+  padding-left: 22px;
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  list-style: none;
+}
+.subagentSection > summary::-webkit-details-marker {
+  display: none;
+}
+.subagentSection > summary:hover {
+  color: var(--fg);
+}
+.subagentSection > :not(summary) {
+  margin: 4px 0 2px 22px;
+}
+.subagentReply {
+  max-height: 320px;
+  overflow: auto;
+}
+.done {
+  color: var(--success);
+}
+
+.subagentBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 6px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.crumbs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.crumb {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.crumb:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+.crumbCurrent {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--fg-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.messageFrom {
+  margin-bottom: 2px;
+  color: var(--fg-subtle);
+  font-size: var(--fs-small);
+}
+
+.readOnly {
+  flex: none;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.subagentStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.subagentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-elev);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+.subagentChip:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.subagentChipTitle {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.changesToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+.changesToggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-strong);
+}
+.changesToggle[aria-pressed="true"] {
+  background: var(--bg-selected);
+  color: var(--fg-strong);
+}
+.changesToggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

@@ -1,0 +1,34 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+}
+.label {
+  color: var(--fg-secondary);
+  font-size: var(--fs-small);
+}
+.error {
+  color: var(--danger);
+  font-size: var(--fs-small);
+}
+.hint {
+  color: var(--fg-subtle);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+.list {
+  height: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control, 4px);
+}
+.row,
+.activeRow {
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activeRow {
+  color: var(--fg-strong);
+}
