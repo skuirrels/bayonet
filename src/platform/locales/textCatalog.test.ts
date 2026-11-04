@@ -90,6 +90,8 @@ const UNTRANSLATED = new Set<string>([
   "dotnet-monitor HTTP API",
   // XAML bindings: the .NET type of generated commands
   "ICommand",
+  // Avalonia previewer: the category of its layout actions, a product name
+  "Avalonia",
   // .NET Aspire: product names
   "Aspire",
   "AppHost",

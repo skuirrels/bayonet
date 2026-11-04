@@ -6477,7 +6477,6 @@
   "Build and Restart the Preview": "构建并重新启动预览",
   "Line {line}": "第 {line} 行",
   "Preview of the XAML": "XAML 预览",
-  "Avalonia": "Avalonia",
   "Shows only the XAML text": "仅显示 XAML 文本",
   "Shows the XAML text beside the Avalonia preview": "在 Avalonia 预览旁显示 XAML 文本",
   "Shows only the Avalonia preview": "仅显示 Avalonia 预览",
