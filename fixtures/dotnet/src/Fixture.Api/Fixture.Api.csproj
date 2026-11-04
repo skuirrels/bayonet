@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Fixture.Core\Fixture.Core.csproj" />
+    <ProjectReference Include="..\Fixture.Generators\Fixture.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

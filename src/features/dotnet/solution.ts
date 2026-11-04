@@ -1,6 +1,7 @@
 /**
  * The Solution pane's tree for a .NET solution: solution folders as groups,
- * projects as their folders, solution items as files.
+ * projects as their folders (with Dependencies › Analyzers first for C# and
+ * VB, see `generated.ts`), solution items as files.
  */
 import type { ProjectLanguage, Solution, SolutionItem } from "@/bindings";
 import type { ProjectViewRootContribution, ProjectViewRootEntry } from "@/workbench/contributions";
@@ -24,13 +25,28 @@ function projectCount(items: readonly SolutionItem[]): number {
   return items.reduce((n, i) => n + (i.kind === "project" ? 1 : i.kind === "folder" ? projectCount(i.items) : 0), 0);
 }
 
-function entry(item: SolutionItem): ProjectViewRootEntry {
+/** Cache folder of each project's generated sources, by project file. */
+export type GeneratedDirs = Readonly<Record<string, string>>;
+
+function dependencies(dir: string | undefined): ProjectViewRootEntry[] | undefined {
+  if (!dir) return undefined;
+  return [
+    {
+      id: "dependencies",
+      label: tx("Dependencies"),
+      icon: "library",
+      children: [{ label: tx("Analyzers"), icon: "analyzer", path: dir, readOnly: true }],
+    },
+  ];
+}
+
+function entry(item: SolutionItem, dirs: GeneratedDirs): ProjectViewRootEntry {
   switch (item.kind) {
     case "folder":
       return {
         label: item.name,
         icon: "folder",
-        children: item.items.map(entry),
+        children: item.items.map((i) => entry(i, dirs)),
       };
     case "project":
       return {
@@ -40,6 +56,7 @@ function entry(item: SolutionItem): ProjectViewRootEntry {
         // Build output, as Visual Studio and Rider leave it out of the Solution Explorer.
         hide: ["bin", "obj"],
         detail: item.missing ? tx("not found") : undefined,
+        prepend: item.missing ? undefined : dependencies(dirs[item.path]),
       };
     case "file":
       return {
@@ -51,8 +68,13 @@ function entry(item: SolutionItem): ProjectViewRootEntry {
   }
 }
 
+/** Project files of the solution, depth first. */
+export function solutionProjects(items: readonly SolutionItem[]): string[] {
+  return items.flatMap((i) => (i.kind === "project" ? [i.path] : i.kind === "folder" ? solutionProjects(i.items) : []));
+}
+
 /** `Solution 'Name'` with its projects below, as Rider and Visual Studio show it. */
-export function solutionRoot(solution: Solution): ProjectViewRootContribution {
+export function solutionRoot(solution: Solution, dirs: GeneratedDirs = {}): ProjectViewRootContribution {
   const n = projectCount(solution.items);
   return {
     id: SOLUTION_ROOT_ID,
@@ -60,6 +82,6 @@ export function solutionRoot(solution: Solution): ProjectViewRootContribution {
     icon: "module",
     detail: n === 1 ? tx("1 project") : tx`${n} projects`,
     scope: "solution",
-    children: solution.items.map(entry),
+    children: solution.items.map((i) => entry(i, dirs)),
   };
 }

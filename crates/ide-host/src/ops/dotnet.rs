@@ -296,6 +296,112 @@ pub async fn dotnet_binlogs(host: &Host, window: &str) -> IdeResult<Vec<IpcPath>
     .await
 }
 
+/// Where the generated sources of each of `projects` go (CI-17), created
+/// empty when missing so the tree can list them before the first compile.
+pub async fn dotnet_generated_dirs(host: &Host, window: &str, projects: Vec<IpcPath>) -> IdeResult<Vec<IpcPath>> {
+    let base = host.project(window)?.build_cache_dir().join("generated");
+    host.blocking(move || {
+        Ok(projects
+            .into_iter()
+            .map(|p| {
+                let dir = ide_dotnet::generators::output_dir(&base, &PathBuf::from(p));
+                let _ = std::fs::create_dir_all(&dir);
+                IpcPath::from(dir)
+            })
+            .collect())
+    })
+    .await
+}
+
+/// One side compile at a time: they share the compiler server and the cache.
+static GENERATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Compiles `project` once more with `EmitCompilerGeneratedFiles` into the
+/// IDE's cache and lists its analysers and generated files (CI-17). The
+/// project's own `obj` and `bin` are left alone; see `ide_dotnet::generators`.
+pub async fn dotnet_generated_sources(
+    host: &Host,
+    window: &str,
+    project: IpcPath,
+) -> IdeResult<ide_dotnet::generators::GeneratedSources> {
+    use ide_dotnet::generators;
+    let (_, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    let base = host.project(window)?.build_cache_dir().join("generated");
+    let project = PathBuf::from(project);
+    let dir = generators::output_dir(&base, &project);
+    let empty = |errors: Vec<String>| generators::GeneratedSources {
+        dir: dir.clone().into(),
+        analyzers: Vec::new(),
+        files: Vec::new(),
+        errors,
+    };
+    // F# has no source generators (and no Roslyn analysers).
+    if !project.extension().is_some_and(|e| e.eq_ignore_ascii_case("csproj") || e.eq_ignore_ascii_case("vbproj")) {
+        return Ok(empty(Vec::new()));
+    }
+    let _guard = GENERATING.lock().await;
+    let info = {
+        let p = project.clone();
+        tokio::task::spawn_blocking(move || ide_dotnet::read_project(&p))
+            .await
+            .map_err(|e| IdeError::internal(e.to_string()))??
+    };
+    let work = base.join("work");
+    let (obj, next, targets) = (work.join("obj"), work.join("out"), work.join("generated.targets"));
+    generators::remove_listing(&work);
+    std::fs::create_dir_all(&next).map_err(|e| IdeError::internal(format!("cannot create {}: {e}", next.display())))?;
+    std::fs::write(&targets, generators::targets_file(&project, &obj, &next))
+        .map_err(|e| IdeError::internal(format!("cannot write {}: {e}", targets.display())))?;
+    let mut args: Vec<String> = vec![
+        "msbuild".into(),
+        project.to_string_lossy().into_owned(),
+        "-nologo".into(),
+        "-v:q".into(),
+        "-t:Compile".into(),
+        "-p:BuildProjectReferences=false".into(),
+        format!("-p:CustomAfterMicrosoftCommonTargets={}", targets.display()),
+        "-getItem:Analyzer".into(),
+    ];
+    if info.target_frameworks.len() > 1
+        && let Some(first) = info.target_frameworks.first()
+    {
+        args.push(format!("-p:TargetFramework={first}"));
+    }
+    let out = tokio::process::Command::new(&dotnet)
+        .args(&args)
+        .current_dir(project.parent().unwrap_or(&project))
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .env("DOTNET_NOLOGO", "1")
+        .env("DOTNET_CLI_UI_LANGUAGE", "en")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", dotnet.display())))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let errors = generators::errors(&format!("{stdout}\n{}", String::from_utf8_lossy(&out.stderr)));
+    let analyzers = generators::parse_analyzers(&stdout);
+    if analyzers.is_empty() && !errors.is_empty() {
+        return Ok(empty(errors));
+    }
+    host.blocking(move || {
+        let names = generators::add_analyzer_folders(&next, &analyzers)
+            .map_err(|e| IdeError::internal(format!("cannot write {}: {e}", next.display())))?;
+        generators::make_read_only(&generators::generated_files(&next));
+        // Swap the new listing in whole, so the tree never shows half of it.
+        generators::remove_listing(&dir);
+        if let Some(parent) = dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| IdeError::internal(e.to_string()))?;
+        }
+        std::fs::rename(&next, &dir).map_err(|e| IdeError::internal(format!("cannot move {}: {e}", dir.display())))?;
+        generators::remove_listing(&work);
+        let files = generators::generated_files(&dir).into_iter().map(IpcPath::from).collect();
+        Ok(generators::GeneratedSources { dir: dir.into(), analyzers: names, files, errors })
+    })
+    .await
+}
+
 /// The projects `project` references.
 pub async fn dotnet_project_references(host: &Host, _window: &str, project: IpcPath) -> IdeResult<Vec<IpcPath>> {
     host.blocking(move || Ok(templates::project_references(&project)?.into_iter().map(IpcPath::from).collect())).await
@@ -594,6 +700,13 @@ pub(crate) fn register(d: &mut Dispatcher) {
     });
     d.add("dotnet_sdk_target", |c| async move { dotnet_sdk_target(&c.host, &c.window, c.arg("name")?).await });
     d.add("dotnet_binlog_read", |c| async move { dotnet_binlog_read(&c.host, c.arg("path")?).await });
+    d.add(
+        "dotnet_generated_dirs",
+        |c| async move { dotnet_generated_dirs(&c.host, &c.window, c.arg("projects")?).await },
+    );
+    d.add("dotnet_generated_sources", |c| async move {
+        dotnet_generated_sources(&c.host, &c.window, c.arg("project")?).await
+    });
     d.add("dotnet_binlogs", |c| async move { dotnet_binlogs(&c.host, &c.window).await });
     d.add("dotnet_ef_projects", |c| async move { dotnet_ef_projects(&c.host, &c.window).await });
     d.add("dotnet_ef_migrations", |c| async move { dotnet_ef_migrations(&c.host, &c.window, c.arg("project")?).await });

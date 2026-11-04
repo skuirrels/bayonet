@@ -47,6 +47,7 @@ import { disambiguateTitles } from "../model/tabTitles";
 import { TextEditorHost } from "./TextEditorHost";
 import { FindBar } from "./FindBar";
 import { EditorBanners, VirtualBanner } from "./Banner";
+import { isGeneratedUri } from "@/platform/virtualDocs";
 import { CodeBreadcrumbs } from "./StatusItems";
 import styles from "./EditorArea.module.css";
 import { tx } from "@/platform/i18n";
@@ -355,7 +356,11 @@ function PaneContent({ paneId, tab }: { paneId: string; tab: Tab }) {
     return (
       <>
         {virtual ? (
-          <VirtualBanner decompiled={virtual.decompiled} description={virtual.description} />
+          <VirtualBanner
+            decompiled={virtual.decompiled}
+            generated={isGeneratedUri(tab.input.path)}
+            description={virtual.description}
+          />
         ) : (
           <EditorBanners path={tab.input.path} />
         )}

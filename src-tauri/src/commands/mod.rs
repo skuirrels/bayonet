@@ -424,6 +424,8 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         diagnostics::diag_monitor_http,
         diagnostics::diag_live_metrics,
         dotnet::dotnet_ef_projects,
+        dotnet::dotnet_generated_dirs,
+        dotnet::dotnet_generated_sources,
         dotnet::dotnet_ef_migrations,
         dotnet::dotnet_ef_command,
         dotnet::dotnet_project_references,

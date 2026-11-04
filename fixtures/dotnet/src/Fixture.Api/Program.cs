@@ -31,9 +31,20 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
+// EndpointNames comes from Fixture.Generators; the regex from the .NET regex generator.
+app.MapGet("/endpoints", () => new[] { EndpointNames.GetEndpoints, EndpointNames.GetWeatherForecast }
+        .Where(n => Names.Pascal().IsMatch(n)))
+    .WithName("GetEndpoints");
+
 app.Run();
 
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+}
+
+static partial class Names
+{
+    [System.Text.RegularExpressions.GeneratedRegex("^[A-Z][A-Za-z]*$")]
+    public static partial System.Text.RegularExpressions.Regex Pascal();
 }

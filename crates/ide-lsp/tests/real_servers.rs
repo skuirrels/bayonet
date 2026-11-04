@@ -571,6 +571,84 @@ async fn roslyn_end_to_end() {
     tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }
 
+/// CI-14: FsAutoComplete on the fixture's F# project: a type error is reported,
+/// and members complete. Needs the .NET SDK and `fsautocomplete` on `PATH`, or its
+/// path in `OPENIDEA_TEST_FSAC`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and fsautocomplete"]
+async fn fsautocomplete_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let project = root.join("src/Fixture.FSharp");
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "Fixture.FSharp.fsproj"])
+        .current_dir(&project)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut fsharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("fsharp")).unwrap();
+    fsharp.language_servers.retain(|s| s.name == "fsautocomplete");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_FSAC") {
+        fsharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![fsharp]));
+    let file = project.join("Library.fs");
+    // The editor drops the byte order mark; the F# parser rejects it.
+    let source = std::fs::read_to_string(&file).unwrap().trim_start_matches('\u{feff}').to_owned();
+    let lines = source.lines().count() as u32;
+    let doc = DocId::next();
+    mgr.did_open(doc, &file, &LanguageId::new("fsharp"), 1, &source);
+    retry("fsautocomplete ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "fsautocomplete");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("fsautocomplete failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+
+    // A type error, then a member access to complete.
+    let added = "    let broken : int = \"text\"\n    let size = \"abc\".Len";
+    mgr.did_change(
+        doc,
+        2,
+        &[AppliedChange { range: Range::point(Pos::new(lines, 0)), text: added.into() }],
+        &|| unreachable!(),
+    );
+    let end = Pos::new(lines + 1, "    let size = \"abc\".Len".len() as u32);
+    retry("completion", Duration::from_secs(120), || {
+        let mgr = mgr.clone();
+        async move {
+            let list = mgr.completion(doc, end, None, Default::default()).await.ok()?;
+            list.items.iter().any(|i| i.label == "Length").then_some(())
+        }
+    })
+    .await;
+    let diagnostics = retry("diagnostics", Duration::from_secs(120), || {
+        let pushed = events.lock().iter().rev().find_map(|e| match e {
+            IdeEvent::Diagnostics { path, items, .. } if path.0 == file && !items.is_empty() => Some(items.clone()),
+            _ => None,
+        });
+        async move { pushed.filter(|items| items.iter().any(|d| d.range.start.line == lines)) }
+    })
+    .await;
+    assert!(
+        diagnostics.iter().any(|d| d.severity == ide_core::Severity::Error && d.range.start.line == lines),
+        "{diagnostics:?}"
+    );
+    let hover = retry("hover", Duration::from_secs(60), || {
+        let mgr = mgr.clone();
+        async move { mgr.hover(doc, Pos::new(3, 10), Default::default()).await.ok().flatten() }
+    })
+    .await;
+    assert!(hover.contents.value.contains("hello"), "{}", hover.contents.value);
+
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
+}
+
 /// SLN-3: a multi-targeting project has one Roslyn project context per target
 /// framework, and choosing one switches which `#if` branch is live.
 #[tokio::test(flavor = "multi_thread")]

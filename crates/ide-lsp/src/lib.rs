@@ -2024,7 +2024,10 @@ impl LspManager {
     /// `workspace/textDocumentContent` (LSP 3.18) when the server serves the
     /// scheme, jdtls' `java/classFileContents` for `jdt:` URIs. Cached.
     pub async fn virtual_document(&self, uri: &str) -> IdeResult<VirtualDocument> {
-        if let Some(d) = self.virtual_docs.lock().get(uri) {
+        // Generated sources change with the code, so they are always asked for again.
+        if !virtual_doc::is_generated(uri)
+            && let Some(d) = self.virtual_docs.lock().get(uri)
+        {
             return Ok(d.clone());
         }
         let scheme = virtual_doc::scheme(uri).to_owned();
@@ -2049,6 +2052,17 @@ impl LspManager {
             } else if scheme == "jdt" && languages.iter().any(|l| l.as_str() == "java") {
                 self.call::<_, Option<String>>(t, "java/classFileContents", json!({ "uri": uri }), None, LONG_TIMEOUT)
                     .await
+            } else if scheme == "roslyn-source-generated" && languages.iter().any(|l| l.as_str() == "csharp") {
+                // Roslyn's source-generated documents (CI-17): `{ text, resultId }`.
+                self.call::<_, Option<Value>>(
+                    t,
+                    "sourceGeneratedDocument/_roslyn_getText",
+                    json!({ "textDocument": { "uri": uri } }),
+                    None,
+                    LONG_TIMEOUT,
+                )
+                .await
+                .map(|v| v.and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_owned)))
             } else {
                 continue;
             };

@@ -878,6 +878,10 @@ export interface ProjectViewRootEntry {
   file?: boolean;
   /** Names directly in `path` left out unless hidden files are shown (a project's `bin`, `obj`). */
   hide?: readonly string[];
+  /** Stable key part of a group node (defaults to the label). */
+  id?: string;
+  /** Nodes listed before the folder's contents (a project's Dependencies). */
+  prepend?: readonly ProjectViewRootEntry[];
 }
 
 export interface ProjectViewRootContribution extends ProjectViewRootEntry {

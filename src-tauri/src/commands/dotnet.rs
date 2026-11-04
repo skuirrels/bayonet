@@ -206,6 +206,28 @@ pub async fn dotnet_binlogs(window: Window, state: State<'_, AppState>) -> IdeRe
     ide_host::ops::dotnet::dotnet_binlogs(&state.host, window.label()).await
 }
 
+/// Where the side compiles of CI-17 write each project's generated sources.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_generated_dirs(
+    window: Window,
+    state: State<'_, AppState>,
+    projects: Vec<IpcPath>,
+) -> IdeResult<Vec<IpcPath>> {
+    ide_host::ops::dotnet::dotnet_generated_dirs(&state.host, window.label(), projects).await
+}
+
+/// `project`'s analysers and the files its source generators write.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_generated_sources(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+) -> IdeResult<ide_dotnet::generators::GeneratedSources> {
+    ide_host::ops::dotnet::dotnet_generated_sources(&state.host, window.label(), project).await
+}
+
 /// The solution's projects that use Entity Framework Core.
 #[tauri::command]
 #[specta::specta]

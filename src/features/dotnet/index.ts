@@ -48,7 +48,8 @@ import { setExpanded, suggestViewMode, useProjectTree } from "@/features/project
 import { dotnetRunType } from "./runType";
 import { efActions, isEfProject, loadEfProjects } from "./ef/ef";
 import { msbuildCompletion } from "./msbuild/completion";
-import { SOLUTION_ROOT_ID, solutionRoot, touchesSolution } from "./solution";
+import { SOLUTION_ROOT_ID, solutionProjects, solutionRoot, touchesSolution } from "./solution";
+import { loadGeneratedDirs, resetGenerated, sourcesChanged, watchGenerated } from "./generated";
 import { tx } from "@/platform/i18n";
 
 const BINLOG_KIND = "binlog";
@@ -116,6 +117,7 @@ export function activate(): () => void {
     disposeDiagnostics = null;
     resetNuget();
     resetUnitTests();
+    resetGenerated();
     shown = "";
   };
   const refresh = async () => {
@@ -127,12 +129,17 @@ export function activate(): () => void {
       if (!path) return clear();
       const solution = await call(commands.dotnetSolution(path));
       if (id !== seq) return;
-      const key = JSON.stringify(solution);
+      const dirs = await loadGeneratedDirs(solutionProjects(solution.items)).catch((e: unknown) => {
+        console.warn("solution: no folders for generated sources", e);
+        return {};
+      });
+      if (id !== seq) return;
+      const key = JSON.stringify([solution, dirs]);
       if (key === shown) return;
       const first = !shown;
       disposeRoot();
       shown = key;
-      disposeRoot = registerProjectViewRoot(solutionRoot(solution));
+      disposeRoot = registerProjectViewRoot(solutionRoot(solution, dirs));
       setSolution(solution);
       void loadEfProjects();
       // Kept across solution edits so the window keeps its search and selection.
@@ -508,8 +515,10 @@ export function activate(): () => void {
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let packagesTimer: ReturnType<typeof setTimeout> | undefined;
+  const unwatchGenerated = watchGenerated();
   const unsubFs = onIdeEvent("fsChanged", (e) => {
     const paths = [...e.created, ...e.modified, ...e.removed];
+    sourcesChanged(paths);
     if (disposeNuget && paths.some((p) => PACKAGE_FILE.test(p))) {
       clearTimeout(packagesTimer);
       packagesTimer = setTimeout(() => void loadInstalled(), REFRESH_DELAY * 3);
@@ -524,6 +533,7 @@ export function activate(): () => void {
     clearTimeout(packagesTimer);
     unsub();
     unsubFs();
+    unwatchGenerated();
     disposeActions();
     disposeGutter();
     disposeMsbuild();

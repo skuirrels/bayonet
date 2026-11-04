@@ -41,8 +41,26 @@ pub fn title(uri: &str, decompiled: bool) -> String {
     }
 }
 
-/// Where the document comes from, e.g. the jar path of a `jdt://` class.
+/// Roslyn's source-generated documents, which change with the code they come from.
+pub fn is_generated(uri: &str) -> bool {
+    scheme(uri) == "roslyn-source-generated"
+}
+
+/// A query parameter of the URI, percent-decoded.
+fn query_param(uri: &str, name: &str) -> Option<String> {
+    let query = uri.split_once('?')?.1.split('#').next()?;
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name).then(|| percent_decode_str(&v.replace('+', " ")).decode_utf8_lossy().into_owned())
+    })
+}
+
+/// Where the document comes from, e.g. the jar path of a `jdt://` class or
+/// the generator of a Roslyn source-generated file.
 pub fn description(uri: &str) -> Option<String> {
+    if is_generated(uri) {
+        return query_param(uri, "typeName").or_else(|| query_param(uri, "assemblyName"));
+    }
     if scheme(uri) != "jdt" {
         return None;
     }
@@ -73,6 +91,14 @@ mod tests {
     use super::*;
 
     const JDT: &str = "jdt://contents/spring-boot-4.1.1.jar/org.springframework.boot/SpringApplication.class?=spring-demo/%5C/Users%5C/me%5C/.m2%5C/repository%5C/spring-boot-4.1.1.jar%3Corg.springframework.boot%28SpringApplication.class";
+
+    #[test]
+    fn roslyn_generated_documents() {
+        let uri = "roslyn-source-generated://946d/EndpointNames.g.cs?documentId=f475&hintName=EndpointNames.g.cs&assemblyName=Fixture.Generators&typeName=Fixture.Generators.EndpointNamesGenerator&assemblyPath=%2Fs%2FGen.dll";
+        assert!(is_generated(uri));
+        assert_eq!(title(uri, false), "EndpointNames.g.cs");
+        assert_eq!(description(uri).as_deref(), Some("Fixture.Generators.EndpointNamesGenerator"));
+    }
 
     #[test]
     fn jdt_titles() {

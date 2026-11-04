@@ -4,6 +4,7 @@
     <Project Path="src/Fixture.Cli/Fixture.Cli.csproj" />
     <Project Path="src/Fixture.Core/Fixture.Core.csproj" />
     <Project Path="src/Fixture.FSharp/Fixture.FSharp.fsproj" />
+    <Project Path="src/Fixture.Generators/Fixture.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Fixture.Core.MSTests/Fixture.Core.MSTests.csproj" />

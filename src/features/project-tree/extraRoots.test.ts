@@ -64,6 +64,35 @@ describe("withExtraRoots", () => {
     expect(all.children.get("/s/App")!.map((n) => n.label)).toEqual(["bin", "obj", "Program.cs"]);
   });
 
+  it("lists a project's Dependencies before its files, with read-only generated sources", () => {
+    const gen = "/c/generated/out/s/App/App.csproj";
+    const listings = new Map([
+      ["/s/App", [entry("/s/App/Program.cs")]],
+      [gen, [entry(`${gen}/Gen`, "dir")]],
+      [`${gen}/Gen`, [entry(`${gen}/Gen/Names.g.cs`)]],
+    ]);
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    const deps = {
+      id: "dependencies",
+      label: "Dependencies",
+      icon: "library",
+      children: [{ label: "Analyzers", icon: "analyzer", path: gen, readOnly: true }],
+    };
+    const extras = [{ path: "/s/App", label: "App", icon: "project-csharp", prepend: [deps] }];
+    const m = withExtraRoots(base, extras, listings, DEFAULT_TREE_OPTIONS);
+    const kids = m.children.get("/s/App")!;
+    expect(kids.map((n) => n.label)).toEqual(["Dependencies", "Program.cs"]);
+    expect(kids[0]!.group).toBe(true);
+    const [analyzers] = m.children.get(kids[0]!.key)!;
+    expect(analyzers!.label).toBe("Analyzers");
+    expect(analyzers!.readOnly).toBe(true);
+    const [assembly] = m.children.get(analyzers!.key)!;
+    const [file] = m.children.get(assembly!.key)!;
+    expect([file!.path, file!.readOnly]).toEqual([`${gen}/Gen/Names.g.cs`, true]);
+    // Not listed yet: nothing to prepend to, so expanding still reads the folder.
+    expect(withExtraRoots(base, extras, new Map(), DEFAULT_TREE_OPTIONS).children.get("/s/App")).toBeUndefined();
+  });
+
   it("returns the model itself without extra roots", () => {
     const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
     expect(withExtraRoots(base, [], new Map(), DEFAULT_TREE_OPTIONS)).toBe(base);

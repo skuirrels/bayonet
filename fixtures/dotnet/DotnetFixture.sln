@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fixture.Core.NUnitTests", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fixture.Core.XunitTests", "tests\Fixture.Core.XunitTests\Fixture.Core.XunitTests.csproj", "{909141B9-BF5F-4718-A7F9-C2846BC4E22F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fixture.Generators", "src\Fixture.Generators\Fixture.Generators.csproj", "{060C1E55-FCBE-4629-BFD3-CF68C43EB588}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -115,6 +117,18 @@ Global
 		{909141B9-BF5F-4718-A7F9-C2846BC4E22F}.Release|x64.Build.0 = Release|Any CPU
 		{909141B9-BF5F-4718-A7F9-C2846BC4E22F}.Release|x86.ActiveCfg = Release|Any CPU
 		{909141B9-BF5F-4718-A7F9-C2846BC4E22F}.Release|x86.Build.0 = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|x64.Build.0 = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Debug|x86.Build.0 = Debug|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|Any CPU.Build.0 = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|x64.ActiveCfg = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|x64.Build.0 = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|x86.ActiveCfg = Release|Any CPU
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -127,5 +141,6 @@ Global
 		{47E749D1-AC3C-457B-90FD-B34E400936E5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{641F982C-0A5A-4EFA-894E-6CD9485D23D9} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{909141B9-BF5F-4718-A7F9-C2846BC4E22F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{060C1E55-FCBE-4629-BFD3-CF68C43EB588} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

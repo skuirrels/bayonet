@@ -215,6 +215,7 @@ const ICONS = {
   "text-match": "openidea/nodes/textMatch",
   "project-csharp": "openidea/nodes/csharpProject",
   "project-fsharp": "openidea/nodes/fsharpProject",
+  analyzer: "openidea/nodes/analyzer",
   "open-in-tool-window": "general/openInToolWindow",
   "preserve-case": "openidea/inline/preserveCase",
   "new-line": "openidea/inline/newLine",

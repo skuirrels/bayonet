@@ -899,6 +899,10 @@ export const commands = {
 	diagLiveMetrics: (request: RequestId, pid: number, onSamples: Channel<MetricSample[]>) => typedError<null, IdeError>(__TAURI_INVOKE("diag_live_metrics", { request, pid, onSamples })),
 	/**  The solution's projects that use Entity Framework Core. */
 	dotnetEfProjects: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_ef_projects")),
+	/**  Where the side compiles of CI-17 write each project's generated sources. */
+	dotnetGeneratedDirs: (projects: IpcPath[]) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_generated_dirs", { projects })),
+	/**  `project`'s analysers and the files its source generators write. */
+	dotnetGeneratedSources: (project: IpcPath) => typedError<GeneratedSources, IdeError>(__TAURI_INVOKE("dotnet_generated_sources", { project })),
 	/**  The EF Core migrations of `project`, oldest first. */
 	dotnetEfMigrations: (project: IpcPath) => typedError<string[], IdeError>(__TAURI_INVOKE("dotnet_ef_migrations", { project })),
 	/**  The `dotnet ef` command line of `operation` on `project`. */
@@ -3437,6 +3441,17 @@ export type GeneralSettings = {
 	powerSaveMode?: boolean,
 	/**  File › Rename Project… (project layer): the name shown for the project; empty = its folder name. */
 	projectName?: string,
+};
+
+/**  A project's analysers and what its source generators wrote. */
+export type GeneratedSources = {
+	/**  `<generator assembly>/<generator type>/<hint name>` below it; one folder per analyser. */
+	dir: IpcPath,
+	/**  Analyser assemblies, by name. */
+	analyzers: string[],
+	files: IpcPath[],
+	/**  Compiler errors of the side compile (generated files may be missing then). */
+	errors: string[],
 };
 
 /**

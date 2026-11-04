@@ -251,6 +251,8 @@ export interface ExtraRoot {
   file?: boolean;
   /** Names directly in `path` left out unless hidden files are shown (a project's `bin`, `obj`). */
   hide?: readonly string[];
+  /** Nodes listed before the folder's contents (a project's Dependencies). */
+  prepend?: readonly ExtraRoot[];
 }
 
 /** Key prefix of group nodes that show no folder ("External Libraries", an SDK). */
@@ -356,9 +358,16 @@ export function withExtraRoots(
         );
       }
       for (const [p, k] of sub.keyOfPath) if (!out.keyOfPath.has(p)) out.keyOfPath.set(p, rekey(k));
+      // Shown once the folder is listed, so an unread folder still loads on expand.
+      const listed = out.children.get(rootNode.key);
+      if (extra.prepend?.length && listed) {
+        const first = extra.prepend.map((c) => add(c, rootNode.key, ro)).filter((n): n is ProjectNode => !!n);
+        out.children.set(rootNode.key, [...first, ...listed]);
+      }
       return rootNode;
     }
-    const key = `${parentKey ? `${parentKey}/` : GROUP_PREFIX}${extra.id ?? extra.label}`;
+    // Groups inside a folder node (a project's Dependencies) are keyed as groups too.
+    const key = `${parentKey && isGroupKey(parentKey) ? `${parentKey}/` : `${GROUP_PREFIX}${parentKey ? `${parentKey}/` : ""}`}${extra.id ?? extra.label}`;
     if (out.byKey.has(key)) return null;
     const node: ProjectNode = {
       key,

@@ -26,15 +26,27 @@ export const documentBanner: EditorBannerContribution = {
 
 /**
  * Notice above a library class opened from a language server (IDEA's
- * "Decompiled .class file" / library source bar): read-only, with its origin.
+ * "Decompiled .class file" / library source bar), or a file a source
+ * generator wrote: read-only, with its origin.
  */
-export function VirtualBanner({ decompiled, description }: { decompiled: boolean; description: string | null }) {
+export function VirtualBanner({
+  decompiled,
+  generated = false,
+  description,
+}: {
+  decompiled: boolean;
+  generated?: boolean;
+  description: string | null;
+}) {
+  const text = generated
+    ? tx("Generated source (read-only); it changes when the code it is generated from does.")
+    : decompiled
+      ? tx("Decompiled .class file: sources are not available.")
+      : tx("Library source (read-only).");
   return (
     <div className={`${styles.banner} ${styles.libraryBanner}`} role="status">
       <Icon name={decompiled ? "info" : "lock"} size={14} className={styles.bannerIcon} />
-      <span className={styles.bannerText}>
-        {decompiled ? tx("Decompiled .class file: sources are not available.") : tx("Library source (read-only).")}
-      </span>
+      <span className={styles.bannerText}>{text}</span>
       {description && (
         <span className={styles.bannerDetail} title={description}>
           {description}

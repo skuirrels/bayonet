@@ -483,6 +483,12 @@ export async function reloadLoadedDirs(dirs: readonly string[]) {
   await Promise.all(dirs.filter((p) => listings.has(p)).map((p) => loadDir(p, true)));
 }
 
+/** Re-reads the loaded folders at or below `dir` (contents rewritten outside the watcher). */
+export async function reloadLoadedDirsUnder(dir: string) {
+  const { listings } = get();
+  await Promise.all([...listings.keys()].filter((p) => isSameOrInside(p, dir)).map((p) => loadDir(p, true)));
+}
+
 /** Re-reads every loaded folder (View › Reload from Disk). */
 export async function reloadAll() {
   const { listings } = get();

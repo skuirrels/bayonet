@@ -27,12 +27,13 @@ fn lines(s: &Solution) -> Vec<String> {
     out
 }
 
-const FIXTURE_TREE: [&str; 9] = [
+const FIXTURE_TREE: [&str; 10] = [
     "src/",
     "  Fixture.Api",
     "  Fixture.Cli",
     "  Fixture.Core",
     "  Fixture.FSharp",
+    "  Fixture.Generators",
     "tests/",
     "  Fixture.Core.MSTests",
     "  Fixture.Core.NUnitTests",
