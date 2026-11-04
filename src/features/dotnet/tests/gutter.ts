@@ -12,7 +12,7 @@ import { tx } from "@/platform/i18n";
 import { gutterIconMarkup, showContextMenu, type MenuItem } from "@/ui";
 import styles from "@/features/run/Run.module.css";
 import { statusOf } from "./model";
-import { runTests, testsIn, useUnitTests } from "./store";
+import { debugTests, runTests, testsIn, useUnitTests } from "./store";
 
 const DOTNET_SOURCE = /\.(cs|vb|fs)$/i;
 
@@ -170,6 +170,13 @@ export function testGutter(ctx: EditorDocContext): Extension {
               icon: "run",
               disabled: busy,
               run: () => void runTests(selectionOf(target)),
+            },
+            {
+              label: tx`Debug '${target.name}'`,
+              verbatim: true,
+              icon: "debug",
+              disabled: busy,
+              run: () => void debugTests(selectionOf(target)),
             },
           ];
           showContextMenu({ x: rect.left, y: rect.bottom + 2 }, items);

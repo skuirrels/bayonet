@@ -88,6 +88,7 @@ export const visualStudioOverrides: Record<string, string[]> = {
   "debug.stepInto": ["F11"],
   "debug.stepOut": ["Shift+F11"],
   "debug.runToCursor": ["Ctrl+F10"],
+  "debug.setNextStatement": ["Ctrl+Shift+F10"],
   "debug.attachToProcess": ["Ctrl+Alt+P"],
   "debug.evaluate": ["Shift+F9"],
 };

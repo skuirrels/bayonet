@@ -3,6 +3,7 @@
  * attach request each debugger needs, like IDEA's `XAttachDebuggerProvider`s.
  */
 import { workflowSettings } from "@/platform/workflowSettings";
+import { call, commands } from "@/platform/ipc";
 import type { AttachKind, AttachableProcess, LaunchConfig } from "@/platform/ipc";
 import { javaAttachConfig } from "./java";
 
@@ -25,7 +26,7 @@ export type AttachRow =
 export function matchesFilter(p: AttachableProcess, filter: string): boolean {
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
-  const hay = `${p.pid} ${p.name} ${p.commandLine}`.toLowerCase();
+  const hay = `${p.pid} ${p.name} ${p.commandLine} ${p.container ?? ""}`.toLowerCase();
   return words.every((w) => hay.includes(w));
 }
 
@@ -36,20 +37,26 @@ export function attachRows(list: readonly AttachableProcess[], filter: string): 
     const items = list.filter((p) => p.kind === kind && matchesFilter(p, filter));
     if (!items.length) continue;
     rows.push({ kind: "group", key: `group:${kind}`, label: KIND_LABELS[kind], count: items.length });
-    for (const p of items) rows.push({ kind: "process", key: `${kind}:${p.pid}`, process: p });
+    for (const p of items)
+      rows.push({
+        kind: "process",
+        key: p.container != null ? `${kind}:${p.container}:${p.pid}` : `${kind}:${p.pid}`,
+        process: p,
+      });
   }
   return rows;
 }
 
 /** A short description of how the process will be attached to. */
 export function attachDetail(p: AttachableProcess): string {
+  if (p.container != null) return `${p.container}, pid ${p.pid}`;
   if (p.port != null) return `${p.host ?? "localhost"}:${p.port}`;
   return `pid ${p.pid}`;
 }
 
 function base(p: AttachableProcess, cwd: string, extra: Record<string, unknown>): LaunchConfig {
   return {
-    name: `${p.name} (${p.pid})`,
+    name: p.container != null ? `${p.name} (${p.container})` : `${p.name} (${p.pid})`,
     adapter: p.adapter,
     request: "attach",
     program: null,
@@ -85,8 +92,12 @@ export async function attachConfig(p: AttachableProcess, root: string): Promise<
         // (`--pid` injection ships only an x86_64 helper on macOS.)
         p.port != null ? { debugServer: p.port, justMyCode: skip } : { processId: p.pid, justMyCode: skip },
       );
-    case "dotnet":
-      return base(p, root, { processId: p.pid, justMyCode: skip });
+    case "dotnet": {
+      // In a container: netcoredbg is copied in and run there through `docker exec -i`.
+      const pipeTransport =
+        p.container != null ? JSON.parse(await call(commands.debugPrepareContainer(p.container))) : undefined;
+      return base(p, root, { processId: p.pid, justMyCode: skip, ...(pipeTransport ? { pipeTransport } : {}) });
+    }
     case "go":
       return base(p, root, { mode: "local", processId: p.pid });
     case "native":

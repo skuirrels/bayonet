@@ -36,6 +36,7 @@ import {
   type ProjectUse,
 } from "./model";
 import {
+  checkAudit,
   checkUpdates,
   installPackage,
   loadInstalled,
@@ -47,12 +48,14 @@ import {
   setVersion,
   useNuget,
 } from "./store";
+import { auditIssues, reasonLabel, severityLabel, severityRank, type PackageIssues } from "./audit";
 import type { PackageSummary } from "@/bindings";
 import styles from "./NugetView.module.css";
 
 type Row =
   | { kind: "section"; key: string; label: string; busy?: boolean }
-  | { kind: "installed"; key: string; pkg: InstalledPackage }
+  | { kind: "installed"; key: string; pkg: InstalledPackage; issues: PackageIssues | undefined }
+  | { kind: "transitive"; key: string; pkg: { id: string; version: string }; issues: PackageIssues }
   | {
       kind: "found";
       key: string;
@@ -68,6 +71,7 @@ export function NugetView() {
   }, []);
   const installed = useMemo(() => installedPackages(s.installed, s.outdated), [s.installed, s.outdated]);
   const projects = useMemo(() => projectsOf(s.installed), [s.installed]);
+  const issues = useMemo(() => auditIssues(s.audit), [s.audit]);
   const found = useMemo(() => searchRows(s.search), [s.search]);
   const problems = useMemo(
     () => [...searchProblems(s.search), ...(s.installed?.problems ?? [])],
@@ -89,8 +93,24 @@ export function NugetView() {
         kind: "installed",
         key: `i:${pkg.id}`,
         pkg,
+        issues: issues.get(pkg.id.toLowerCase()),
       })),
     ];
+    // Vulnerable packages no project references: fixed by referencing a patched version.
+    const transitive = [...issues.values()]
+      .filter((i) => i.transitive && i.vulnerabilities.length && (!q || i.id.toLowerCase().includes(q)))
+      .sort((a, b) => severityRank(b.worst ?? "") - severityRank(a.worst ?? "") || a.id.localeCompare(b.id));
+    if (transitive.length) {
+      const n = transitive.length;
+      out.push({ kind: "section", key: "s:transitive", label: tx`Vulnerable Transitive Packages (${n})` });
+      for (const i of transitive)
+        out.push({
+          kind: "transitive",
+          key: `t:${i.id}`,
+          pkg: { id: i.id, version: [...new Set(i.projects.map((p) => p.version ?? ""))].join(", ") },
+          issues: i,
+        });
+    }
     if (q) {
       out.push({
         kind: "section",
@@ -108,9 +128,11 @@ export function NugetView() {
       if (s.more && !s.searching) out.push({ kind: "more", key: "more" });
     }
     return out;
-  }, [installed, found, q, s.loading, s.searching, s.more]);
+  }, [installed, issues, found, q, s.loading, s.searching, s.more]);
   const active = rows.findIndex(
-    (r) => (r.kind === "installed" || r.kind === "found") && r.pkg.id.toLowerCase() === s.selected?.toLowerCase(),
+    (r) =>
+      (r.kind === "installed" || r.kind === "found" || r.kind === "transitive") &&
+      r.pkg.id.toLowerCase() === s.selected?.toLowerCase(),
   );
   const selectedInstalled = installed.find((p) => p.id.toLowerCase() === s.selected?.toLowerCase());
   const selectedFound = found.find((p) => p.id.toLowerCase() === s.selected?.toLowerCase());
@@ -141,7 +163,13 @@ export function NugetView() {
           onClick={() => void checkUpdates()}
           disabled={s.checking || !s.installed}
         />
-        {(s.checking || s.searching || s.loading) && <Spinner size={14} />}
+        <IconButton
+          icon="warning"
+          title="Check for Vulnerable and Deprecated Packages"
+          onClick={() => void checkAudit()}
+          disabled={s.auditing || !s.installed}
+        />
+        {(s.checking || s.searching || s.loading || s.auditing) && <Spinner size={14} />}
       </div>
       {(s.error || problems.length > 0) && (
         <div className={styles.banner} role="alert">
@@ -166,7 +194,7 @@ export function NugetView() {
             activeIndex={active}
             onActiveChange={(i) => {
               const r = rows[i];
-              if (r?.kind === "installed" || r?.kind === "found") selectPackage(r.pkg.id);
+              if (r?.kind === "installed" || r?.kind === "found" || r?.kind === "transitive") selectPackage(r.pkg.id);
             }}
             onActivate={(r) => {
               if (r.kind === "more") void runSearch(true);
@@ -184,6 +212,7 @@ export function NugetView() {
               id={selectedInstalled?.id ?? selectedFound?.id ?? s.selected}
               summary={selectedFound}
               installed={selectedInstalled}
+              issues={issues.get(s.selected.toLowerCase())}
               projects={projects}
             />
           ) : (
@@ -205,9 +234,14 @@ function PackageRow({ row }: { row: Row }) {
   if (row.kind === "section") return null;
   const id = row.pkg.id;
   const version = row.pkg.version;
-  const update = row.kind === "installed" ? row.pkg.update : row.installed?.update;
+  const update = row.kind === "installed" ? row.pkg.update : row.kind === "found" ? row.installed?.update : null;
   const detail =
-    row.kind === "installed" ? row.pkg.uses.map((u) => u.name).join(", ") : (row.pkg.description ?? "").split("\n")[0];
+    row.kind === "installed"
+      ? row.pkg.uses.map((u) => u.name).join(", ")
+      : row.kind === "transitive"
+        ? row.issues.projects.map((p) => p.name).join(", ")
+        : (row.pkg.description ?? "").split("\n")[0];
+  const issues = row.kind === "installed" || row.kind === "transitive" ? row.issues : undefined;
   return (
     <div className={styles.row}>
       <Icon name="package" size={16} className={styles.rowIcon} />
@@ -216,6 +250,10 @@ function PackageRow({ row }: { row: Row }) {
           <span className={styles.id}>{id}</span>
           <span className={styles.version}>{version}</span>
           {update && <Badge tone="accent">{`↑ ${update}`}</Badge>}
+          {issues?.worst && (
+            <Badge tone={severityRank(issues.worst) >= 2 ? "danger" : "warning"}>{tx`vulnerable`}</Badge>
+          )}
+          {issues?.deprecation && <Badge tone="warning">{tx`deprecated`}</Badge>}
           {row.kind === "found" && row.installed && <Badge>{tx`installed`}</Badge>}
           {row.kind === "found" && row.pkg.totalDownloads != null && (
             <span className={styles.downloads}>{formatDownloads(row.pkg.totalDownloads)}</span>
@@ -231,11 +269,13 @@ function Details({
   id,
   summary,
   installed,
+  issues,
   projects,
 }: {
   id: string;
   summary: (PackageSummary & { source: string }) | undefined;
   installed: InstalledPackage | undefined;
+  issues: PackageIssues | undefined;
   projects: ProjectRef[];
 }) {
   const { versions, version, busy } = useNuget();
@@ -261,6 +301,7 @@ function Details({
         )}
       </div>
       {summary?.description && <p className={styles.description}>{summary.description}</p>}
+      {issues && <Issues issues={issues} />}
       <dl className={styles.facts}>
         {summary?.owners && (
           <>
@@ -392,6 +433,50 @@ function Details({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** Advisories and the deprecation of the selected package. */
+function Issues({ issues }: { issues: PackageIssues }) {
+  const versions = [...new Set(issues.projects.map((p) => p.version).filter(Boolean))].join(", ");
+  const names = issues.projects.map((p) => p.name).join(", ");
+  const d = issues.deprecation;
+  const reasons = d?.reasons.map(reasonLabel).join(", ") ?? "";
+  const alternative = d?.alternative;
+  return (
+    <div className={styles.issues} role="alert">
+      {issues.vulnerabilities.length > 0 && (
+        <>
+          <div className={styles.issuesTitle}>
+            <Icon name="warning" size={14} />
+            {issues.transitive
+              ? tx`${versions} comes in under other packages of ${names} and has known vulnerabilities. Install a patched version to replace it.`
+              : tx`${versions} has known vulnerabilities in ${names}. Update to a patched version.`}
+          </div>
+          <ul className={styles.advisories}>
+            {issues.vulnerabilities.map((a) => (
+              <li key={a.url}>
+                <Badge tone={severityRank(a.severity) >= 2 ? "danger" : "warning"}>{severityLabel(a.severity)}</Badge>
+                <button type="button" className={styles.advisory} onClick={() => void openExternalUrl(a.url)}>
+                  {a.url.replace(/^https:\/\/github\.com\/advisories\//, "")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {d && (
+        <div className={styles.issuesTitle}>
+          <Icon name="warning" size={14} />
+          {alternative ? tx`Deprecated (${reasons}): use ${alternative} instead.` : tx`Deprecated (${reasons}).`}
+          {alternative && (
+            <Button size="small" onClick={() => selectPackage(alternative)}>
+              {tx`Show ${alternative}`}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,8 +1,12 @@
 //! Project-wide analyses over syntax trees.
 //!
+//! * [`csharp_types`]: the types a C# file declares and the members a XAML
+//!   binding can name.
 //! * [`duplicates`]: Locate Duplicates — token-based clone detection in the
 //!   style of PMD's CPD (tree-sitter leaves as tokens, optional anonymisation
 //!   of identifiers and literals, rolling hashes over token windows).
+//! * [`signature`]: Change Signature for C# — the declaration and its call
+//!   sites rewritten from the language server's references.
 //! * [`structural`]: Search / Replace Structurally — code patterns with
 //!   `$VAR$` placeholders matched against syntax trees (ast-grep's matcher on
 //!   the bundled grammars).
@@ -11,8 +15,10 @@
 //! run on rayon and honour a [`CancellationToken`]: call them from a blocking
 //! thread. Positions are 0-based lines and UTF-16 columns.
 
+pub mod csharp_types;
 pub mod duplicates;
 mod lines;
+pub mod signature;
 pub mod structural;
 
 pub use duplicates::{DuplicateGroup, DuplicateOptions, DuplicatesReport, Fragment, find_duplicates};

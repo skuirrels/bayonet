@@ -88,6 +88,11 @@ const UNTRANSLATED = new Set<string>([
   "ID",
   "OS ID",
   "dotnet-monitor HTTP API",
+  // XAML bindings: the .NET type of generated commands
+  "ICommand",
+  // .NET Aspire: product names
+  "Aspire",
+  "AppHost",
   // Entity Framework Core: a product name and placeholder values
   "Entity Framework Core",
   "InitialCreate",

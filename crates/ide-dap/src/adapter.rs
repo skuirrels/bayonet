@@ -49,7 +49,7 @@ pub struct AdapterSpec {
 }
 
 /// Built-in adapters used when no language definition names `adapter`.
-fn builtin(adapter: &str) -> Option<DebuggerConfig> {
+pub(crate) fn builtin(adapter: &str) -> Option<DebuggerConfig> {
     let cfg = |command: &str, args: &[&str], transport: &str, hint: &str| DebuggerConfig {
         adapter: adapter.to_owned(),
         command: command.to_owned(),

@@ -27,9 +27,10 @@ fn lines(s: &Solution) -> Vec<String> {
     out
 }
 
-const FIXTURE_TREE: [&str; 10] = [
+const FIXTURE_TREE: [&str; 11] = [
     "src/",
     "  Fixture.Api",
+    "  Fixture.AppHost",
     "  Fixture.Cli",
     "  Fixture.Core",
     "  Fixture.FSharp",
@@ -56,7 +57,7 @@ fn fixture_slnx_and_sln_describe_the_same_tree() {
 fn projects_resolve_to_existing_files_with_their_language() {
     let s = read(&fixture().join("DotnetFixture.sln")).unwrap();
     let SolutionItem::Folder { items, .. } = &s.items[0] else { panic!() };
-    let SolutionItem::Project { path, language, missing, .. } = &items[3] else { panic!() };
+    let SolutionItem::Project { path, language, missing, .. } = &items[4] else { panic!() };
     assert_eq!(*language, ProjectLanguage::FSharp);
     assert!(!missing);
     assert!(path.ends_with("src/Fixture.FSharp/Fixture.FSharp.fsproj"), "{path:?}");

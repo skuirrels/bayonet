@@ -26,6 +26,11 @@ interface OverlayState {
     targets: StepInTarget[];
     inline?: { path: string; line: number; ranges: InlineStepTarget[]; index: number };
   } | null;
+  /**
+   * Collection visualiser for the variable at `reference`; `evaluateName`
+   * reads it again at later stops (references only last until the program resumes).
+   */
+  grid: { session: DebugSessionId; reference: number; name: string; evaluateName: string | null } | null;
 }
 
 export const useOverlays = create<OverlayState>(() => ({
@@ -35,6 +40,7 @@ export const useOverlays = create<OverlayState>(() => ({
   chooser: null,
   attach: null,
   smartStep: null,
+  grid: null,
 }));
 
 export function openBreakpointPopover(path: string, id: string, at: { x: number; y: number }, focusLog = false) {
@@ -59,4 +65,8 @@ export function openConfigChooser(configs: RunConfig[]) {
 
 export function openSmartStepChooser(session: DebugSessionId, thread: number, targets: StepInTarget[]) {
   useOverlays.setState({ smartStep: { session, thread, targets } });
+}
+
+export function openDataGrid(session: DebugSessionId, reference: number, name: string, evaluateName: string | null) {
+  useOverlays.setState({ grid: { session, reference, name, evaluateName } });
 }

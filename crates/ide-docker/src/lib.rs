@@ -173,6 +173,27 @@ pub fn snapshot(ep: &DockerEndpoint) -> DockerSnapshot {
     snap
 }
 
+/// The running containers (for attaching a debugger inside one).
+pub fn running_containers(ep: &DockerEndpoint) -> IdeResult<Vec<DockerContainer>> {
+    let text = run(ep, &["ps", "--no-trunc", "--format", "{{json .}}"], QUICK)?;
+    Ok(parse_containers(&text).into_iter().filter(DockerContainer::running).collect())
+}
+
+/// Runs `argv` in `container` (`docker exec`); its stdout.
+pub fn exec(ep: &DockerEndpoint, container: &str, argv: &[&str]) -> IdeResult<String> {
+    let mut args = vec!["exec", container];
+    args.extend_from_slice(argv);
+    run(ep, &args, QUICK)
+}
+
+/// Copies the host directory `src` to `dest` in `container` (`docker cp src/. container:dest`).
+pub fn copy_dir_into(ep: &DockerEndpoint, src: &Path, container: &str, dest: &str) -> IdeResult<()> {
+    let from = format!("{}/.", src.display());
+    let to = format!("{container}:{dest}");
+    exec(ep, container, &["mkdir", "-p", dest])?;
+    run(ep, &["cp", &from, &to], LIFECYCLE).map(|_| ())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerOp {

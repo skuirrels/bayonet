@@ -12,6 +12,7 @@ const ipc = vi.hoisted(() => {
     debugStepInTargets: vi.fn(() => ok([] as Array<{ id: number; label: string }>)),
     debugStepInTarget: vi.fn(() => ok(null)),
     debugRestartFrame: vi.fn(() => ok(null)),
+    debugSetNextStatement: vi.fn(() => ok(null)),
     debugAttachableProcesses: vi.fn(() =>
       ok([
         { pid: 9, name: "node", commandLine: "node a.js", kind: "node", adapter: "js-debug", host: null, port: null },
@@ -69,6 +70,7 @@ const caps = (p: Partial<DebugCapabilities> = {}): DebugCapabilities => ({
   conditionalBreakpoints: true,
   hitConditionalBreakpoints: true,
   logPoints: true,
+  gotoTargets: false,
   ...p,
 });
 
@@ -227,6 +229,16 @@ describe("debugger actions (IDEA parity)", () => {
     paused({ caps: caps({ restartFrame: true }) });
     await executeAction("debug.resetFrame");
     expect(ipc.debugRestartFrame).toHaveBeenCalledWith(3, 71);
+  });
+
+  it("Set Next Statement moves to the caret's line when the adapter can", async () => {
+    caret("/p/app.py", "python", "a\nb\nc\nd", 2);
+    paused({ caps: caps({ gotoTargets: false }) });
+    await executeAction("debug.setNextStatement");
+    expect(ipc.debugSetNextStatement).not.toHaveBeenCalled();
+    paused({ caps: caps({ gotoTargets: true }) });
+    await executeAction("debug.setNextStatement");
+    expect(ipc.debugSetNextStatement).toHaveBeenCalledWith(3, 1, "/p/app.py", 2);
   });
 
   it("Show Execution Point reveals the top frame with focus", async () => {

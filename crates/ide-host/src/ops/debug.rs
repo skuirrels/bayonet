@@ -284,6 +284,18 @@ pub async fn debug_restart_frame(host: &Host, _window: &str, session: DebugSessi
     host.debugger.restart_frame(session, frame_id).await
 }
 
+/// Set Next Statement: moves the thread's execution point to `line` (0-based) of `path`.
+pub async fn debug_set_next_statement(
+    host: &Host,
+    _window: &str,
+    session: DebugSessionId,
+    thread_id: i64,
+    path: PathBuf,
+    line: u32,
+) -> IdeResult<()> {
+    host.debugger.set_next_statement(session, thread_id, path, line).await
+}
+
 pub fn debug_capabilities(host: &Host, _window: &str, session: DebugSessionId) -> IdeResult<DebugCapabilities> {
     host.debugger.capabilities(session)
 }
@@ -317,11 +329,99 @@ pub async fn debug_data_breakpoint_info(
     host.debugger.data_breakpoint_info(session, container, name, frame_id).await
 }
 
-/// Attach to Process: the user's processes a debugger can attach to.
+/// Attach to Process: the user's processes a debugger can attach to, then the .NET
+/// processes in running Docker containers (DBG-8).
 pub async fn debug_attachable_processes(_host: &Host, _window: &str) -> IdeResult<Vec<attach::AttachableProcess>> {
-    tokio::task::spawn_blocking(attach::attachable_processes)
+    let local = tokio::task::spawn_blocking(attach::attachable_processes);
+    let containers = tokio::task::spawn_blocking(container_processes);
+    let mut list =
+        local.await.map_err(|e| ide_core::IdeError::internal(format!("listing processes failed: {e}")))??;
+    list.extend(containers.await.unwrap_or_default());
+    Ok(list)
+}
+
+/// .NET processes in running containers; none when Docker is missing or not running.
+pub fn container_processes() -> Vec<attach::AttachableProcess> {
+    if ide_docker::docker_executable().is_none() {
+        return Vec::new();
+    }
+    let ep = ide_docker::DockerEndpoint::Default;
+    let Ok(running) = ide_docker::running_containers(&ep) else { return Vec::new() };
+    std::thread::scope(|s| {
+        let lists: Vec<_> = running
+            .iter()
+            .map(|c| {
+                let ep = &ep;
+                s.spawn(move || {
+                    // Images without a shell (distroless) list nothing.
+                    ide_docker::exec(ep, &c.name, &["sh", "-c", container::LIST_SCRIPT])
+                        .map(|out| container::parse_processes(&c.name, &out))
+                        .unwrap_or_default()
+                })
+            })
+            .collect();
+        lists.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+    })
+}
+
+/// Puts a Linux netcoredbg for its architecture into `container_name` (installed once
+/// per architecture by the tool installer, then `docker cp`), and returns the
+/// `pipeTransport` JSON of an attach request that runs it there.
+pub async fn debug_prepare_container(host: &Host, container_name: String) -> IdeResult<String> {
+    let data = host.local_data_dir.clone();
+    tokio::task::spawn_blocking(move || prepare_container(&data, &container_name))
         .await
-        .map_err(|e| ide_core::IdeError::internal(format!("listing processes failed: {e}")))?
+        .map_err(|e| ide_core::IdeError::internal(e.to_string()))?
+}
+
+pub fn prepare_container(data: &std::path::Path, name: &str) -> IdeResult<String> {
+    use ide_core::IdeError;
+    let docker = ide_docker::docker_executable().ok_or_else(|| IdeError::unavailable("Docker is not installed"))?;
+    let ep = ide_docker::DockerEndpoint::Default;
+    let debugger = format!("{}/netcoredbg", container::DEBUGGER_DIR);
+    if ide_docker::exec(&ep, name, &["test", "-x", &debugger]).is_err() {
+        let uname = ide_docker::exec(&ep, name, &["uname", "-m"])?;
+        let arch = container::linux_arch(&uname)
+            .ok_or_else(|| IdeError::unavailable(format!("netcoredbg has no build for {}", uname.trim())))?;
+        let platform = ide_tools::platform::Platform {
+            os: ide_tools::platform::Os::Linux,
+            arch: if arch == "arm64" { ide_tools::platform::Arch::Arm64 } else { ide_tools::platform::Arch::X64 },
+        };
+        let tools = ide_tools::Tools::with_paths(
+            data.join(format!("tools-linux-{arch}")),
+            ide_core::tool_path::search_path(),
+            platform,
+        );
+        let bin = tools.root().join("netcoredbg");
+        let installed = find_file(&bin, "netcoredbg");
+        let exe = match installed {
+            Some(exe) => exe,
+            None => {
+                tools.install("netcoredbg", &[], &ide_core::CancellationToken::new(), &|_| {})?;
+                find_file(&bin, "netcoredbg").ok_or_else(|| IdeError::internal("netcoredbg was not unpacked"))?
+            }
+        };
+        let dir = exe.parent().ok_or_else(|| IdeError::internal("netcoredbg has no folder"))?;
+        ide_docker::copy_dir_into(&ep, dir, name, container::DEBUGGER_DIR)?;
+    }
+    Ok(container::pipe_transport(&docker.display().to_string(), name).to_string())
+}
+
+/// The first file named `name` under `dir` (an unpacked release keeps it in a subfolder).
+fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).ok()?.flatten() {
+            let path = entry.path();
+            let kind = entry.file_type().ok()?;
+            if kind.is_dir() {
+                stack.push(path);
+            } else if kind.is_file() && entry.file_name() == name {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 /// Remote JVM Debug in listen mode: waits (cancellable through `request`) for the remote
@@ -443,6 +543,17 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("debug_restart_frame", |c| async move {
         debug_restart_frame(&c.host, &c.window, c.arg("session")?, c.arg("frameId")?).await
     });
+    d.add("debug_set_next_statement", |c| async move {
+        debug_set_next_statement(
+            &c.host,
+            &c.window,
+            c.arg("session")?,
+            c.arg("threadId")?,
+            c.arg("path")?,
+            c.arg("line")?,
+        )
+        .await
+    });
     d.add("debug_capabilities", |c| async move { debug_capabilities(&c.host, &c.window, c.arg("session")?) });
     d.add("debug_set_function_breakpoints", |c| async move {
         debug_set_function_breakpoints(&c.host, &c.window, c.arg("breakpoints")?).await
@@ -462,6 +573,7 @@ pub(crate) fn register(d: &mut Dispatcher) {
         .await
     });
     d.add("debug_attachable_processes", |c| async move { debug_attachable_processes(&c.host, &c.window).await });
+    d.add("debug_prepare_container", |c| async move { debug_prepare_container(&c.host, c.arg("container")?).await });
     d.add("debug_listen_for_jvm", |c| async move {
         debug_listen_for_jvm(&c.host, &c.window, c.arg("request")?, c.arg("host")?, c.arg("port")?).await
     });

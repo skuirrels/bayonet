@@ -49,9 +49,18 @@ import { setExpanded, suggestViewMode, useProjectTree } from "@/features/project
 import { dotnetRunType } from "./runType";
 import { efActions, isEfProject, loadEfProjects } from "./ef/ef";
 import { msbuildCompletion } from "./msbuild/completion";
+import { xamlEditor } from "./xaml/editor";
+import { activateXamlPreview, xamlLiveText } from "./xaml/preview";
 import { SOLUTION_ROOT_ID, solutionProjects, solutionRoot, touchesSolution } from "./solution";
 import { loadGeneratedDirs, resetGenerated, sourcesChanged, watchGenerated } from "./generated";
+import { watchContinuous } from "./tests/continuous";
+import { manageUserSecrets, targetProject } from "./secrets";
+import { publishProject, runInContainer } from "./publish";
+import { DIAGRAM_KIND, openProjectDiagram } from "./diagram/open";
+import { ChangeSignatureHost } from "./signature/ChangeSignatureDialog";
+import { registerRefactoringFallback } from "@/editor/refactor";
 import { tx } from "@/platform/i18n";
+import { loadAppHosts, resetAspire } from "./aspire/store";
 
 const BINLOG_KIND = "binlog";
 const isBinlog = (path: string) => /\.binlog$/i.test(path);
@@ -79,6 +88,7 @@ const REFRESH_DELAY = 300;
 export const NUGET_WINDOW = "nuget";
 export const UNIT_TESTS_WINDOW = "unitTests";
 export const DIAGNOSTICS_WINDOW = "dotnetDiagnostics";
+export const ASPIRE_WINDOW = "aspire";
 
 const diagnostics = () => import("./diagnostics/store");
 
@@ -103,6 +113,7 @@ export function activate(): () => void {
   let disposeNuget: (() => void) | null = null;
   let disposeTests: (() => void) | null = null;
   let disposeDiagnostics: (() => void) | null = null;
+  let disposeAspire: (() => void) | null = null;
   let seq = 0;
   let shown = "";
   const clear = () => {
@@ -119,6 +130,9 @@ export function activate(): () => void {
     resetNuget();
     resetUnitTests();
     resetGenerated();
+    disposeAspire?.();
+    disposeAspire = null;
+    resetAspire();
     shown = "";
   };
   const refresh = async () => {
@@ -143,6 +157,25 @@ export function activate(): () => void {
       disposeRoot = registerProjectViewRoot(solutionRoot(solution, dirs));
       setSolution(solution);
       void loadEfProjects();
+      void loadAppHosts(solutionProjects(solution.items))
+        .then((apphosts) => {
+          if (id !== seq) return;
+          if (!apphosts.length) {
+            disposeAspire?.();
+            disposeAspire = null;
+            return;
+          }
+          // Rider shows Aspire under Services: the window takes that icon.
+          disposeAspire ??= registerToolWindow({
+            id: ASPIRE_WINDOW,
+            title: "Aspire",
+            icon: "toolwindow-services",
+            anchor: "bottom",
+            order: 43,
+            component: lazyComponent(() => import("./aspire/AspireView").then((m) => m.AspireView)),
+          });
+        })
+        .catch((e: unknown) => console.warn("aspire: cannot find AppHosts", e));
       // Kept across solution edits so the window keeps its search and selection.
       disposeNuget ??= registerToolWindow({
         id: NUGET_WINDOW,
@@ -181,6 +214,13 @@ export function activate(): () => void {
   };
   void refresh();
   const disposeRunType = registerRunConfigType(dotnetRunType);
+  const disposeDiagramKind = registerEditorKind({
+    kind: DIAGRAM_KIND,
+    component: lazyComponent(() => import("./diagram/ProjectDiagram").then((m) => m.ProjectDiagram)),
+    title: () => tx`Project Dependencies`,
+    icon: () => "toolwindow-hierarchy",
+    restorable: true,
+  });
   const disposeBinlogKind = registerEditorKind({
     kind: BINLOG_KIND,
     component: lazyComponent(() => import("./binlog/BinlogViewer").then((m) => m.BinlogViewer)),
@@ -208,8 +248,9 @@ export function activate(): () => void {
   const disposeMsbuild = registerEditorContribution({
     id: "dotnet.msbuild",
     order: 57,
-    extensions: (ctx) => [msbuildNavigation(ctx), msbuildCompletion(ctx)],
+    extensions: (ctx) => [msbuildNavigation(ctx), msbuildCompletion(ctx), xamlEditor(ctx), xamlLiveText(ctx)],
   });
+  const disposeXamlPreview = activateXamlPreview();
   const disposeTraceHeat = registerEditorContribution({
     id: "dotnet.traceHeat",
     order: 66,
@@ -223,6 +264,11 @@ export function activate(): () => void {
     id: "dotnet.solutionDialogs",
     component: SolutionDialogs,
   });
+  // Roslyn's server has no Change Signature; the IDE rewrites C# itself.
+  const disposeSignatureDialog = registerOverlay({ id: "dotnet.changeSignature", component: ChangeSignatureHost });
+  const disposeChangeSignature = registerRefactoringFallback("changeSignature", "csharp", async (view) =>
+    (await import("./signature/run")).changeCSharpSignature(view),
+  );
   const disposeNewMenu = registerMenuGroup({
     id: "dotnet.new",
     menus: ["new"],
@@ -280,6 +326,7 @@ export function activate(): () => void {
           : []),
         { kind: "action", action: "dotnet.runAllTests" },
         { kind: "action", action: "dotnet.manageNugetPackages" },
+        { kind: "action", action: "dotnet.projectDiagram" },
       ];
     },
   });
@@ -318,6 +365,21 @@ export function activate(): () => void {
               },
             ]
           : []),
+        {
+          kind: "action",
+          action: "dotnet.manageUserSecrets",
+          arg: { dir: project.dir },
+        },
+        {
+          kind: "action",
+          action: "dotnet.publish",
+          arg: { dir: project.dir },
+        },
+        {
+          kind: "action",
+          action: "dotnet.runInContainer",
+          arg: { dir: project.dir },
+        },
         {
           kind: "action",
           action: "dotnet.removeFromSolution",
@@ -388,6 +450,58 @@ export function activate(): () => void {
         const project = projectAt(dirArg(arg, "dir") ?? "");
         if (project) openDialog({ kind: "references", project });
       },
+    },
+    {
+      id: "dotnet.runInContainer",
+      title: "Run in Container",
+      category: "Run",
+      when: "projectOpen",
+      keywords: ["docker", "podman", "container", "image", "PublishContainer"],
+      run: ({ arg }) => {
+        const project = targetProject(dirArg(arg, "dir"));
+        if (project) void runInContainer(project);
+        else
+          notifications().notify({
+            group: "dotnet",
+            level: "info",
+            title: tx`Select a project in the Solution Explorer to run it in a container`,
+          });
+      },
+    },
+    {
+      id: "dotnet.projectDiagram",
+      title: "Show Project Dependency Diagram",
+      category: "Project",
+      when: "projectOpen",
+      keywords: ["diagram", "dependencies", "graph", "project references", "architecture"],
+      run: () => {
+        if (useSolution.getState().solution) openProjectDiagram();
+      },
+    },
+    {
+      id: "dotnet.publish",
+      title: "Publish…",
+      category: "Build",
+      when: "projectOpen",
+      keywords: ["publish", "pubxml", "profile", "deploy", "container", "docker", "image", "folder"],
+      run: ({ arg }) => {
+        const project = targetProject(dirArg(arg, "dir"));
+        if (project) void publishProject(project);
+        else
+          notifications().notify({
+            group: "dotnet",
+            level: "info",
+            title: tx`Select a project in the Solution Explorer to publish it`,
+          });
+      },
+    },
+    {
+      id: "dotnet.manageUserSecrets",
+      title: "Manage User Secrets",
+      category: "Project",
+      when: "projectOpen",
+      keywords: ["secrets", "user-secrets", "secrets.json", "configuration", "UserSecretsId"],
+      run: ({ arg }) => void manageUserSecrets(dirArg(arg, "dir")),
     },
     {
       id: "dotnet.removeFromSolution",
@@ -526,6 +640,7 @@ export function activate(): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let packagesTimer: ReturnType<typeof setTimeout> | undefined;
   const unwatchGenerated = watchGenerated();
+  const unwatchContinuous = watchContinuous();
   const unsubFs = onIdeEvent("fsChanged", (e) => {
     const paths = [...e.created, ...e.modified, ...e.removed];
     sourcesChanged(paths);
@@ -544,11 +659,15 @@ export function activate(): () => void {
     unsub();
     unsubFs();
     unwatchGenerated();
+    unwatchContinuous();
     disposeActions();
     disposeGutter();
     disposeMsbuild();
     disposeTraceHeat();
+    disposeXamlPreview();
     disposeDialogs();
+    disposeSignatureDialog();
+    disposeChangeSignature();
     disposeNewMenu();
     disposeProjectMenu();
     disposeSolutionMenu();
@@ -556,6 +675,7 @@ export function activate(): () => void {
     disposeStatus();
     disposeBinlogProvider();
     disposeBinlogKind();
+    disposeDiagramKind();
     clear();
   };
 }

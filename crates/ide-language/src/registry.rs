@@ -68,6 +68,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("proto", include_str!("../../../languages/proto.toml")),
     ("python", include_str!("../../../languages/python.toml")),
     ("r", include_str!("../../../languages/r.toml")),
+    ("razor", include_str!("../../../languages/razor.toml")),
     ("ruby", include_str!("../../../languages/ruby.toml")),
     ("rust", include_str!("../../../languages/rust.toml")),
     ("sass", include_str!("../../../languages/sass.toml")),
@@ -740,6 +741,24 @@ mod tests {
         // Loose files (LightEdit) have no project to stop at.
         let loose = reg.framework_ui_mode(&LanguageId::new("html"), &page, None);
         assert_eq!(loose.as_deref(), Some("Angular Template"));
+    }
+
+    #[test]
+    fn razor_starts_the_same_roslyn_as_csharp() {
+        // One server instance serves both (shared by name and root), started with
+        // whichever language opened first: the definitions must not drift apart.
+        let reg = reg();
+        let server = |lang: &str| {
+            reg.get(&LanguageId::new(lang))
+                .unwrap()
+                .language_servers
+                .into_iter()
+                .find(|s| s.name == "roslyn-language-server")
+                .unwrap()
+        };
+        assert_eq!(server("razor"), server("csharp"));
+        assert_eq!(reg.detect(Path::new("/s/Pages/Home.razor"), None), LanguageId::new("razor"));
+        assert_eq!(reg.detect(Path::new("/s/Views/Index.cshtml"), None), LanguageId::new("razor"));
     }
 
     #[test]

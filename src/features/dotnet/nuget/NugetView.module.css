@@ -180,3 +180,54 @@
   gap: 2px;
   min-width: 56px;
 }
+
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--fg);
+}
+
+.issuesTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--warning);
+}
+
+.issuesTitle > :global(svg) {
+  flex: none;
+}
+
+.advisories {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 20px;
+  list-style: none;
+}
+
+.advisories li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.advisory {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--link, var(--accent));
+  font: inherit;
+  cursor: pointer;
+}
+
+.advisory:hover {
+  text-decoration: underline;
+}

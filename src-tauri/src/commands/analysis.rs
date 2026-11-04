@@ -1,8 +1,9 @@
 //! IPC commands of `ide_host::ops::analysis` (the shared implementation).
 
 use crate::state::AppState;
+use ide_analysis::signature::{MethodSignature, NewParameter, SignatureRewrite};
 use ide_analysis::{DuplicateOptions, DuplicatesReport, StructuralQuery};
-use ide_core::{IdeResult, RequestId};
+use ide_core::{IdeResult, IpcPath, Location, Pos, RequestId};
 #[allow(unused_imports)]
 pub use ide_host::ops::analysis::*;
 use ide_search::SearchScope;
@@ -41,6 +42,43 @@ pub async fn analysis_locate_duplicates(
     options: DuplicateOptions,
 ) -> IdeResult<DuplicatesReport> {
     ide_host::ops::analysis::analysis_locate_duplicates(&state.host, window.label(), request, scope, options).await
+}
+
+/// The project's C# type `name` and the members a XAML binding can name (CI-16).
+#[tauri::command]
+#[specta::specta]
+pub async fn csharp_type_members(
+    window: Window,
+    state: State<'_, AppState>,
+    name: String,
+    namespace: Option<String>,
+) -> IdeResult<Option<BindableType>> {
+    ide_host::ops::analysis::csharp_type_members(&state.host, window.label(), name, namespace).await
+}
+
+/// The C# method, constructor, local function or delegate declared around `pos`.
+#[tauri::command]
+#[specta::specta]
+pub async fn signature_at(
+    window: Window,
+    state: State<'_, AppState>,
+    path: IpcPath,
+    pos: Pos,
+) -> IdeResult<Option<MethodSignature>> {
+    ide_host::ops::analysis::signature_at(&state.host, window.label(), path, pos).await
+}
+
+/// Change Signature for C#: the edit for the declaration and the calls at `locations`.
+#[tauri::command]
+#[specta::specta]
+pub async fn change_signature(
+    window: Window,
+    state: State<'_, AppState>,
+    signature: MethodSignature,
+    change: Vec<NewParameter>,
+    locations: Vec<Location>,
+) -> IdeResult<SignatureRewrite> {
+    ide_host::ops::analysis::change_signature(&state.host, window.label(), signature, change, locations).await
 }
 
 /// Languages Search Structurally supports (those with a bundled grammar).

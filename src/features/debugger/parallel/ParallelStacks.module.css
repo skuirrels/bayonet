@@ -1,0 +1,84 @@
+.canvas {
+  height: 100%;
+  overflow: auto;
+  background: var(--bg-editor);
+}
+
+.graph {
+  position: relative;
+}
+
+.edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--fg-subtle);
+  stroke-width: 1.2;
+}
+
+.edgeCurrent {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.box {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.current {
+  border-color: var(--accent);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: var(--fs-small);
+  color: var(--fg-secondary);
+  background: var(--bg-control);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.current .header {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.frame:hover {
+  background: var(--bg-tree-selected-inactive);
+}
+
+.active,
+.active:hover {
+  background: var(--bg-debug-line);
+}

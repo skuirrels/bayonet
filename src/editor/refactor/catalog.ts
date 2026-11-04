@@ -17,6 +17,8 @@ export type RefactoringId =
   | "extractConstant"
   | "extractField"
   | "extractParameter"
+  | "extractInterface"
+  | "extractSuperclass"
   | "inline"
   | "pullMembersUp"
   | "pushMembersDown";
@@ -96,6 +98,20 @@ export const REFACTORINGS: readonly Refactoring[] = [
     reason: (sel) =>
       sel ? "Selected block should represent an expression" : "Caret should be inside an expression in a function",
   },
+  {
+    id: "extractInterface",
+    action: "refactor.extractInterface",
+    label: "Extract Interface…",
+    kind: "refactor.extract",
+    reason: () => "Caret should be positioned at the name of the class to be refactored",
+  },
+  {
+    id: "extractSuperclass",
+    action: "refactor.extractSuperclass",
+    label: "Extract Superclass…",
+    kind: "refactor.extract",
+    reason: () => "Caret should be positioned at the name of the class to be refactored",
+  },
   { id: "inline", action: "refactor.inline", label: "Inline…", kind: "refactor.inline", reason: () => AT_NAME },
   {
     id: "pullMembersUp",
@@ -140,6 +156,9 @@ export function classifyAction(action: Pick<CodeAction, "kind" | "title">): Refa
   if (kindIs(kind, "refactor.extract") || (generic && /^(extract|introduce)\b/i.test(title))) {
     const sub = kind.slice("refactor.extract".length);
     const is = (re: RegExp) => re.test(sub) || re.test(title);
+    // Roslyn: "Extract interface...", "Extract base class...".
+    if (/^extract( an?)? interface\b/i.test(title)) return "extractInterface";
+    if (/^extract( an?)? (base class|superclass)\b/i.test(title)) return "extractSuperclass";
     if (
       /^(extract|introduce)( (in)?to)?( an?)? (type\b|typedef|interface|struct|enum|trait|superclass|module)/i.test(
         title,

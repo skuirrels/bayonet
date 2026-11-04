@@ -5,7 +5,7 @@ use crate::rpc::Dispatcher;
 use ide_core::RequestId;
 use ide_core::{IdeError, IdeResult, IpcPath};
 use ide_dotnet::Solution;
-use ide_dotnet::nuget::{self, InstalledPackages, PackageSearch};
+use ide_dotnet::nuget::{self, InstalledPackages, PackageAudit, PackageSearch};
 use ide_dotnet::templates::{self, ProjectTemplate, TemplateValue};
 use ide_dotnet::testing::{self, SessionRequest, TestApp, TestEvent, TestPhase, TestProject, TestSelection};
 use std::path::{Path, PathBuf};
@@ -30,6 +30,43 @@ fn dotnet_of(host: &Host, window: &str) -> IdeResult<(PathBuf, Option<PathBuf>)>
     let root = project.root.clone();
     let dotnet = ide_sdk::apply::dotnet_command(&root, &project.settings.effective());
     Ok((root, dotnet))
+}
+
+/// Avalonia previewer for the XAML file at `path` (CI-16): builds its project, starts the
+/// designer host and streams frames on `on_event` until `cancel_request(request)`.
+/// `text` is the editor's current text; later text goes through `dotnet_xaml_preview_update`.
+pub async fn dotnet_xaml_preview(
+    host: &Host,
+    window: &str,
+    request: RequestId,
+    path: PathBuf,
+    text: String,
+    scale: f64,
+    on_event: Channel<ide_dotnet::avalonia::PreviewEvent>,
+) -> IdeResult<()> {
+    use ide_dotnet::avalonia::{self, PreviewEvent, PreviewPhase};
+    let (_, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    let token = host.begin_request(request);
+    let emit = |e: PreviewEvent| {
+        let _ = on_event.send(e);
+    };
+    let scale = if scale.is_finite() { scale.clamp(1.0, 4.0) } else { 1.0 };
+    let result = avalonia::run(request.0.into(), &dotnet, &path, text, scale, &token, &emit).await;
+    host.end_request(request);
+    match result {
+        Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled => Ok(()),
+        Err(e) => {
+            emit(PreviewEvent::Phase { phase: PreviewPhase::Failed, message: Some(e.message.clone()) });
+            Err(e)
+        }
+        ok => ok,
+    }
+}
+
+/// New XAML text for the preview started as `request`; false when it is not running.
+pub fn dotnet_xaml_preview_update(request: RequestId, text: String) -> bool {
+    ide_dotnet::avalonia::update(request.0.into(), text)
 }
 
 /// Searches the package sources of the project's `nuget.config` (`skip` / `take` page).
@@ -71,6 +108,30 @@ pub async fn nuget_installed(
         let target = ide_dotnet::find(&root).into_iter().next().unwrap_or_else(|| root.clone());
         let out = nuget::run(dotnet.as_deref(), &root, &nuget::list_args(&target, outdated, prerelease))?;
         Ok(nuget::with_central_packages(nuget::parse_list(&out)?))
+    })
+    .await
+}
+
+/// Vulnerable (with the packages under them) and deprecated packages of every project
+/// of the solution at the root, placed in their project files. Asks the package sources.
+pub async fn nuget_audit(host: &Host, window: &str) -> IdeResult<PackageAudit> {
+    let (root, dotnet) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        let target = ide_dotnet::find(&root).into_iter().next().unwrap_or_else(|| root.clone());
+        let mut listings = Vec::new();
+        let mut failures = Vec::new();
+        for vulnerable in [true, false] {
+            match nuget::run(dotnet.as_deref(), &root, &nuget::audit_args(&target, vulnerable)) {
+                Ok(out) => listings.push(out),
+                Err(e) => failures.push(e),
+            }
+        }
+        if listings.is_empty() {
+            return Err(failures.remove(0));
+        }
+        let mut audit = nuget::parse_audit(&listings.iter().map(String::as_str).collect::<Vec<_>>())?;
+        audit.problems.extend(failures.into_iter().map(|e| e.message));
+        Ok(nuget::locate_findings(audit))
     })
     .await
 }
@@ -418,6 +479,51 @@ pub async fn dotnet_generated_sources(
     .await
 }
 
+/// The publish profiles of `project` (BLD-6).
+pub async fn dotnet_publish_profiles(
+    host: &Host,
+    _window: &str,
+    project: IpcPath,
+) -> IdeResult<Vec<ide_dotnet::publish::PublishProfile>> {
+    host.blocking(move || Ok(ide_dotnet::publish::profiles(&project))).await
+}
+
+/// The `dotnet publish` command line of `project` to `target`, with the project's `dotnet`.
+pub async fn dotnet_publish_command(
+    host: &Host,
+    window: &str,
+    project: IpcPath,
+    target: ide_dotnet::publish::PublishTarget,
+) -> IdeResult<ide_dotnet::publish::PublishCommand> {
+    let (_, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    Ok(ide_dotnet::publish::command(&dotnet, &project, &target))
+}
+
+/// Run in Container (PLT-5): the shell line that publishes `project` as image
+/// `repository` and runs it, a web project's launch port mapped to the container's.
+pub async fn dotnet_container_run(
+    host: &Host,
+    window: &str,
+    project: IpcPath,
+    repository: String,
+) -> IdeResult<ide_dotnet::publish::PublishCommand> {
+    let (_, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    host.blocking(move || {
+        let port = ide_dotnet::publish::web_host_port(&project);
+        Ok(ide_dotnet::publish::container_run(&dotnet, &project, &repository, port))
+    })
+    .await
+}
+
+/// The `secrets.json` of `project` (PLT-4), with a `UserSecretsId` added when it has none.
+pub async fn dotnet_user_secrets(host: &Host, window: &str, project: IpcPath) -> IdeResult<IpcPath> {
+    let (_, dotnet) = dotnet_of(host, window)?;
+    host.blocking(move || ide_dotnet::secrets::ensure_secrets_file(dotnet.as_deref(), &project).map(IpcPath::from))
+        .await
+}
+
 /// The projects `project` references.
 pub async fn dotnet_project_references(host: &Host, _window: &str, project: IpcPath) -> IdeResult<Vec<IpcPath>> {
     host.blocking(move || Ok(templates::project_references(&project)?.into_iter().map(IpcPath::from).collect())).await
@@ -457,19 +563,23 @@ pub async fn dotnet_test_projects(host: &Host, window: &str) -> IdeResult<Vec<Te
 /// Builds, then discovers (`run` false) or runs the tests of `selection` (every
 /// test project when empty), streaming progress and results on `on_event`.
 /// Cancellable with `cancel_request(request)`.
+#[allow(clippy::too_many_arguments)]
 pub async fn dotnet_tests(
     host: &Host,
     window: &str,
     request: RequestId,
     run: bool,
     coverage: bool,
+    debug: bool,
     selection: Vec<TestSelection>,
     on_event: Channel<TestEvent>,
 ) -> IdeResult<()> {
     let (root, dotnet) = dotnet_of(host, window)?;
     let token = host.begin_request(request);
-    let coverage = (run && coverage).then(|| coverage_dir(request));
-    let result = tests_inner(&root, dotnet, run, coverage.as_deref(), selection, &token, &on_event).await;
+    // A debug run collects no coverage: the coverage host would start the tests in another process.
+    let coverage = (run && coverage && !debug).then(|| coverage_dir(request));
+    let debug = run && debug;
+    let result = tests_inner(&root, dotnet, run, coverage.as_deref(), debug, selection, &token, &on_event).await;
     host.end_request(request);
     if let Err(e) = &result {
         let _ = on_event.send(TestEvent::Phase {
@@ -487,11 +597,13 @@ fn coverage_dir(request: RequestId) -> PathBuf {
     std::env::temp_dir().join("dotnetidea-coverage").join(format!("{}-{}-{stamp}", std::process::id(), request.0))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn tests_inner(
     root: &Path,
     dotnet: Option<PathBuf>,
     run: bool,
     coverage: Option<&Path>,
+    debug: bool,
     selection: Vec<TestSelection>,
     token: &ide_core::CancellationToken,
     on_event: &Channel<TestEvent>,
@@ -559,9 +671,11 @@ async fn tests_inner(
             app.args = testing::coverage_args(out, &name);
             out.join(name)
         });
+        app.wait_for_debugger = debug;
         let out = on_event.clone();
         let out_project = project.clone();
-        let result = testing::session(
+        let started_project = project.clone();
+        let result = testing::session_with(
             &app,
             request,
             token,
@@ -573,6 +687,11 @@ async fn tests_inner(
             },
             move |line| {
                 let _ = out.send(TestEvent::Output { project: Some(out_project.clone()), line });
+            },
+            |pid| {
+                if debug {
+                    send(TestEvent::Debug { project: started_project, pid });
+                }
             },
         )
         .await;
@@ -633,6 +752,7 @@ async fn test_app(dotnet: &Path, project: &Path) -> IdeResult<TestApp> {
         cwd: dir.to_path_buf(),
         env: Vec::new(),
         args: Vec::new(),
+        wait_for_debugger: false,
     })
 }
 
@@ -735,6 +855,21 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("dotnet_edit_references", |c| async move {
         dotnet_edit_references(&c.host, &c.window, c.arg("project")?, c.arg("add")?, c.arg("remove")?).await
     });
+    d.add("dotnet_xaml_preview", |c| async move {
+        dotnet_xaml_preview(
+            &c.host,
+            &c.window,
+            c.arg("request")?,
+            c.arg("path")?,
+            c.arg("text")?,
+            c.arg("scale")?,
+            c.sender("onEvent")?,
+        )
+        .await
+    });
+    d.add("dotnet_xaml_preview_update", |c| async move {
+        Ok(dotnet_xaml_preview_update(c.arg("request")?, c.arg("text")?))
+    });
     d.add("dotnet_test_projects", |c| async move { dotnet_test_projects(&c.host, &c.window).await });
     d.add("dotnet_tests", |c| async move {
         dotnet_tests(
@@ -743,6 +878,7 @@ pub(crate) fn register(d: &mut Dispatcher) {
             c.arg("request")?,
             c.arg("run")?,
             c.arg::<Option<bool>>("coverage")?.unwrap_or(false),
+            c.arg::<Option<bool>>("debug")?.unwrap_or(false),
             c.arg("selection")?,
             c.sender("onEvent")?,
         )
@@ -758,6 +894,17 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("nuget_installed", |c| async move {
         nuget_installed(&c.host, &c.window, c.arg("outdated")?, c.arg("prerelease")?).await
     });
+    d.add("dotnet_publish_profiles", |c| async move {
+        dotnet_publish_profiles(&c.host, &c.window, c.arg("project")?).await
+    });
+    d.add("dotnet_publish_command", |c| async move {
+        dotnet_publish_command(&c.host, &c.window, c.arg("project")?, c.arg("target")?).await
+    });
+    d.add("dotnet_container_run", |c| async move {
+        dotnet_container_run(&c.host, &c.window, c.arg("project")?, c.arg("repository")?).await
+    });
+    d.add("dotnet_user_secrets", |c| async move { dotnet_user_secrets(&c.host, &c.window, c.arg("project")?).await });
+    d.add("nuget_audit", |c| async move { nuget_audit(&c.host, &c.window).await });
     d.add("nuget_install", |c| async move {
         nuget_install(&c.host, &c.window, c.arg("projects")?, c.arg("id")?, c.arg("version")?).await
     });

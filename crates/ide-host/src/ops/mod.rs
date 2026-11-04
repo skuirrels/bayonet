@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod analysis;
+pub mod aspire;
 pub mod build;
 pub mod bytes;
 pub mod coverage;
@@ -88,6 +89,7 @@ pub fn register_all(d: &mut crate::rpc::Dispatcher) {
     doc::register(d);
     dotnet::register(d);
     diagnostics::register(d);
+    aspire::register(d);
     search::register(d);
     run::register(d);
     env::register(d);

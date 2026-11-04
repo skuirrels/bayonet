@@ -1634,7 +1634,7 @@ impl LspManager {
                         actions
                             .unwrap_or_default()
                             .into_iter()
-                            .map(|a| convert::code_action(&conv, a, t.server.id))
+                            .flat_map(|a| convert::code_actions(&conv, a, t.server.id))
                             // Servers may ignore `only`, and the kinds kept for this one.
                             .filter(|a| caps.restriction.keeps_action(a.kind.as_deref())),
                     );

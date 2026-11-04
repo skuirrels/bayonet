@@ -117,6 +117,8 @@ tempfile = "3"
 [profile.dev]
 # Keep debug builds snappy while giving dependencies decent speed.
 opt-level = 0
+# One debug-info bundle per binary, not a .o per codegen unit left behind in target/.
+split-debuginfo = "packed"
 [profile.dev.package."*"]
 opt-level = 2
 
