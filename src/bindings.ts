@@ -3854,6 +3854,19 @@ export type Fragment = {
 	text: string,
 };
 
+/**  The declaration a trace frame's method comes from. */
+export type FrameSource = {
+	/**  The frame name, as in [`FlameNode::name`]. */
+	frame: string,
+	path: IpcPath,
+	/**  0-based line and column of the declaration's name. */
+	line: number,
+	col: number,
+	/**  0-based first and last line of the whole declaration. */
+	startLine: number,
+	endLine: number,
+};
+
 export type FrameworkPackages = {
 	framework: string,
 	packages: InstalledPackage[],
@@ -7576,6 +7589,8 @@ export type TraceProfile = {
 	threads: number,
 	/**  All threads merged; children by time, longest first. */
 	root: FlameNode,
+	/**  Where the frames of the solution's own code are declared (filled in by the host). */
+	sources: FrameSource[],
 };
 
 export type TransferError = {

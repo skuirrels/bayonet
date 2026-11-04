@@ -427,6 +427,23 @@ pub struct TraceProfile {
     pub threads: u32,
     /// All threads merged; children by time, longest first.
     pub root: FlameNode,
+    /// Where the frames of the solution's own code are declared (filled in by the host).
+    pub sources: Vec<FrameSource>,
+}
+
+/// The declaration a trace frame's method comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSource {
+    /// The frame name, as in [`FlameNode::name`].
+    pub frame: String,
+    pub path: IpcPath,
+    /// 0-based line and column of the declaration's name.
+    pub line: u32,
+    pub col: u32,
+    /// 0-based first and last line of the whole declaration.
+    pub start_line: u32,
+    pub end_line: u32,
 }
 
 #[derive(Deserialize)]
@@ -505,6 +522,9 @@ impl Tree {
 }
 
 /// Frames dotnet-trace puts at the root of every stack (process, thread grouping).
+/// The pseudo-frame dotnet-trace puts under the method that was running on a CPU.
+const CPU_TIME_FRAME: &str = "CPU_TIME";
+
 fn is_grouping_frame(name: &str) -> bool {
     name.starts_with("Process64 ")
         || name.starts_with("Process32 ")
@@ -521,12 +541,15 @@ pub fn flame_graph(json: &str, path: &Path, min_fraction: f64) -> IdeResult<Trac
     let mut tree = Tree::default();
     let mut duration: f64 = 0.0;
     let threads = s.profiles.len() as u32;
+    let name = |f: usize| s.shared.frames.get(f).map(|fr| fr.name.as_str());
     let strip = |stack: &[usize]| -> Vec<usize> {
-        stack
-            .iter()
-            .copied()
-            .skip_while(|f| s.shared.frames.get(*f).is_some_and(|fr| is_grouping_frame(&fr.name)))
-            .collect()
+        let mut frames: Vec<usize> =
+            stack.iter().copied().skip_while(|f| name(*f).is_some_and(is_grouping_frame)).collect();
+        // dotnet-trace marks on-CPU samples with a `CPU_TIME` leaf: that time is the caller's own.
+        if frames.len() > 1 && frames.last().and_then(|f| name(*f)) == Some(CPU_TIME_FRAME) {
+            frames.pop();
+        }
+        frames
     };
     for profile in &s.profiles {
         match profile {
@@ -567,7 +590,13 @@ pub fn flame_graph(json: &str, path: &Path, min_fraction: f64) -> IdeResult<Trac
     }
     let min = tree.total * min_fraction;
     let root = tree.into_node("All threads".to_owned(), &s.shared.frames, min);
-    Ok(TraceProfile { path: path.to_path_buf().into(), duration_ms: duration.round() as u32, threads, root })
+    Ok(TraceProfile {
+        path: path.to_path_buf().into(),
+        duration_ms: duration.round() as u32,
+        threads,
+        root,
+        sources: Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------- metrics
@@ -771,6 +800,22 @@ mod tests {
         assert_eq!(p.root.children[1].name, "Idle");
         // Nodes under the threshold go.
         assert_eq!(flame_graph(json, Path::new("/t.json"), 0.5).unwrap().root.children.len(), 1);
+    }
+
+    #[test]
+    fn counts_cpu_time_as_the_callers_own_time() {
+        let json = r#"{"shared":{"frames":[{"name":"Main"},{"name":"Spin"},{"name":"CPU_TIME"},{"name":"UNMANAGED_CODE_TIME"}]},
+          "profiles":[{"type":"evented","startValue":0,"endValue":10,"events":[
+            {"type":"O","frame":0,"at":0},{"type":"O","frame":1,"at":0},{"type":"O","frame":2,"at":0},{"type":"C","frame":2,"at":6},
+            {"type":"O","frame":3,"at":6},{"type":"C","frame":3,"at":8},{"type":"C","frame":1,"at":8},
+            {"type":"O","frame":2,"at":8},{"type":"C","frame":2,"at":10},{"type":"C","frame":0,"at":10}]}]}"#;
+        let p = flame_graph(json, Path::new("/t.json"), 0.0).unwrap();
+        let main = &p.root.children[0];
+        assert_eq!((main.name.as_str(), main.total_ms, main.self_ms), ("Main", 10, 2));
+        let spin = &main.children[0];
+        assert_eq!((spin.name.as_str(), spin.total_ms, spin.self_ms), ("Spin", 8, 6));
+        // Native time stays a frame of its own.
+        assert_eq!(spin.children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["UNMANAGED_CODE_TIME"]);
     }
 
     #[test]

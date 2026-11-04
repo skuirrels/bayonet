@@ -9,7 +9,6 @@ import {
   groupStacks,
   headlineFrame,
   heapDiff,
-  hotFrames,
   layoutFlame,
   linePath,
   niceMax,
@@ -134,18 +133,13 @@ describe("flame graph", () => {
     expect(layoutFlame(root, "", 0.5).map((c) => c.node.name)).toEqual(["All threads", "A!Main"]);
   });
 
-  it("colours frames by where they come from and ranks hot spots", () => {
+  it("colours frames by where they come from", () => {
     const user = new Set(["A"]);
     expect([
       frameCategory("A!Main", user),
       frameCategory("System!Idle", user),
       frameCategory("Thread (7)", user),
     ]).toEqual(["user", "dotnet", "native"]);
-    expect(hotFrames(root).map((f) => [f.name, f.selfMs])).toEqual([
-      ["A!Work", 40],
-      ["System!Idle", 40],
-      ["A!Main", 20],
-    ]);
   });
 });
 

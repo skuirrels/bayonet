@@ -121,8 +121,8 @@ pub async fn diag_trace(
 /// Reads a Speedscope trace into a flame graph.
 #[tauri::command]
 #[specta::specta]
-pub async fn diag_trace_read(_window: Window, state: State<'_, AppState>, path: PathBuf) -> IdeResult<TraceProfile> {
-    ops::diag_trace_read(&state.host, path).await
+pub async fn diag_trace_read(window: Window, state: State<'_, AppState>, path: PathBuf) -> IdeResult<TraceProfile> {
+    ops::diag_trace_read(&state.host, window.label(), path).await
 }
 
 /// Records the counters of `pid` for `seconds` (`dotnet-counters`).

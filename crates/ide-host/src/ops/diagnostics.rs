@@ -12,8 +12,10 @@ use crate::rpc::Dispatcher;
 use ide_core::{IdeError, IdeResult, IpcPath, RequestId};
 use ide_dap::attach::{self, AttachKind, AttachableProcess};
 use ide_dotnet::diagnostics::{
-    self as diag, DiagTool, DiagToolStatus, DumpAnalysis, DumpType, HeapReport, MetricSample, ThreadStack, TraceProfile,
+    self as diag, DiagTool, DiagToolStatus, DumpAnalysis, DumpType, FlameNode, FrameSource, HeapReport, MetricSample,
+    ThreadStack, TraceProfile,
 };
+use ide_dotnet::trace_source::{self, MemberKind};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::{Path, PathBuf};
@@ -302,12 +304,81 @@ pub async fn diag_trace(
     host.end_request(request);
     result?;
     let speedscope = base.with_extension("speedscope.json");
-    diag_trace_read(host, speedscope).await
+    diag_trace_read(host, window, speedscope).await
 }
 
-/// Reads a Speedscope trace into a flame graph.
-pub async fn diag_trace_read(host: &Host, path: PathBuf) -> IdeResult<TraceProfile> {
-    host.blocking(move || diag::flame_graph(&std::fs::read_to_string(&path)?, &path, MIN_FLAME_FRACTION)).await
+/// Reads a Speedscope trace into a flame graph, with the source of the frames that
+/// come from the project's C# code.
+pub async fn diag_trace_read(host: &Host, window: &str, path: PathBuf) -> IdeResult<TraceProfile> {
+    let project = host.project(window).ok();
+    host.blocking(move || {
+        let mut trace = diag::flame_graph(&std::fs::read_to_string(&path)?, &path, MIN_FLAME_FRACTION)?;
+        if let Some(project) = project {
+            trace.sources = resolve_trace_sources(&project, &trace.root);
+        }
+        Ok(trace)
+    })
+    .await
+}
+
+/// C# files above this size are not parsed for trace sources.
+const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Finds the declarations of the managed frames under `root` in the project's C#
+/// files: the symbol index gives the files that declare a member of that name in
+/// that type, and the file's outline the declaration with the frame's namespace,
+/// nesting and parameter count.
+fn resolve_trace_sources(project: &crate::project::Project, root: &FlameNode) -> Vec<FrameSource> {
+    fn names<'a>(n: &'a FlameNode, out: &mut std::collections::BTreeSet<&'a str>) {
+        for c in &n.children {
+            out.insert(&c.name);
+            names(c, out);
+        }
+    }
+    let mut frames = std::collections::BTreeSet::new();
+    names(root, &mut frames);
+    let syntax = project.syntax.syntax().clone();
+    let csharp = ide_core::LanguageId::new("csharp");
+    let mut outlines: std::collections::HashMap<PathBuf, Vec<ide_core::OutlineItem>> = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for name in frames {
+        let Some(frame) = trace_source::parse_frame(name) else { continue };
+        let type_name = frame.type_name();
+        let mut paths = std::collections::BTreeSet::new();
+        for m in &frame.members {
+            for s in project.index.symbols_named(&m.name, None, 256) {
+                let container = s.container.as_deref();
+                let declared_here = container == Some(type_name)
+                    || (m.kind == MemberKind::Constructor && s.name == type_name)
+                    || (m.kind == MemberKind::LocalFunction
+                        && frame.members.iter().any(|o| Some(o.name.as_str()) == container));
+                if declared_here && s.path.extension().is_some_and(|e| e == "cs") {
+                    paths.insert(PathBuf::from(&*s.path));
+                }
+            }
+        }
+        for path in paths {
+            let outline = outlines.entry(path.clone()).or_insert_with(|| {
+                let small = std::fs::metadata(&path).is_ok_and(|m| m.len() <= MAX_SOURCE_BYTES);
+                match std::fs::read_to_string(&path) {
+                    Ok(text) if small => syntax.outline(&csharp, &text),
+                    _ => Vec::new(),
+                }
+            });
+            if let Some(found) = trace_source::find_in_outline(outline, &frame) {
+                out.push(FrameSource {
+                    frame: name.to_owned(),
+                    path: path.into(),
+                    line: found.selection.start.line,
+                    col: found.selection.start.col,
+                    start_line: found.range.start.line,
+                    end_line: found.range.end.line,
+                });
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Records the runtime counters of `pid` for `seconds` (`dotnet-counters collect`).
@@ -606,7 +677,7 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("diag_trace", |c| async move {
         diag_trace(&c.host, &c.window, c.arg("request")?, c.arg("pid")?, c.arg("seconds")?).await
     });
-    d.add("diag_trace_read", |c| async move { diag_trace_read(&c.host, c.arg("path")?).await });
+    d.add("diag_trace_read", |c| async move { diag_trace_read(&c.host, &c.window, c.arg("path")?).await });
     d.add("diag_counters", |c| async move {
         diag_counters(&c.host, &c.window, c.arg("request")?, c.arg("pid")?, c.arg("seconds")?).await
     });
@@ -633,6 +704,100 @@ mod tests {
         assert_eq!(artifact_kind(Path::new("/d/1-2.counters.csv")), Some(ArtifactKind::Counters));
         assert_eq!(artifact_kind(Path::new("/d/1-2.nettrace")), None);
         assert_eq!(artifact_kind(Path::new("/d/dotnet-monitor.http")), None);
+    }
+
+    /// Frame names as `dotnet-trace` writes them, against the tree-sitter outline of the code.
+    #[test]
+    fn finds_trace_frames_in_csharp_sources() {
+        let src = r#"using System.Text;
+
+namespace Hot.Work;
+
+public static class Program
+{
+    public static async Task Main()
+    {
+        Func<int, int> f = x => Fib(x);
+        Local(18);
+        static int Local(int x) => Fib(x);
+    }
+
+    static int Fib(int n) => n < 2 ? n : Fib(n - 1) + Fib(n - 2);
+}
+
+public sealed class Calculator(int seed)
+{
+    public long Total { get { return seed; } }
+    public void Spin() { }
+    public void Spin(int times) { }
+    public sealed class Nested
+    {
+        public Nested() { }
+        public void Deep() { }
+    }
+}
+
+public static class Worker
+{
+    public static async Task RunAsync()
+    {
+        await Task.Yield();
+    }
+}
+
+public sealed class Generic<T>
+{
+    public string Build(T item) => item?.ToString() ?? "";
+}
+"#;
+        let outline = ide_language::Syntax::new().outline(&ide_core::LanguageId::new("csharp"), src);
+        let line = |frame: &str| {
+            let f = trace_source::parse_frame(frame).unwrap_or_else(|| panic!("{frame}"));
+            trace_source::find_in_outline(&outline, &f)
+                .map(|f| (f.selection.start.line, f.range.start.line, f.range.end.line))
+        };
+        assert_eq!(line("Hot!Hot.Work.Program+<Main>d__0.MoveNext()"), Some((6, 6, 11)));
+        assert_eq!(line("Hot!Hot.Work.Program.<Main>()"), Some((6, 6, 11)));
+        assert_eq!(line("Hot!Hot.Work.Program+<>c.<Main>b__0_0(int32)"), Some((6, 6, 11)));
+        assert_eq!(line("Hot!Hot.Work.Program.<Main>g__Local|0_1(int32)").map(|l| l.0), Some(10));
+        assert_eq!(line("Hot!Hot.Work.Program.Fib(int32)").map(|l| l.0), Some(13));
+        assert_eq!(line("Hot!Hot.Work.Calculator.get_Total()").map(|l| l.0), Some(18));
+        assert_eq!(line("Hot!Hot.Work.Calculator.Spin()").map(|l| l.0), Some(19));
+        assert_eq!(line("Hot!Hot.Work.Calculator.Spin(int32)").map(|l| l.0), Some(20));
+        assert_eq!(line("Hot!Hot.Work.Calculator+Nested..ctor()").map(|l| l.0), Some(23));
+        assert_eq!(line("Hot!Hot.Work.Calculator+Nested.Deep()").map(|l| l.0), Some(24));
+        assert_eq!(line("Hot!Hot.Work.Calculator..ctor(int32)").map(|l| l.0), Some(16));
+        assert_eq!(line("Hot!Hot.Work.Worker+<RunAsync>d__0.MoveNext()").map(|l| l.0), Some(30));
+        assert_eq!(line("Hot!Hot.Work.Generic`1[System.__Canon].Build(!0)").map(|l| l.0), Some(38));
+        assert_eq!(line("System.Private.CoreLib!System.Text.StringBuilder.Append(int32)"), None);
+    }
+
+    /// `TRACE=<x.speedscope.json> SRC=<a .cs file>`: the frames of a real trace that the file declares.
+    #[test]
+    #[ignore]
+    fn resolves_a_real_trace() {
+        let trace = PathBuf::from(std::env::var("TRACE").expect("TRACE"));
+        let src = std::fs::read_to_string(std::env::var("SRC").expect("SRC")).unwrap();
+        let profile = diag::flame_graph(&std::fs::read_to_string(&trace).unwrap(), &trace, MIN_FLAME_FRACTION).unwrap();
+        let outline = ide_language::Syntax::new().outline(&ide_core::LanguageId::new("csharp"), &src);
+        let mut names = std::collections::BTreeSet::new();
+        fn walk<'a>(n: &'a FlameNode, out: &mut std::collections::BTreeSet<&'a str>) {
+            for c in &n.children {
+                out.insert(c.name.as_str());
+                walk(c, out);
+            }
+        }
+        walk(&profile.root, &mut names);
+        let mut found = 0;
+        for name in names {
+            let Some(f) = trace_source::parse_frame(name) else { continue };
+            let hit = trace_source::find_in_outline(&outline, &f);
+            if hit.is_some() {
+                found += 1;
+            }
+            eprintln!("{:>5} {name}", hit.map_or("-".to_owned(), |h| (h.selection.start.line + 1).to_string()));
+        }
+        assert!(found > 0);
     }
 
     #[test]

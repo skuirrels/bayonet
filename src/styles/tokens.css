@@ -93,6 +93,12 @@ html {
   --coverage-covered: var(--gutter-added);
   --coverage-partial: var(--warning);
   --coverage-uncovered: var(--danger);
+  /* CPU trace heat in the editor, warm to hot, from the theme's status colours */
+  --perf-heat-1: color-mix(in oklab, var(--warning) 40%, transparent);
+  --perf-heat-2: color-mix(in oklab, var(--warning) 75%, transparent);
+  --perf-heat-3: var(--warning);
+  --perf-heat-4: color-mix(in oklab, var(--warning) 45%, var(--danger));
+  --perf-heat-5: var(--danger);
   /* profiler flame graph: warm, low-contrast frames; search matches in the accent */
   --flame-1: color-mix(in srgb, var(--warning) 45%, var(--bg-elev));
   --flame-2: color-mix(in srgb, var(--warning) 32%, var(--bg-elev));

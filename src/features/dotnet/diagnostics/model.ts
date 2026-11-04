@@ -244,23 +244,6 @@ export function layoutFlame(root: FlameNode, zoom = "", minWidth = 0.002): Flame
   return cells;
 }
 
-/** The heaviest frames by self time across the tree (the "hot spots" list). */
-export function hotFrames(root: FlameNode, count = 20): { name: string; selfMs: number; totalMs: number }[] {
-  const by = new Map<string, { name: string; selfMs: number; totalMs: number }>();
-  const walk = (n: FlameNode, onStack: Set<string>) => {
-    const e = by.get(n.name) ?? { name: n.name, selfMs: 0, totalMs: 0 };
-    e.selfMs += n.selfMs;
-    // Recursion counts a frame's inclusive time once.
-    if (!onStack.has(n.name)) e.totalMs += n.totalMs;
-    by.set(n.name, e);
-    onStack.add(n.name);
-    for (const c of n.children) walk(c, onStack);
-    onStack.delete(n.name);
-  };
-  for (const c of root.children) walk(c, new Set());
-  return [...by.values()].sort((a, b) => b.selfMs - a.selfMs).slice(0, count);
-}
-
 // ---------------------------------------------------------------- heap
 
 export interface HeapRow extends HeapType {

@@ -24,8 +24,9 @@ import {
   type SelectOption,
 } from "@/ui";
 import { useProject } from "@/platform/project";
-import { useSolution } from "../projects/store";
-import { FlameGraph, FlameLegend, LineChart, Sparkline } from "./charts";
+import { LineChart, Sparkline } from "./charts";
+import { Busy, Figure, useUserModules } from "./parts";
+import { TraceTab } from "./TraceView";
 import {
   artifactInfo,
   filterHeap,
@@ -34,9 +35,7 @@ import {
   groupStacks,
   headlineFrame,
   heapDiff,
-  hotFrames,
   HEADLINE_COUNTERS,
-  nodeAt,
   orderSeries,
   processGroup,
   PROCESS_GROUPS,
@@ -49,12 +48,10 @@ import {
   addRule,
   analyzeDump,
   attachSosShell,
-  cancelJob,
   closeRecording,
   collectDump,
   collectGcdump,
   collectStacks,
-  collectTrace,
   compareWith,
   deleteArtifact,
   downloadSymbols,
@@ -74,12 +71,10 @@ import {
   setBaseline,
   setDumpType,
   setTab,
-  setTraceSeconds,
   startLive,
   stopLive,
   useDiagnostics,
   type DiagTab,
-  type Job,
 } from "./store";
 import styles from "./Diagnostics.module.css";
 
@@ -109,27 +104,6 @@ const compareLabel = (path: string) => {
   return tx`Compare with ${file}`;
 };
 const moreRows = (more: number) => tx`… ${more} more; filter to narrow down.`;
-const secondsLabel = (seconds: number) => tx`${seconds} seconds`;
-const samplingLabel = (seconds: number) => tx`Sampling for ${seconds} s…`;
-
-function useUserModules(): ReadonlySet<string> {
-  const projects = useSolution((s) => s.projects);
-  return useMemo(() => new Set(projects.map((p) => p.name)), [projects]);
-}
-
-function Busy({ job, label }: { job: Job; label: string }) {
-  const running = useDiagnostics((s) => s.busy[job] != null);
-  if (!running) return null;
-  return (
-    <span className={styles.busy}>
-      <Spinner size={14} />
-      {label}
-      <Button size="small" variant="ghost" onClick={() => cancelJob(job)}>
-        <T>Cancel</T>
-      </Button>
-    </span>
-  );
-}
 
 export function DiagnosticsView() {
   const s = useDiagnostics();
@@ -592,18 +566,6 @@ function MemoryTab() {
   );
 }
 
-function Figure({ label, value, delta }: { label: string; value: string; delta?: string }) {
-  return (
-    <div className={styles.figure}>
-      <span className={styles.figureValue}>{value}</span>
-      <span className={styles.figureLabel}>
-        {label}
-        {delta && <span className={styles.delta}> {delta}</span>}
-      </span>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- dumps
 
 const DUMP_TYPES: { value: DumpType; label: () => string }[] = [
@@ -715,107 +677,6 @@ function DumpsTab() {
             <T>Heap by type</T>
           </h3>
           <HeapTable rows={dump.heap.types.slice(0, 100)} compare={false} />
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- CPU trace
-
-const TRACE_SECONDS = [5, 10, 30, 60];
-
-function TraceTab() {
-  const trace = useDiagnostics((s) => s.trace);
-  const seconds = useDiagnostics((s) => s.traceSeconds);
-  const user = useUserModules();
-  const [zoomed, setZoomed] = useState<{ path: string; zoom: string }>({ path: "", zoom: "" });
-  const [query, setQuery] = useState("");
-  // A new trace starts unzoomed.
-  const zoom = trace && zoomed.path === trace.path ? zoomed.zoom : "";
-  const focus = trace ? nodeAt(trace.root, zoom) : undefined;
-  const hot = useMemo(() => (trace ? hotFrames(trace.root, 15) : []), [trace]);
-  return (
-    <div className={styles.scroll}>
-      <div className={styles.actions}>
-        <Select
-          value={String(seconds)}
-          options={TRACE_SECONDS.map((n) => ({ value: String(n), label: secondsLabel(n) }))}
-          onChange={(v) => setTraceSeconds(Number(v))}
-          aria-label={tx`Trace length`}
-        />
-        <Button size="small" icon="profile" onClick={() => void collectTrace()}>
-          <T>Record CPU Trace</T>
-        </Button>
-        <Busy job="trace" label={samplingLabel(seconds)} />
-        {trace && (
-          <SearchField
-            value={query}
-            onChange={setQuery}
-            placeholder={tx`Highlight frames`}
-            aria-label={tx`Highlight frames`}
-          />
-        )}
-      </div>
-      {!trace ? (
-        <EmptyState title={tx`No CPU trace`}>
-          <T>Sample the process's stacks (dotnet-trace) and see where its threads spend their time.</T>
-        </EmptyState>
-      ) : (
-        <>
-          <div className={styles.figures}>
-            <Figure label={tx`Duration`} value={`${(trace.durationMs / 1000).toFixed(1)} s`} />
-            <Figure label={tx`Threads`} value={String(trace.threads)} />
-            <Figure label={tx`Thread time`} value={`${(trace.root.totalMs / 1000).toFixed(1)} s`} />
-            <FlameLegend />
-          </div>
-          {zoom && focus && (
-            <div className={styles.actions}>
-              <Button
-                size="small"
-                variant="ghost"
-                icon="arrow-left"
-                onClick={() => setZoomed({ path: trace.path, zoom: "" })}
-              >
-                <T>Reset Zoom</T>
-              </Button>
-              <span className={styles.muted}>{focus.name}</span>
-            </div>
-          )}
-          <FlameGraph
-            root={trace.root}
-            zoom={zoom}
-            onZoom={(z) => setZoomed({ path: trace.path, zoom: z })}
-            userModules={user}
-            query={query}
-          />
-          <h3 className={styles.heading}>
-            <T>Hot spots (self time)</T>
-          </h3>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>
-                  <T>Frame</T>
-                </th>
-                <th className={styles.num}>
-                  <T>Self</T>
-                </th>
-                <th className={styles.num}>
-                  <T>Total</T>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {hot.map((h) => (
-                <tr key={h.name}>
-                  <td className={styles.typeName}>{h.name}</td>
-                  <td className={styles.num}>{h.selfMs.toLocaleString()} ms</td>
-                  <td className={styles.num}>{h.totalMs.toLocaleString()} ms</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </>
       )}
     </div>

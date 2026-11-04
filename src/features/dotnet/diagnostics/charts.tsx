@@ -7,6 +7,7 @@ import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from
 import clsx from "clsx";
 import type { FlameNode } from "@/bindings";
 import { tx } from "@/platform/i18n";
+import { displayFrame } from "./trace";
 import {
   formatValue,
   frameCategory,
@@ -153,9 +154,27 @@ export interface FlameGraphProps {
   userModules: ReadonlySet<string>;
   /** Highlights frames whose name contains it. */
   query: string;
+  /** The selected method: every cell of it is outlined. */
+  selected?: string | null;
+  /** Click selects a method (double-click zooms); without it, click zooms. */
+  onSelect?: (name: string) => void;
+  /** F4 / ⌘↓ on a cell: open the method's source. */
+  onOpen?: (name: string) => void;
+  /** Whether a method has a source to open. */
+  hasSource?: (name: string) => boolean;
 }
 
-export function FlameGraph({ root, zoom, onZoom, userModules, query }: FlameGraphProps) {
+export function FlameGraph({
+  root,
+  zoom,
+  onZoom,
+  userModules,
+  query,
+  selected,
+  onSelect,
+  onOpen,
+  hasSource,
+}: FlameGraphProps) {
   const cells = useMemo(() => layoutFlame(root, zoom), [root, zoom]);
   const [hover, setHover] = useState<FlameCell | null>(null);
   const depth = cells.reduce((m, c) => Math.max(m, c.depth), 0) + 1;
@@ -167,6 +186,8 @@ export function FlameGraph({ root, zoom, onZoom, userModules, query }: FlameGrap
         {cells.map((c) => {
           const category = c.path === "" ? "native" : frameCategory(c.node.name, userModules);
           const dim = q && !c.node.name.toLowerCase().includes(q);
+          const toggleZoom = () =>
+            onZoom(c.path === zoom && c.path ? c.path.split("/").slice(0, -1).join("/") : c.path);
           return (
             <button
               key={`${c.path}|${c.ancestor}`}
@@ -177,15 +198,24 @@ export function FlameGraph({ root, zoom, onZoom, userModules, query }: FlameGrap
                 styles[`cat-${category}`],
                 (c.ancestor || c.path === "") && styles.cellAncestor,
                 dim && styles.cellDim,
+                selected != null && c.node.name === selected && c.path !== "" && styles.cellSelected,
               )}
               style={{ left: `${c.x * 100}%`, width: `${c.w * 100}%`, top: c.depth * ROW }}
               aria-label={`${c.node.name}, ${c.node.totalMs} ms`}
-              onClick={() => onZoom(c.path === zoom && c.path ? c.path.split("/").slice(0, -1).join("/") : c.path)}
+              aria-selected={selected != null && c.node.name === selected}
+              onClick={() => (onSelect && c.path !== "" ? onSelect(c.node.name) : toggleZoom())}
+              onDoubleClick={onSelect ? toggleZoom : undefined}
+              onKeyDown={(e) => {
+                if (onOpen && (e.key === "F4" || ((e.metaKey || e.ctrlKey) && e.key === "ArrowDown"))) {
+                  e.preventDefault();
+                  onOpen(c.node.name);
+                }
+              }}
               onPointerEnter={() => setHover(c)}
               onPointerLeave={() => setHover((h) => (h === c ? null : h))}
               onFocus={() => setHover(c)}
             >
-              {c.w > 0.02 ? c.node.name : ""}
+              {c.w > 0.02 ? displayFrame(c.node.name).method : ""}
             </button>
           );
         })}
@@ -198,7 +228,12 @@ export function FlameGraph({ root, zoom, onZoom, userModules, query }: FlameGrap
               {((hover.node.totalMs / total) * 100).toFixed(1)} % · {tx`self`} {hover.node.selfMs.toLocaleString()} ms
             </span>
             <span className={styles.flameName}>{hover.node.name}</span>
+            {hasSource?.(hover.node.name) && <span className={styles.flameHint}>{tx`F4 opens the source`}</span>}
           </>
+        ) : onSelect ? (
+          <span className={styles.muted}>
+            {tx`Click a frame to see its callers and callees; double-click to zoom into it.`}
+          </span>
         ) : (
           <span className={styles.muted}>{tx`Click a frame to zoom into it; click it again to zoom out.`}</span>
         )}
