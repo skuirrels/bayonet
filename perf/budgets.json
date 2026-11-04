@@ -40,6 +40,8 @@
     "tabs.openSmallMs": 100,
     "tabs.switchP95Ms": 33,
 
+    "completion.popupP95Ms": 75,
+
     "popups.findActionOpenMs": 50,
     "popups.findActionQueryMs": 120,
     "popups.findActionKeyP95Ms": 33,
