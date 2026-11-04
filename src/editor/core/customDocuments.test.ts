@@ -148,6 +148,7 @@ describe("custom editor document lifetime", () => {
         title: "Class",
         description: null,
         decompiled: true,
+        generated: false,
       });
       await rejected;
       expect(findTab(useTabs.getState(), "virtual:jdt://old/Class")).toBeNull();

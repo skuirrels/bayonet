@@ -18,6 +18,7 @@ vi.mock("@/platform/virtualDocs", async (importOriginal) => {
         title: "Lib.class",
         description: "/m2/lib-1.0.jar",
         decompiled: true,
+        generated: false,
       };
     }),
   };
@@ -50,6 +51,18 @@ describe("virtual editor input", () => {
     expect(input.data).toEqual({ title: "Lib.class", description: "/m2/lib-1.0.jar", decompiled: true });
     expect(isTextInput(input)).toBe(true);
     expect(isTextInput({ kind: "diff", key: "d" })).toBe(false);
+  });
+
+  it("marks a source-generated document so its notice says so", () => {
+    const uri = "roslyn-source-generated://p/Names.g.cs?typeName=Gen.Names";
+    const input = virtualInput({
+      uri,
+      title: "Names.g.cs",
+      description: "Gen.Names",
+      decompiled: false,
+      generated: true,
+    });
+    expect(input.data).toEqual({ title: "Names.g.cs", description: "Gen.Names", decompiled: false, generated: true });
   });
 
   it("opens a URI read-only at the target and keeps it out of the saved session", async () => {

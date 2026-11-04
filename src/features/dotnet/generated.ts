@@ -6,12 +6,17 @@
  * Roslyn keeps generated sources in memory, so the backend compiles the
  * project once more into the IDE's cache to get them. That runs when the node
  * is first expanded, and again when the project's sources change while it is
- * expanded (debounced). Go to Declaration into generated code opens Roslyn's
+ * expanded (debounced); a change made during a compile runs it again
+ * afterwards. Build output (`bin`, `obj`) does not count as a change. A compile
+ * that fails without output keeps the earlier listing. Go to Declaration into generated code opens Roslyn's
  * own copy (`roslyn-source-generated://`) instead.
  */
 import { create } from "zustand";
 import { commands, type GeneratedSources } from "@/bindings";
+import { executeAction } from "@/platform/actions";
+import { tx } from "@/platform/i18n";
 import { call } from "@/platform/ipc";
+import { notifications } from "@/workbench/contributions";
 import { isSameOrInside, parentOf } from "@/features/project-tree/paths";
 import { pathOfKey } from "@/features/project-tree/model";
 import { reloadLoadedDirsUnder, useProjectTree } from "@/features/project-tree/store";
@@ -55,6 +60,7 @@ export async function loadGeneratedDirs(projects: readonly string[]): Promise<Re
 export function generate(project: string): Promise<void> {
   if (get().running.has(project)) return queue;
   const at = epoch;
+  // A change from now on marks it stale again, which reruns it when this one ends.
   stale.delete(project);
   useGenerated.setState((s) => ({ running: new Set(s.running).add(project) }));
   queue = queue.then(async () => {
@@ -63,7 +69,8 @@ export function generate(project: string): Promise<void> {
       if (at !== epoch) return;
       useGenerated.setState((s) => ({ results: { ...s.results, [project]: result } }));
       await reloadLoadedDirsUnder(result.dir);
-      if (result.errors.length) console.warn(`generated sources of ${project}:`, result.errors.join("\n"));
+      if (result.needsBuild) offerBuild(project);
+      else if (result.errors.length) console.warn(`generated sources of ${project}:`, result.errors.join("\n"));
     } catch (e) {
       console.warn(`generated sources: cannot compile ${project}`, e);
     } finally {
@@ -72,9 +79,29 @@ export function generate(project: string): Promise<void> {
         running.delete(project);
         return { running };
       });
+      if (at === epoch && stale.has(project) && expandedProjects(useProjectTree.getState().expanded).has(project))
+        void generate(project);
     }
   });
   return queue;
+}
+
+/** Referenced projects are not built, so nothing can be generated yet: offer to build. */
+function offerBuild(project: string) {
+  const name = project.slice(project.lastIndexOf("/") + 1);
+  notifications().notify({
+    group: "dotnet",
+    level: "info",
+    key: `generated-needs-build-${project}`,
+    title: tx`Build the solution to see the generated sources of ${name}`,
+    body: tx`Its referenced projects have not been built, so its source generators cannot run yet.`,
+    actions: [
+      {
+        label: tx`Build`,
+        run: () => void executeAction("build.buildProject").then(() => generate(project)),
+      },
+    ],
+  });
 }
 
 /** The project whose Analyzers node (or a folder below it) `path` is. */
@@ -95,18 +122,30 @@ function expandedProjects(expanded: ReadonlySet<string>): Set<string> {
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 
+const SOURCE = /\.(cs|vb|csproj|vbproj|props|targets|editorconfig|json|resx|razor|cshtml)$/i;
+const SHARED = /(?:^|\/)Directory\.(?:Build|Packages)\.(?:props|targets)$/i;
+
+/** Projects whose sources `path` is: inside the project folder but not its build output. */
+function projectsOf(path: string, projects: readonly string[]): string[] {
+  if (SHARED.test(path)) return [...projects];
+  return projects.filter((p) => {
+    const dir = parentOf(p);
+    return isSameOrInside(path, dir) && !isSameOrInside(path, `${dir}/bin`) && !isSameOrInside(path, `${dir}/obj`);
+  });
+}
+
 /** Marks the projects containing `paths` stale; regenerates the expanded ones shortly. */
 export function sourcesChanged(paths: readonly string[]) {
-  const projects = Object.keys(get().dirs);
+  const { dirs } = get();
+  const projects = Object.keys(dirs);
+  const caches = Object.values(dirs);
   let any = false;
   for (const path of paths) {
-    if (!/\.(cs|vb|csproj|vbproj|props|targets|editorconfig|json|resx|razor|cshtml)$/i.test(path)) continue;
-    if (Object.values(get().dirs).some((d) => isSameOrInside(path, d))) continue;
-    for (const p of projects)
-      if (isSameOrInside(path, parentOf(p)) || /Directory\.(Build|Packages)\.(props|targets)$/i.test(path)) {
-        stale.add(p);
-        any = true;
-      }
+    if (!SOURCE.test(path) || caches.some((d) => isSameOrInside(path, d))) continue;
+    for (const p of projectsOf(path, projects)) {
+      stale.add(p);
+      any = true;
+    }
   }
   if (!any) return;
   if (timer) clearTimeout(timer);

@@ -316,61 +316,11 @@ pub async fn dotnet_generated_dirs(host: &Host, window: &str, projects: Vec<IpcP
 /// One side compile at a time: they share the compiler server and the cache.
 static GENERATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Compiles `project` once more with `EmitCompilerGeneratedFiles` into the
-/// IDE's cache and lists its analysers and generated files (CI-17). The
-/// project's own `obj` and `bin` are left alone; see `ide_dotnet::generators`.
-pub async fn dotnet_generated_sources(
-    host: &Host,
-    window: &str,
-    project: IpcPath,
-) -> IdeResult<ide_dotnet::generators::GeneratedSources> {
-    use ide_dotnet::generators;
-    let (_, dotnet) = dotnet_of(host, window)?;
-    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
-    let base = host.project(window)?.build_cache_dir().join("generated");
-    let project = PathBuf::from(project);
-    let dir = generators::output_dir(&base, &project);
-    let empty = |errors: Vec<String>| generators::GeneratedSources {
-        dir: dir.clone().into(),
-        analyzers: Vec::new(),
-        files: Vec::new(),
-        errors,
-    };
-    // F# has no source generators (and no Roslyn analysers).
-    if !project.extension().is_some_and(|e| e.eq_ignore_ascii_case("csproj") || e.eq_ignore_ascii_case("vbproj")) {
-        return Ok(empty(Vec::new()));
-    }
-    let _guard = GENERATING.lock().await;
-    let info = {
-        let p = project.clone();
-        tokio::task::spawn_blocking(move || ide_dotnet::read_project(&p))
-            .await
-            .map_err(|e| IdeError::internal(e.to_string()))??
-    };
-    let work = base.join("work");
-    let (obj, next, targets) = (work.join("obj"), work.join("out"), work.join("generated.targets"));
-    generators::remove_listing(&work);
-    std::fs::create_dir_all(&next).map_err(|e| IdeError::internal(format!("cannot create {}: {e}", next.display())))?;
-    std::fs::write(&targets, generators::targets_file(&project, &obj, &next))
-        .map_err(|e| IdeError::internal(format!("cannot write {}: {e}", targets.display())))?;
-    let mut args: Vec<String> = vec![
-        "msbuild".into(),
-        project.to_string_lossy().into_owned(),
-        "-nologo".into(),
-        "-v:q".into(),
-        "-t:Compile".into(),
-        "-p:BuildProjectReferences=false".into(),
-        format!("-p:CustomAfterMicrosoftCommonTargets={}", targets.display()),
-        "-getItem:Analyzer".into(),
-    ];
-    if info.target_frameworks.len() > 1
-        && let Some(first) = info.target_frameworks.first()
-    {
-        args.push(format!("-p:TargetFramework={first}"));
-    }
-    let out = tokio::process::Command::new(&dotnet)
-        .args(&args)
-        .current_dir(project.parent().unwrap_or(&project))
+/// Runs `dotnet <args>` in `cwd`; stdout and stderr.
+async fn dotnet_output(dotnet: &Path, cwd: &Path, args: &[String]) -> IdeResult<(String, String)> {
+    let out = tokio::process::Command::new(dotnet)
+        .args(args)
+        .current_dir(cwd)
         .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
         .env("DOTNET_NOLOGO", "1")
         .env("DOTNET_CLI_UI_LANGUAGE", "en")
@@ -379,14 +329,81 @@ pub async fn dotnet_generated_sources(
         .output()
         .await
         .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", dotnet.display())))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let errors = generators::errors(&format!("{stdout}\n{}", String::from_utf8_lossy(&out.stderr)));
-    let analyzers = generators::parse_analyzers(&stdout);
-    if analyzers.is_empty() && !errors.is_empty() {
-        return Ok(empty(errors));
+    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned()))
+}
+
+/// Compiles `project` once more with `EmitCompilerGeneratedFiles` into the
+/// IDE's cache and lists its analysers and generated files (CI-17). The
+/// project's own `obj` and `bin` are left alone; see `ide_dotnet::generators`.
+/// A compile that fails without writing anything keeps the earlier listing.
+pub async fn dotnet_generated_sources(
+    host: &Host,
+    window: &str,
+    project: IpcPath,
+) -> IdeResult<ide_dotnet::generators::GeneratedSources> {
+    use ide_dotnet::generators::{self, GeneratedSources};
+    let (_, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    let base = host.project(window)?.build_cache_dir().join("generated");
+    let project = PathBuf::from(project);
+    let dir = generators::output_dir(&base, &project);
+    let listing = |dir: &Path, errors: Vec<String>, stale: bool| GeneratedSources {
+        dir: dir.to_path_buf().into(),
+        analyzers: generators::analyzer_names(dir),
+        files: generators::generated_files(dir).into_iter().map(IpcPath::from).collect(),
+        needs_build: generators::needs_build(&errors),
+        errors,
+        stale,
+    };
+    // F# has no source generators (and no Roslyn analysers).
+    if !project.extension().is_some_and(|e| e.eq_ignore_ascii_case("csproj") || e.eq_ignore_ascii_case("vbproj")) {
+        return Ok(listing(&dir, Vec::new(), false));
     }
+    let _guard = GENERATING.lock().await;
+    let cwd = project.parent().unwrap_or(&project).to_path_buf();
+    let path = project.to_string_lossy().into_owned();
+    // The project's own CustomAfterMicrosoftCommonTargets (the global property
+    // below would hide it) and its target frameworks, as MSBuild evaluates them.
+    let mut eval: Vec<String> = vec!["msbuild".into(), path.clone(), "-nologo".into()];
+    eval.extend(generators::EVAL_PROPERTIES.iter().map(|n| format!("-getProperty:{n}")));
+    let props = generators::parse_properties(&dotnet_output(&dotnet, &cwd, &eval).await?.0);
+    let prop = |k: &str| props.iter().find(|(n, _)| n == k).map(|(_, v)| v.trim().to_owned()).unwrap_or_default();
+    let user_import = prop("CustomAfterMicrosoftCommonTargets");
+    let first_tfm = prop("TargetFrameworks").split(';').map(str::trim).find(|t| !t.is_empty()).map(str::to_owned);
+
+    let work = base.join("work");
+    let (obj, next, targets) = (work.join("obj"), work.join("out"), work.join("generated.targets"));
+    generators::remove_listing(&work);
+    std::fs::create_dir_all(&next).map_err(|e| IdeError::internal(format!("cannot create {}: {e}", next.display())))?;
+    std::fs::write(&targets, generators::targets_file(&project, &obj, &next, Some(&user_import)))
+        .map_err(|e| IdeError::internal(format!("cannot write {}: {e}", targets.display())))?;
+    let mut args: Vec<String> = vec![
+        "msbuild".into(),
+        path,
+        "-nologo".into(),
+        "-v:q".into(),
+        "-t:Compile".into(),
+        "-p:BuildProjectReferences=false".into(),
+        format!("-p:CustomAfterMicrosoftCommonTargets={}", targets.display()),
+        "-getItem:Analyzer".into(),
+    ];
+    if prop("TargetFramework").is_empty()
+        && let Some(first) = first_tfm
+    {
+        args.push(format!("-p:TargetFramework={first}"));
+    }
+    let (stdout, stderr) = dotnet_output(&dotnet, &cwd, &args).await?;
+    let errors = generators::errors(&format!("{stdout}\n{stderr}"));
+    let analyzers = generators::parse_analyzers(&stdout);
     host.blocking(move || {
-        let names = generators::add_analyzer_folders(&next, &analyzers)
+        // Failed and wrote nothing (code being edited, references not built):
+        // keep showing what the last good compile generated.
+        if !errors.is_empty() && (analyzers.is_empty() || generators::generated_files(&next).is_empty()) {
+            generators::remove_listing(&work);
+            let had = !generators::generated_files(&dir).is_empty();
+            return Ok(listing(&dir, errors, had));
+        }
+        generators::add_analyzer_folders(&next, &analyzers)
             .map_err(|e| IdeError::internal(format!("cannot write {}: {e}", next.display())))?;
         generators::make_read_only(&generators::generated_files(&next));
         // Swap the new listing in whole, so the tree never shows half of it.
@@ -396,8 +413,7 @@ pub async fn dotnet_generated_sources(
         }
         std::fs::rename(&next, &dir).map_err(|e| IdeError::internal(format!("cannot move {}: {e}", dir.display())))?;
         generators::remove_listing(&work);
-        let files = generators::generated_files(&dir).into_iter().map(IpcPath::from).collect();
-        Ok(generators::GeneratedSources { dir: dir.into(), analyzers: names, files, errors })
+        Ok(listing(&dir, errors, false))
     })
     .await
 }

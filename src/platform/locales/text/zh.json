@@ -3757,6 +3757,8 @@
   "No Maven modules": "没有 Maven 模块",
   "Dependencies": "依赖",
   "Analyzers": "分析器",
+  "Build the solution to see the generated sources of {name}": "构建解决方案以查看 {name} 生成的源代码",
+  "Its referenced projects have not been built, so its source generators cannot run yet.": "其引用的项目尚未构建，因此其源代码生成器暂时无法运行。",
   "No dependencies match the filter": "没有符合筛选条件的依赖",
   "No dependencies": "没有依赖",
   "Select a dependency to see its usages": "选择一个依赖以查看其用法",

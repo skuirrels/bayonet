@@ -99,6 +99,8 @@ export interface VirtualInputData {
   title: string;
   description: string | null;
   decompiled: boolean;
+  /** Written by a source generator. */
+  generated?: boolean;
 }
 
 export const virtualKey = (uri: string) => `virtual:${uri}`;
@@ -107,12 +109,17 @@ export const virtualKey = (uri: string) => `virtual:${uri}`;
  * `path` is the URI, which also identifies its document model.
  */
 export const virtualInput = (
-  vd: Pick<VirtualDocument, "uri" | "title" | "description" | "decompiled">,
+  vd: Pick<VirtualDocument, "uri" | "title" | "description" | "decompiled"> & { generated?: boolean },
 ): EditorInput => ({
   kind: "virtual",
   key: virtualKey(vd.uri),
   path: vd.uri,
-  data: { title: vd.title, description: vd.description, decompiled: vd.decompiled } satisfies VirtualInputData,
+  data: {
+    title: vd.title,
+    description: vd.description,
+    decompiled: vd.decompiled,
+    ...(vd.generated ? { generated: true } : {}),
+  } satisfies VirtualInputData,
 });
 
 /** Inputs shown in the text editor: files and virtual documents. */

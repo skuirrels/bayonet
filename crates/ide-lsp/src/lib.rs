@@ -2024,10 +2024,7 @@ impl LspManager {
     /// `workspace/textDocumentContent` (LSP 3.18) when the server serves the
     /// scheme, jdtls' `java/classFileContents` for `jdt:` URIs. Cached.
     pub async fn virtual_document(&self, uri: &str) -> IdeResult<VirtualDocument> {
-        // Generated sources change with the code, so they are always asked for again.
-        if !virtual_doc::is_generated(uri)
-            && let Some(d) = self.virtual_docs.lock().get(uri)
-        {
+        if let Some(d) = self.virtual_docs.lock().get(uri) {
             return Ok(d.clone());
         }
         let scheme = virtual_doc::scheme(uri).to_owned();
@@ -2089,8 +2086,12 @@ impl LspManager {
                 title,
                 description: virtual_doc::description(uri),
                 decompiled,
+                generated: virtual_doc::is_generated(uri),
             };
             self.virtual_origins.lock().entry(uri.to_owned()).or_insert(t.server.id);
+            if doc.generated {
+                return Ok(doc);
+            }
             let mut cache = self.virtual_docs.lock();
             if cache.len() >= VIRTUAL_CACHE_LIMIT {
                 cache.clear();

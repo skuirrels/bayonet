@@ -52,18 +52,20 @@ export function virtualContainer(uri: string): string {
   return segs.join(" › ");
 }
 
-/** Roslyn's source-generated documents (`roslyn-source-generated://…`), which change with the code. */
-export const isGeneratedUri = (uri: string) => uri.startsWith("roslyn-source-generated:");
-
 const cache = new Map<string, Promise<VirtualDocument>>();
 
-/** Contents of a virtual document (cached, except generated ones; failures are retried on the next call). */
+/**
+ * Contents of a virtual document (cached; failures are retried on the next
+ * call). Generated ones (`generated`) change with the code, so they are not kept.
+ */
 export function virtualDocument(uri: string): Promise<VirtualDocument> {
-  if (isGeneratedUri(uri)) return call(commands.lspVirtualDocument(uri));
   let p = cache.get(uri);
   if (!p) {
     p = call(commands.lspVirtualDocument(uri));
-    p.catch(() => cache.delete(uri));
+    p.then(
+      (d) => d.generated && cache.delete(uri),
+      () => cache.delete(uri),
+    );
     cache.set(uri, p);
   }
   return p;
