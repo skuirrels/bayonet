@@ -68,7 +68,11 @@ mod tests {
         let waiting = tokio::spawn(listen_for_jvm("127.0.0.1", port, CancellationToken::new()));
         // The remote JVM (`server=n`) connects to the IDE.
         let mut jvm = loop {
-            if let Ok(s) = TcpStream::connect(("127.0.0.1", port)).await {
+            // Until the relay listens, a connect can pick `port` as its own source port and
+            // connect to itself (TCP simultaneous open), which would hang the test.
+            if let Ok(s) = TcpStream::connect(("127.0.0.1", port)).await
+                && s.local_addr().is_ok_and(|a| a.port() != port)
+            {
                 break s;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

@@ -80,6 +80,7 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
                     "supportsDataBreakpoints": true,
                     "supportsStepInTargetsRequest": true,
                     "supportsRestartFrame": true,
+                    "supportsGotoTargetsRequest": true,
                     "exceptionBreakpointFilters": [
                         {"filter": "raised", "label": "Raised"},
                         {"filter": "uncaught", "label": "Uncaught", "default": true, "description": "Uncaught exceptions"},
@@ -128,6 +129,16 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
                 msg,
                 json!({"targets": [{"id": 1, "label": "parse()", "line": 5, "column": 9, "endColumn": 16}, {"id": 2, "label": "run()"}]})
             ),
+            "gotoTargets" => {
+                let line = msg["arguments"]["line"].as_i64().unwrap();
+                let targets =
+                    if line == 99 { json!([]) } else { json!([{"id": 70 + line, "label": "here", "line": line}]) };
+                ok!(msg, json!({ "targets": targets }))
+            }
+            "goto" => {
+                ok!(msg, Value::Null);
+                send!(json!({"type": "event", "event": "stopped", "body": {"reason": "goto", "threadId": 1}}));
+            }
             "restartFrame" => {
                 ok!(msg, Value::Null);
                 send!(json!({"type": "event", "event": "stopped", "body": {"reason": "restart", "threadId": 1}}));
@@ -313,10 +324,17 @@ async fn full_protocol_flow() {
         matches!(h.events.lock().first(), Some(IdeEvent::Debug { session, event: DebugEvent::Started { parent: None, .. } }) if *session == id),
         "a session is announced first"
     );
+    // The early `threads` request is not awaited, so wait for the mock to log it.
+    for _ in 0..200 {
+        if h.commands().iter().any(|c| c == "threads") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     assert_eq!(
-        h.commands(),
-        ["initialize", "launch", "setBreakpoints", "setExceptionBreakpoints", "configurationDone"],
-        "lifecycle order"
+        h.commands()[..6],
+        ["initialize", "launch", "setBreakpoints", "setExceptionBreakpoints", "configurationDone", "threads"],
+        "lifecycle order, then the threads lldb-dap needs asked for once"
     );
     let init = h.request("initialize");
     assert_eq!(init["arguments"]["clientID"], "openidea");
@@ -850,6 +868,26 @@ async fn smart_step_into_and_reset_frame() {
 }
 
 #[tokio::test]
+async fn set_next_statement_goes_to_the_lines_first_target() {
+    let h = harness(Script::default());
+    let id = h.start(config()).await.unwrap();
+    h.wait_event(|e| matches!(e, DebugEvent::Stopped { .. })).await;
+    assert!(h.manager.capabilities(id).unwrap().goto_targets);
+    h.manager.set_next_statement(id, 1, PathBuf::from("/p/a.py"), 6).await.unwrap();
+    assert_eq!(
+        h.request("gotoTargets")["arguments"],
+        json!({"source": {"name": "a.py", "path": "/p/a.py"}, "line": 7})
+    );
+    assert_eq!(h.request("goto")["arguments"], json!({"threadId": 1, "targetId": 77}));
+    h.wait_event(|e| matches!(e, DebugEvent::Stopped { reason, .. } if reason == "goto")).await;
+
+    let err = h.manager.set_next_statement(id, 1, PathBuf::from("/p/a.py"), 98).await.unwrap_err();
+    assert!(err.message.contains("line 99"), "{}", err.message);
+    assert_eq!(requests(&h, "goto").len(), 1, "no goto without a target");
+    h.manager.stop(id).await.unwrap();
+}
+
+#[tokio::test]
 async fn force_stepping_suspends_breakpoints_until_the_next_stop() {
     let h = harness(Script::default());
     let a = PathBuf::from("/p/a.py");
@@ -923,6 +961,7 @@ fn godot_registry(port: u16, command: &str, args: &[&str]) -> Arc<LanguageRegist
         ui_mode: None,
         framework_ui_modes: Vec::new(),
         formatter: None,
+        scratch_template: None,
         tree_sitter: None,
         language_servers: vec![],
         debugger: Some(ide_language::DebuggerConfig {

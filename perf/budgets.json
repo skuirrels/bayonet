@@ -40,6 +40,8 @@
     "tabs.openSmallMs": 100,
     "tabs.switchP95Ms": 33,
 
+    "completion.popupP95Ms": 75,
+
     "popups.findActionOpenMs": 50,
     "popups.findActionQueryMs": 120,
     "popups.findActionKeyP95Ms": 33,
@@ -76,6 +78,9 @@
     "index_100k/find_files/ordcon": 10000,
     "index_100k/find_files/src/user": 10000,
     "index_100k/find_files/PaymentService": 10000,
+    "index_100k/find_dirs/util": 5000,
+    "index_100k/find_dirs/src/ui": 5000,
+    "index_100k/find_dirs/a": 5000,
     "index_100k/find_symbols/OCo": 15000,
     "index_100k/find_symbols/q": 15000,
     "index_100k/find_symbols/invoiceRepo": 15000,

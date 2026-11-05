@@ -23,7 +23,16 @@ import {
 } from "@/ui";
 import { StatusIcon } from "@/features/run/TestTreeView";
 import { buildTree, countTests, nodeStatus, selectionOf, stackLocations, type UtNode } from "./model";
-import { cancelTests, discoverTests, loadProjects, runTests, runTestsWithCoverage, useUnitTests } from "./store";
+import {
+  cancelTests,
+  debugTests,
+  discoverTests,
+  loadProjects,
+  runTests,
+  runTestsWithCoverage,
+  useUnitTests,
+} from "./store";
+import { setContinuousMode, useContinuous, type ContinuousMode } from "./continuous";
 import styles from "./UnitTestsView.module.css";
 
 const ICONS: Record<UtNode["kind"], string> = {
@@ -89,6 +98,12 @@ export function UnitTestsView() {
         run: () => void runTests(selectionOf(nodes)),
       },
       {
+        label: tx`Debug Selected Tests`,
+        icon: "debug",
+        disabled: !!s.busy,
+        run: () => void debugTests(selectionOf(nodes)),
+      },
+      {
         label: tx`Run Selected Tests with Coverage`,
         icon: "run-coverage",
         disabled: !!s.busy,
@@ -103,7 +118,15 @@ export function UnitTestsView() {
     ];
     showContextMenu(e, items);
   };
-  const status = s.busy === "discover" ? tx`Discovering tests…` : s.busy === "run" ? tx`Running tests…` : null;
+  const continuous = useContinuous();
+  const status =
+    s.busy === "discover"
+      ? tx`Discovering tests…`
+      : s.busy === "run"
+        ? tx`Running tests…`
+        : continuous.analysing
+          ? tx`Finding affected tests…`
+          : null;
   return (
     <div className={styles.view}>
       <div className={styles.toolbar}>
@@ -113,6 +136,15 @@ export function UnitTestsView() {
           title="Run Selected Tests"
           disabled={!!s.busy || s.selected.size === 0}
           onClick={runSelected}
+        />
+        <IconButton
+          icon="debug"
+          title="Debug Selected Tests"
+          disabled={!!s.busy || s.selected.size === 0}
+          onClick={() => {
+            const nodes = selectedNodes();
+            if (nodes.length) void debugTests(selectionOf(nodes));
+          }}
         />
         <IconButton
           icon="run-coverage"
@@ -127,6 +159,7 @@ export function UnitTestsView() {
           disabled={!!s.busy}
           onClick={() => void discoverTests()}
         />
+        <ContinuousButton />
         <IconButton
           icon="ci-failed"
           title="Show Only Failed Tests"
@@ -278,5 +311,35 @@ function Result({ node, output }: { node: UtNode | null; output: string[] }) {
       )}
       {!t.message && !t.stackTrace && !t.output && t.state === "discovered" && <EmptyState title="Not run yet" />}
     </div>
+  );
+}
+
+const CONTINUOUS_MODES: Array<{ mode: ContinuousMode; label: string }> = [
+  { mode: "off", label: "Off" },
+  { mode: "save", label: "Rerun Affected Tests on Save" },
+  { mode: "build", label: "Rerun Affected Tests after Build" },
+];
+
+/** Continuous testing (TST-3): pressed while on; the menu picks when it reruns. */
+function ContinuousButton() {
+  const { mode, last } = useContinuous();
+  const label = tx(CONTINUOUS_MODES.find((m) => m.mode === mode)!.label);
+  return (
+    <IconButton
+      icon="rerun"
+      title={last ? tx`Continuous Testing: ${label}\n${last}` : tx`Continuous Testing: ${label}`}
+      pressed={mode !== "off"}
+      onClick={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        showContextMenu(
+          { x: r.left, y: r.bottom },
+          CONTINUOUS_MODES.map((m) => ({
+            label: m.label,
+            checked: m.mode === mode,
+            run: () => setContinuousMode(m.mode),
+          })),
+        );
+      }}
+    />
   );
 }

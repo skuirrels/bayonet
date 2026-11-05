@@ -56,6 +56,7 @@ fn lang(id: &str, ext: &str, server: LanguageServerConfig) -> LanguageConfig {
         ui_mode: None,
         framework_ui_modes: Vec::new(),
         formatter: None,
+        scratch_template: None,
         tree_sitter: None,
         language_servers: vec![server],
         debugger: None,
@@ -136,6 +137,7 @@ async fn missing_binary_is_reported_with_install_hint() {
         tsserver_project: false,
         pull_diagnostics: false,
         workspace_diagnostics: false,
+        resync_on_configuration: false,
         pinned: None,
     };
     let (mgr, events) = manager(dir.path(), LanguageRegistry::from_configs(vec![lang("nope", "nope", server)]));
@@ -407,6 +409,7 @@ async fn typescript_language_server_end_to_end() {
         tsserver_project: false,
         pull_diagnostics: false,
         workspace_diagnostics: false,
+        resync_on_configuration: false,
         pinned: None,
     };
     let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![lang("typescript", "ts", server)]));
@@ -458,6 +461,7 @@ fn npm_server(tools: &Path, name: &str, bin: &str, init: Option<serde_json::Valu
         tsserver_project: false,
         pull_diagnostics: false,
         workspace_diagnostics: false,
+        resync_on_configuration: false,
         pinned: None,
     }
 }
@@ -863,4 +867,510 @@ async fn roslyn_project_contexts_switch_target_frameworks() {
         assert_eq!(now.contexts[now.active as usize].id, context.id);
     }
     tokio::time::timeout(Duration::from_secs(10), mgr.shutdown_all()).await.unwrap();
+}
+
+/// Applies the edits of `file` in `edit` to `text` (line/column edits, ASCII text).
+fn apply_file_edits(text: &str, edit: &ide_core::WorkspaceEdit, file: &Path) -> String {
+    let mut edits: Vec<ide_core::TextEdit> = edit
+        .files
+        .iter()
+        .filter_map(|f| match f {
+            ide_core::FileEdit::Edit { path, edits, .. } if AsRef::<Path>::as_ref(path) == file => Some(edits.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let offset = |p: Pos| {
+        let line_start: usize = text.split_inclusive('\n').take(p.line as usize).map(str::len).sum();
+        line_start + p.col as usize
+    };
+    edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.col)));
+    let mut out = text.to_owned();
+    for e in edits {
+        out.replace_range(offset(e.range.start)..offset(e.range.end), &e.new_text);
+    }
+    out
+}
+
+/// CI-6: each C# refactoring Roslyn provides, from `Pricing.cs` of the fixture:
+/// offered where IDEA offers it, resolved to an edit, and doing what it says.
+/// Introduce Constant and Introduce Parameter come from Roslyn's action groups,
+/// which the client flattens. Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_refactorings() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let file = root.join("src/Fixture.Core/Pricing.cs");
+    let source = std::fs::read_to_string(&file).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &file, &LanguageId::new("csharp"), 1, &source);
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+
+    let range = |l1, c1, l2, c2| Range { start: Pos::new(l1, c1), end: Pos::new(l2, c2) };
+    // (refactoring, where, the action's title, what the file then contains)
+    let cases: [(&str, Range, &str, &[&str]); 8] = [
+        (
+            "Extract Method",
+            range(7, 0, 8, 61),
+            "Extract method",
+            &["NewMethod(price, quantity, out subtotal, out discount)"],
+        ),
+        (
+            "Introduce Variable",
+            range(8, 40, 8, 54),
+            "Introduce local for 'subtotal * 0.1m'",
+            &["decimal v = subtotal * 0.1m;"],
+        ),
+        ("Introduce Constant", range(8, 51, 8, 55), "Introduce constant for '0.1m'", &["const decimal"]),
+        (
+            "Introduce Parameter",
+            range(8, 51, 8, 55),
+            "Introduce parameter for '0.1m' and update call sites directly",
+            &["Total(decimal price, int quantity, decimal"],
+        ),
+        (
+            "Extract Interface",
+            range(3, 21, 3, 21),
+            "Extract interface...",
+            &["interface IPricing", "class Pricing : IPricing"],
+        ),
+        (
+            "Extract Superclass",
+            range(3, 21, 3, 21),
+            "Extract base class...",
+            &["class NewBaseType", "Pricing : NewBaseType"],
+        ),
+        ("Inline", range(7, 13, 7, 13), "Inline temporary variable", &["price * quantity > 100"]),
+        ("Move", range(15, 21, 15, 21), "Move type to Receipt.cs", &[]),
+    ];
+    for (name, at, title, expect) in cases {
+        let action = retry(name, Duration::from_secs(120), || {
+            let mgr = mgr.clone();
+            async move {
+                let actions = mgr.code_actions(doc, at, Vec::new()).await.ok()?;
+                actions.into_iter().find(|a| a.title == title)
+            }
+        })
+        .await;
+        let resolved = mgr.resolve_code_action(doc, action).await.unwrap();
+        let edit = resolved.edit.unwrap_or_else(|| panic!("{name}: no edit"));
+        let after = apply_file_edits(&source, &edit, &file);
+        for want in expect {
+            assert!(after.contains(want), "{name}: no {want:?} in\n{after}");
+        }
+        if name == "Move" {
+            let receipt = root.join("src/Fixture.Core/Receipt.cs");
+            assert!(
+                edit.files.iter().any(
+                    |f| matches!(f, ide_core::FileEdit::Create { path, .. } if AsRef::<Path>::as_ref(path) == receipt)
+                ),
+                "{edit:?}"
+            );
+            let moved = apply_file_edits("", &edit, &receipt);
+            assert!(moved.contains("public sealed class Receipt"), "{moved}");
+            assert!(!after.contains("class Receipt"), "{after}");
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
+}
+
+/// CI-13: Roslyn's call hierarchy (incoming and outgoing) and type hierarchy
+/// (supertypes and subtypes) for C#. Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_hierarchies() {
+    use ide_lsp::types::HierarchyDirection;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let file = root.join("src/Fixture.Core/Checkout.cs");
+    let source = "namespace Fixture.Core;\n\npublic interface IShape { double Area(); }\n\npublic class Circle : IShape\n{\n    public double Area() => 3.14;\n}\n\npublic static class Checkout\n{\n    public static decimal Due(Pricing p, decimal price) => p.Tax(p.Total(price, 1));\n\n    public static decimal Twice(Pricing p) => Due(p, 1) + Due(p, 2);\n}\n";
+    std::fs::write(&file, source).unwrap();
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let doc = DocId::next();
+    mgr.did_open(doc, &file, &LanguageId::new("csharp"), 1, source);
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+
+    // `Due` (line 11): called twice from `Twice`, calls `Tax` and `Total`.
+    let due = Pos::new(11, 27);
+    let incoming = retry("incoming calls of Due", Duration::from_secs(90), || {
+        let mgr = &mgr;
+        async move {
+            let h = mgr.call_hierarchy(doc, due, HierarchyDirection::Incoming, Default::default()).await.ok()?;
+            (!h.items.is_empty()).then_some(h)
+        }
+    })
+    .await;
+    let callers: Vec<(&str, usize)> = incoming.items.iter().map(|i| (i.name.as_str(), i.from_ranges.len())).collect();
+    assert!(callers.iter().any(|(n, k)| n.contains("Twice") && *k == 2), "{callers:?}");
+
+    let outgoing = retry("outgoing calls of Due", Duration::from_secs(30), || {
+        let mgr = &mgr;
+        async move {
+            let h = mgr.call_hierarchy(doc, due, HierarchyDirection::Outgoing, Default::default()).await.ok()?;
+            (!h.items.is_empty()).then_some(h)
+        }
+    })
+    .await;
+    let mut callees: Vec<&str> = outgoing.items.iter().map(|i| i.name.as_str()).collect();
+    callees.sort();
+    assert!(callees.iter().any(|n| n.contains("Tax")) && callees.iter().any(|n| n.contains("Total")), "{callees:?}");
+
+    // `Circle` (line 4): its supertype is `IShape`; `IShape`'s subtype is `Circle`.
+    let supers = mgr.type_hierarchy(doc, Pos::new(4, 14), HierarchyDirection::Incoming).await.unwrap();
+    assert!(
+        supers.iter().any(|i| i.name.contains("IShape")),
+        "{:?}",
+        supers.iter().map(|i| &i.name).collect::<Vec<_>>()
+    );
+    let subs = mgr.type_hierarchy(doc, Pos::new(2, 18), HierarchyDirection::Outgoing).await.unwrap();
+    assert!(subs.iter().any(|i| i.name.contains("Circle")), "{:?}", subs.iter().map(|i| &i.name).collect::<Vec<_>>());
+}
+
+/// CI-6: Change Signature for C# from Roslyn's references: the declaration,
+/// the interface member it implements and the calls in two files are
+/// rewritten. Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_change_signature() {
+    use ide_analysis::signature::{NewParameter, SignatureSites, change_signature, signature_at};
+    use ide_core::{FileEdit, Range};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let file = root.join("src/Fixture.Core/Shop.cs");
+    let caller = root.join("src/Fixture.Core/Caller.cs");
+    let source = "namespace Fixture.Core;\n\npublic interface IPricer { decimal Price(decimal net, int count); }\n\npublic class Shop : IPricer\n{\n    public decimal Price(decimal net, int count) => net * count;\n\n    public decimal Two() => Price(1m, 2) + Price(count: 3, net: 4m);\n}\n";
+    let other = "namespace Fixture.Core;\n\npublic static class Caller\n{\n    public static decimal Run(IPricer p) => p.Price(5m, 6);\n}\n";
+    std::fs::write(&file, source).unwrap();
+    std::fs::write(&caller, other).unwrap();
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let doc = DocId::next();
+    mgr.did_open(doc, &file, &LanguageId::new("csharp"), 1, source);
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+
+    let syntax = ide_language::Syntax::new();
+    // `Shop.Price` (line 6).
+    let sig = signature_at(&syntax, source, Pos::new(6, 20)).unwrap();
+    assert_eq!(sig.name, "Price");
+    let refs = retry("references of Shop.Price", Duration::from_secs(90), || {
+        let mgr = &mgr;
+        let at = sig.name_range.start;
+        async move {
+            let r = mgr.references(doc, at, true, true, Default::default()).await.ok()?;
+            // Both calls in Shop.cs and the one through the interface in Caller.cs.
+            (r.locations.iter().filter(|l| l.path.ends_with("Shop.cs")).count() >= 3
+                && r.locations.iter().any(|l| l.path.ends_with("Caller.cs")))
+            .then_some(r)
+        }
+    })
+    .await;
+    let mut files: Vec<SignatureSites> = Vec::new();
+    for (path, text) in [(&file, source), (&caller, other)] {
+        let mut locations: Vec<Range> =
+            refs.locations.iter().filter(|l| &*l.path == path.as_path()).map(|l| l.range).collect();
+        if path == &file {
+            locations.push(sig.name_range);
+        }
+        files.push(SignatureSites { path: path.as_path().into(), text: text.into(), locations });
+    }
+    let change = [
+        NewParameter { from: Some(1), text: "int count".into(), value: None },
+        NewParameter { from: Some(0), text: "decimal net".into(), value: None },
+        NewParameter { from: None, text: "bool round = false".into(), value: None },
+    ];
+    let rewrite = change_signature(&syntax, &sig, &change, &files).unwrap();
+    assert!(rewrite.skipped.is_empty(), "{:?}", rewrite.skipped);
+    let apply = |path: &std::path::Path, text: &str| {
+        let Some(FileEdit::Edit { edits, .. }) =
+            rewrite.edit.files.iter().find(|f| matches!(f, FileEdit::Edit { path: p, .. } if &**p == path))
+        else {
+            return text.to_string();
+        };
+        let mut out = text.to_string();
+        let mut edits = edits.clone();
+        edits.sort_by_key(|e| std::cmp::Reverse(e.range.start));
+        let byte = |t: &str, p: Pos| {
+            let start: usize = t.split('\n').take(p.line as usize).map(|l| l.len() + 1).sum();
+            start + p.col as usize
+        };
+        for e in edits {
+            let (s, t) = (byte(&out, e.range.start), byte(&out, e.range.end));
+            out.replace_range(s..t, &e.new_text);
+        }
+        out
+    };
+    let shop = apply(&file, source);
+    assert!(shop.contains("public decimal Price(int count, decimal net, bool round = false) =>"), "{shop}");
+    assert!(shop.contains("Price(2, 1m) + Price(count: 3, net: 4m)"), "{shop}");
+    let calls = apply(&caller, other);
+    assert!(calls.contains("p.Price(6, 5m)"), "{calls}");
+    // Roslyn cascades to the interface member, so it changes with its implementation.
+    assert!(shop.contains("decimal Price(int count, decimal net, bool round = false); }"), "{shop}");
+    assert_eq!((rewrite.declarations, rewrite.calls), (2, 3));
+}
+
+/// CI-15: Razor through Roslyn's cohosted Razor support: component completion in
+/// a `.razor` file of a new Blazor app. Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_razor_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let new = std::process::Command::new("dotnet")
+        .args(["new", "blazor", "-n", "BlazorApp", "-o", "."])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(new.status.success(), "{}", String::from_utf8_lossy(&new.stdout));
+    let registry = LanguageRegistry::load(None).unwrap();
+    let mut csharp = registry.get(&LanguageId::new("csharp")).unwrap();
+    let mut razor = registry.get(&LanguageId::new("razor")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin.clone();
+        razor.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp, razor]));
+    let file = root.join("Components/Pages/Home.razor");
+    let source = "@page \"/\"\n\n<PageTitle>Home</PageTitle>\n\n<Cou\n";
+    std::fs::write(&file, source).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &file, &LanguageId::new("razor"), 1, source);
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        async move { matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+    let list = retry("Counter in the completion", Duration::from_secs(120), || {
+        let mgr = &mgr;
+        async move {
+            let list = mgr.completion(doc, Pos::new(4, 4), None, Default::default()).await.ok()?;
+            list.items.iter().any(|i| i.label == "Counter").then_some(list)
+        }
+    })
+    .await;
+    // The app's own components and the framework's.
+    assert!(
+        list.items.iter().any(|i| i.label == "Weather"),
+        "{:?}",
+        list.items.iter().map(|i| &i.label).collect::<Vec<_>>()
+    );
+    assert!(list.items.iter().any(|i| i.label.ends_with("AuthorizeRouteView")));
+}
+
+/// NFR-4: Roslyn is killed while a file has unsaved edits. Editing goes on while it
+/// is down, it restarts on its own, and the restarted server is given the editor's
+/// text (not the file on disk). Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_restarts_after_a_crash_with_the_unsaved_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let program = root.join("src/Fixture.Cli/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &program, &LanguageId::new("csharp"), 1, &source);
+    let ready = |events: &Events| {
+        let s = last_status(events, "roslyn-language-server");
+        if let Some((ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        matches!(s, Some((ServerStatus::Ready | ServerStatus::Busy, _)))
+    };
+    retry("roslyn ready", Duration::from_secs(60), || {
+        let ok = ready(&events);
+        async move { ok.then_some(()) }
+    })
+    .await;
+    let hover_at = |pos: Pos, needle: &'static str| {
+        let mgr = mgr.clone();
+        async move {
+            let h = mgr.hover(doc, pos, Default::default()).await.ok().flatten()?;
+            h.contents.value.contains(needle).then_some(h.contents.value)
+        }
+    };
+    retry("hover before the crash", Duration::from_secs(180), || hover_at(Pos::new(3, 28), "Greet")).await;
+
+    // Kill the server: our only child process (the launcher `exec`s it).
+    let children = std::process::Command::new("pgrep").args(["-P", &std::process::id().to_string()]).output().unwrap();
+    let pids: Vec<String> = String::from_utf8_lossy(&children.stdout).split_whitespace().map(str::to_owned).collect();
+    assert!(!pids.is_empty(), "no server process");
+    let before = events.lock().len();
+    for pid in &pids {
+        std::process::Command::new("kill").args(["-KILL", pid]).status().unwrap();
+    }
+    retry("the crash is reported", Duration::from_secs(20), || {
+        let crashed = events.lock()[before..].iter().any(|e| {
+            matches!(e, IdeEvent::LanguageServer { name, status: ServerStatus::Crashed, .. } if name == "roslyn-language-server")
+        });
+        async move { crashed.then_some(()) }
+    })
+    .await;
+
+    // Typing while it is down: a line that is only in the editor.
+    let line = "var shout = greeter.Greet(\"x\");\n";
+    mgr.did_change(
+        doc,
+        2,
+        &[AppliedChange { range: Range::point(Pos::new(4, 0)), text: line.into() }],
+        &|| unreachable!(),
+    );
+    assert_eq!(std::fs::read_to_string(&program).unwrap(), source, "nothing is saved");
+
+    retry("roslyn restarted", Duration::from_secs(90), || {
+        let ok = ready(&events);
+        async move { ok.then_some(()) }
+    })
+    .await;
+    let hover =
+        retry("hover on the unsaved line", Duration::from_secs(180), || hover_at(Pos::new(4, 6), "shout")).await;
+    println!("after the restart: {hover}");
+
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
+}
+
+/// NFR-3: how long Roslyn takes to answer member completion once the solution is
+/// loaded (the popup adds the client's share, `completion` in `perf/scenarios.ts`).
+/// Needs what [`roslyn_end_to_end`] needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_completion_latency() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let program = root.join("src/Fixture.Cli/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &program, &LanguageId::new("csharp"), 1, &source);
+    mgr.did_change(
+        doc,
+        2,
+        &[AppliedChange { range: Range::point(Pos::new(4, 0)), text: "greeter.\n".into() }],
+        &|| unreachable!(),
+    );
+    let at = Pos::new(4, 8);
+    // Warm: the first answers come while the projects load.
+    retry("completion", Duration::from_secs(240), || {
+        let s = last_status(&events, "roslyn-language-server");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &s {
+            panic!("roslyn failed: {msg:?}");
+        }
+        let mgr = mgr.clone();
+        async move {
+            let list = mgr.completion(doc, at, Some(".".into()), Default::default()).await.ok()?;
+            list.items.iter().any(|i| i.label == "Greet").then_some(())
+        }
+    })
+    .await;
+    for _ in 0..5 {
+        mgr.completion(doc, at, Some(".".into()), Default::default()).await.unwrap();
+    }
+    let mut ms: Vec<f64> = Vec::new();
+    for _ in 0..40 {
+        let t = Instant::now();
+        let list = mgr.completion(doc, at, Some(".".into()), Default::default()).await.unwrap();
+        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(list.items.iter().any(|i| i.label == "Greet"));
+    }
+    ms.sort_by(f64::total_cmp);
+    let p = |q: f64| ms[((q * ms.len() as f64).ceil() as usize).clamp(1, ms.len()) - 1];
+    println!("roslyn member completion: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms", p(0.5), p(0.95), p(1.0));
+    // With the client's ~60 ms, the popup stays under NFR-3's 150 ms.
+    assert!(p(0.95) < 90.0, "p95 {:.1} ms", p(0.95));
+
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }

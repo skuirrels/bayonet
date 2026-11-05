@@ -42,6 +42,7 @@ export const commands = {
 	isGit: boolean,
 	settings: Settings_Serialize,
 	workspace?: Workspace_Serialize | null,
+	unity?: UnityProjectInfo | null,
 } | null>("project_current"),
 	closeProject: () => __TAURI_INVOKE<void>("close_project"),
 	languages: () => __TAURI_INVOKE<LanguageInfo_Serialize[]>("languages"),
@@ -324,9 +325,12 @@ export const commands = {
 	/**  Quits through every window's unsaved-changes check, then starts again. */
 	appRestart: () => __TAURI_INVOKE<void>("app_restart"),
 	indexStatus: () => typedError<IndexStatus, IdeError>(__TAURI_INVOKE("index_status")),
+	indexFileExtensions: () => typedError<ExtensionCount[], IdeError>(__TAURI_INVOKE("index_file_extensions")),
 	/**  Spring Web mapping sources for the request-path index of Search Everywhere. */
 	springRouteSources: () => typedError<RouteSource[], IdeError>(__TAURI_INVOKE("spring_route_sources")),
 	findFiles: (query: string, limit: number) => typedError<FileMatch[], IdeError>(__TAURI_INVOKE("find_files", { query, limit })),
+	/**  Folders holding indexed files, for `@` references. */
+	findDirs: (query: string, limit: number) => typedError<FileMatch[], IdeError>(__TAURI_INVOKE("find_dirs", { query, limit })),
 	findSymbols: (query: string, filter: SymbolFilter, limit: number) => typedError<SymbolMatch[], IdeError>(__TAURI_INVOKE("find_symbols", { query, filter, limit })),
 	markRecent: (path: string) => typedError<null, IdeError>(__TAURI_INVOKE("mark_recent", { path })),
 	/**  Recently opened files, most recent first (⌘E). */
@@ -478,7 +482,20 @@ export const commands = {
 	vcsLineHunks: (path: string) => typedError<LineHunk[], IdeError>(__TAURI_INVOKE("vcs_line_hunks", { path })),
 	vcsFileAt: (path: string, rev: string | null) => typedError<string | null, IdeError>(__TAURI_INVOKE("vcs_file_at", { path, rev })),
 	vcsBlame: (path: string, text: string | null, revision: string | null) => typedError<BlameLine[], IdeError>(__TAURI_INVOKE("vcs_blame", { path, text, revision })),
-	vcsLog: (repo: string | null, query: LogQuery) => typedError<Commit[], IdeError>(__TAURI_INVOKE("vcs_log", { repo, query })),
+	/**
+	 *  History for Selection: commits that changed `lines` (0-based, inclusive) of `path`'s
+	 *  editor text. Cancellable with `cancel_request(request)`.
+	 */
+	vcsBlockHistory: (request: RequestId, path: string, text: string | null, lines: [number, number]) => typedError<BlockHistory, IdeError>(__TAURI_INVOKE("vcs_block_history", { request, path, text, lines })),
+	vcsLog: (repo: string | null, query: LogQuery) => typedError<Commit_Serialize[], IdeError>(__TAURI_INVOKE("vcs_log", { repo, query })),
+	vcsLogRefs: (repo: string | null) => typedError<{ [key in string]: string }, IdeError>(__TAURI_INVOKE("vcs_log_refs", { repo })),
+	vcsLogUsers: (repo: string | null) => typedError<string[], IdeError>(__TAURI_INVOKE("vcs_log_users", { repo })),
+	vcsOpenExternalLog: (path: string) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("vcs_open_external_log", { path })),
+	vcsLogDetails: (repo: string | null, revision: string) => typedError<LogDetails, IdeError>(__TAURI_INVOKE("vcs_log_details", { repo, revision })),
+	vcsLogDetailsBatch: (repo: string | null, revisions: string[], request: RequestId) => typedError<LogDetails[], IdeError>(__TAURI_INVOKE("vcs_log_details_batch", { repo, revisions, request })),
+	vcsLogIndex: (repo: string | null, request: number | null) => typedError<LogIndexProgress, IdeError>(__TAURI_INVOKE("vcs_log_index", { repo, request })),
+	vcsRevisionChildren: (repo: string | null, revision: string, directory: string) => typedError<string[], IdeError>(__TAURI_INVOKE("vcs_revision_children", { repo, revision, directory })),
+	vcsRevisionFiles: (repo: string | null, revision: string) => typedError<string[], IdeError>(__TAURI_INVOKE("vcs_revision_files", { repo, revision })),
 	vcsCommitFiles: (repo: string | null, commit: string) => typedError<ChangedFile[], IdeError>(__TAURI_INVOKE("vcs_commit_files", { repo, commit })),
 	/**  Combined changes of several commits, `commits` oldest first. */
 	vcsCommitsChanges: (repo: string | null, commits: string[]) => typedError<RevisionChange[], IdeError>(__TAURI_INVOKE("vcs_commits_changes", { repo, commits })),
@@ -870,6 +887,8 @@ export const commands = {
 	debugStepInTarget: (session: DebugSessionId, threadId: number, targetId: number) => typedError<null, IdeError>(__TAURI_INVOKE("debug_step_in_target", { session, threadId, targetId })),
 	/**  Reset Frame (Drop Frame). */
 	debugRestartFrame: (session: DebugSessionId, frameId: number) => typedError<null, IdeError>(__TAURI_INVOKE("debug_restart_frame", { session, frameId })),
+	/**  Set Next Statement: moves the thread's execution point to `line` (0-based) of `path`. */
+	debugSetNextStatement: (session: DebugSessionId, threadId: number, path: string, line: number) => typedError<null, IdeError>(__TAURI_INVOKE("debug_set_next_statement", { session, threadId, path, line })),
 	debugCapabilities: (session: DebugSessionId) => typedError<DebugCapabilities, IdeError>(__TAURI_INVOKE("debug_capabilities", { session })),
 	/**  Method breakpoints (all files); states aligned with `breakpoints`. */
 	debugSetFunctionBreakpoints: (breakpoints: FunctionBreakpoint[]) => typedError<BreakpointState[], IdeError>(__TAURI_INVOKE("debug_set_function_breakpoints", { breakpoints })),
@@ -878,6 +897,8 @@ export const commands = {
 	debugDataBreakpointInfo: (session: DebugSessionId, container: number, name: string, frameId: number | null) => typedError<DataBreakpointInfo, IdeError>(__TAURI_INVOKE("debug_data_breakpoint_info", { session, container, name, frameId })),
 	/**  Attach to Process: the user's processes a debugger can attach to. */
 	debugAttachableProcesses: () => typedError<AttachableProcess[], IdeError>(__TAURI_INVOKE("debug_attachable_processes")),
+	/**  Copies a Linux netcoredbg into a container; the `pipeTransport` JSON that attaches through it. */
+	debugPrepareContainer: (container: string) => typedError<string, IdeError>(__TAURI_INVOKE("debug_prepare_container", { container })),
 	/**
 	 *  Remote JVM Debug in listen mode: waits (cancellable through `request`) for the remote
 	 *  JVM to connect to `host:port`; returns the loopback port java-debug attaches to.
@@ -907,6 +928,16 @@ export const commands = {
 	nugetVersions: (id: string, prerelease: boolean) => typedError<string[], IdeError>(__TAURI_INVOKE("nuget_versions", { id, prerelease })),
 	/**  The packages of every project of the solution; `outdated` adds the latest versions. */
 	nugetInstalled: (outdated: boolean, prerelease: boolean) => typedError<InstalledPackages, IdeError>(__TAURI_INVOKE("nuget_installed", { outdated, prerelease })),
+	/**  Vulnerable and deprecated packages of the solution's projects (NUG-4). */
+	nugetAudit: () => typedError<PackageAudit, IdeError>(__TAURI_INVOKE("nuget_audit")),
+	/**  Opens the way to a project's user secrets: its `secrets.json`, created if needed (PLT-4). */
+	dotnetUserSecrets: (project: IpcPath) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("dotnet_user_secrets", { project })),
+	/**  The publish profiles of `project` (BLD-6). */
+	dotnetPublishProfiles: (project: IpcPath) => typedError<PublishProfile[], IdeError>(__TAURI_INVOKE("dotnet_publish_profiles", { project })),
+	/**  The `dotnet publish` command line for publishing `project` to `target`. */
+	dotnetPublishCommand: (project: IpcPath, target: PublishTarget) => typedError<PublishCommand, IdeError>(__TAURI_INVOKE("dotnet_publish_command", { project, target })),
+	/**  The shell line that publishes `project` as a container image and runs it (PLT-5). */
+	dotnetContainerRun: (project: IpcPath, repository: string) => typedError<PublishCommand, IdeError>(__TAURI_INVOKE("dotnet_container_run", { project, repository })),
 	/**  Installs or updates package `id` in `projects`. */
 	nugetInstall: (projects: IpcPath[], id: string, version: string | null) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_install", { projects, id, version })),
 	/**  Removes package `id` from `projects`. */
@@ -916,8 +947,14 @@ export const commands = {
 	/**
 	 *  Builds, then discovers or runs the tests of `selection` (every test project when
 	 *  empty), streaming events on `on_event`. Cancel with `cancel_request(request)`.
+	 *  A `debug` run starts each test app waiting for a debugger and reports its
+	 *  process (`TestEvent::Debug`) for the client to attach to.
 	 */
-	dotnetTests: (request: RequestId, run: boolean, coverage: boolean, selection: TestSelection[], onEvent: Channel<TestEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_tests", { request, run, coverage, selection, onEvent })),
+	dotnetTests: (request: RequestId, run: boolean, coverage: boolean, debug: boolean, selection: TestSelection[], onEvent: Channel<TestEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_tests", { request, run, coverage, debug, selection, onEvent })),
+	/**  Avalonia previewer for a XAML file (CI-16); runs until `cancel_request(request)`. */
+	dotnetXamlPreview: (request: RequestId, path: string, text: string, scale: number | null, onEvent: Channel<PreviewEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_xaml_preview", { request, path, text, scale, onEvent })),
+	/**  New XAML text for a running preview; false when it has stopped. */
+	dotnetXamlPreviewUpdate: (request: RequestId, text: string) => typedError<boolean, IdeError>(__TAURI_INVOKE("dotnet_xaml_preview_update", { request, text })),
 	/**  Installed project and solution templates, custom ones included. */
 	dotnetTemplates: () => typedError<ProjectTemplate[], IdeError>(__TAURI_INVOKE("dotnet_templates")),
 	/**  Creates a project from a template, optionally adding it to the solution. */
@@ -938,6 +975,18 @@ export const commands = {
 	dotnetBinlogRead: (path: string) => typedError<Binlog, IdeError>(__TAURI_INVOKE("dotnet_binlog_read", { path })),
 	/**  The binary logs of this project's builds, newest first. */
 	dotnetBinlogs: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_binlogs")),
+	/**  Where the Aspire CLI is, and how to install it. */
+	aspireCli: () => typedError<AspireCli, IdeError>(__TAURI_INVOKE("aspire_cli")),
+	/**  Which of `projects` are Aspire AppHosts. */
+	aspireApphosts: (projects: IpcPath[]) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("aspire_apphosts", { projects })),
+	/**  Watches whether `apphost` runs and streams its resources, until `cancel_request(request)`. */
+	aspireWatch: (request: RequestId, apphost: IpcPath, onEvent: Channel<AspireEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("aspire_watch", { request, apphost, onEvent })),
+	/**  Streams the console of `resource`, until `cancel_request(request)`. */
+	aspireLogs: (request: RequestId, apphost: IpcPath, resource: string, onLines: Channel<AspireLogLine[]>) => typedError<null, IdeError>(__TAURI_INVOKE("aspire_logs", { request, apphost, resource, onLines })),
+	/**  Runs a resource command (`start`, `stop`, `restart`, `rebuild`, …). */
+	aspireCommand: (apphost: IpcPath, resource: string, name: string) => typedError<string, IdeError>(__TAURI_INVOKE("aspire_command", { apphost, resource, name })),
+	/**  Stops the running `apphost`. */
+	aspireStop: (apphost: IpcPath) => typedError<null, IdeError>(__TAURI_INVOKE("aspire_stop", { apphost })),
 	/**  The diagnostics tools and whether each is installed. */
 	diagTools: () => typedError<DiagToolStatus[], IdeError>(__TAURI_INVOKE("diag_tools")),
 	/**  The running .NET processes. */
@@ -1132,6 +1181,31 @@ export const commands = {
 	inspectCode: (request: RequestId, scope: SearchScope, onEvent: Channel<InspectEvent>) => typedError<null, IdeError>(__TAURI_INVOKE("inspect_code", { request, scope, onEvent })),
 	/**  Locate Duplicates over the files of `scope`. */
 	analysisLocateDuplicates: (request: RequestId, scope: SearchScope, options: DuplicateOptions) => typedError<DuplicatesReport, IdeError>(__TAURI_INVOKE("analysis_locate_duplicates", { request, scope, options })),
+	/**  The project's C# type `name` and the members a XAML binding can name (CI-16). */
+	csharpTypeMembers: (name: string, namespace: string | null) => typedError<{
+	name: string,
+	namespace: string,
+	path: IpcPath,
+	range: Range,
+	members: BindableMember[],
+} | null, IdeError>(__TAURI_INVOKE("csharp_type_members", { name, namespace })),
+	/**  The C# method, constructor, local function or delegate declared around `pos`. */
+	signatureAt: (path: IpcPath, pos: Pos) => typedError<{
+	name: string,
+	/**  `method`, `constructor`, `localFunction` or `delegate`. */
+	kind: string,
+	/**  The enclosing type's name. */
+	container: string | null,
+	parameters: Parameter[],
+	/**  The first parameter is `this` (an extension method). */
+	extension: boolean,
+	/**  The declared name, where references are looked up. */
+	nameRange: Range,
+	/**  The declaration as written up to its body, for the dialog's preview. */
+	header: string,
+} | null, IdeError>(__TAURI_INVOKE("signature_at", { path, pos })),
+	/**  Change Signature for C#: the edit for the declaration and the calls at `locations`. */
+	changeSignature: (signature: MethodSignature, change: NewParameter[], locations: Location[]) => typedError<SignatureRewrite, IdeError>(__TAURI_INVOKE("change_signature", { signature, change, locations })),
 	/**  Languages Search Structurally supports (those with a bundled grammar). */
 	structuralLanguages: () => typedError<StructuralLanguage[], IdeError>(__TAURI_INVOKE("structural_languages")),
 	/**  Checks a structural search template (and language) while the user types. */
@@ -1335,6 +1409,13 @@ export type ActionsOnSaveSettings = {
 export type ActiveTheme = {
 	pluginId: string,
 	theme: ThemeDef,
+};
+
+/**  A security advisory on the version of a package a project uses. */
+export type Advisory = {
+	/**  `Low`, `Moderate`, `High` or `Critical`. */
+	severity: string,
+	url: string,
 };
 
 /**
@@ -1770,6 +1851,67 @@ export type AskpassKind =
 /**  Yes / no (an unknown host key); answered with `yes` or `no`. */
 "confirm";
 
+/**  A running AppHost (`aspire ps`). */
+export type AspireAppHost = {
+	path: IpcPath,
+	pid: number | null,
+	/**  The dashboard's login URL (with its token). */
+	dashboardUrl: string | null,
+};
+
+export type AspireCli = {
+	path: IpcPath | null,
+	install: ToolInstall,
+};
+
+/**  A command a resource offers (`start`, `stop`, `restart`, `rebuild`, custom ones). */
+export type AspireCommand = {
+	name: string,
+	displayName: string,
+	description: string | null,
+};
+
+export type AspireEvent = 
+/**  The AppHost started (with its dashboard) or stopped (`None`). */
+{ kind: "appHost"; running: AspireAppHost | null } | 
+/**  A resource was added or changed. */
+{ kind: "resource"; resource: AspireResource } | { kind: "error"; message: string };
+
+/**  One console line of a resource (`aspire logs`). */
+export type AspireLogLine = {
+	resource: string,
+	/**  As written, ANSI colours included. */
+	content: string,
+	isError: boolean,
+};
+
+/**  One resource of a running AppHost (`aspire describe`). */
+export type AspireResource = {
+	/**  Unique (`api-wbqsvmeb`); replicas share a display name. */
+	name: string,
+	displayName: string,
+	/**  `Project`, `Container`, `Executable`, `Parameter`, … */
+	resourceType: string,
+	/**  `Starting`, `Running`, `Exited`, `Finished`, `FailedToStart`, … */
+	state: string | null,
+	/**  `Healthy`, `Unhealthy`, `Degraded`. */
+	health: string | null,
+	/**  The project file, image or executable it runs. */
+	source: string | null,
+	startTime: string | null,
+	urls: AspireUrl[],
+	commands: AspireCommand[],
+	pid: number | null,
+	projectPath: IpcPath | null,
+	exitCode: number | null,
+	dashboardUrl: string | null,
+};
+
+export type AspireUrl = {
+	name: string,
+	url: string,
+};
+
 export type AttachKind = "dotnet" | "java" | "node" | "python" | "go" | "native";
 
 export type AttachableProcess = {
@@ -1783,6 +1925,24 @@ export type AttachableProcess = {
 	/**  Debug port the process listens on (JDWP, `--inspect`, `debugpy --listen`). */
 	host: string | null,
 	port: number | null,
+	/**  The container it runs in (its name); attached to with netcoredbg inside it (DBG-8). */
+	container: string | null,
+};
+
+/**  A package of a project with known vulnerabilities or a deprecation (NUG-4). */
+export type AuditFinding = {
+	id: string,
+	version: string | null,
+	frameworks: string[],
+	/**  Brought in by another package rather than referenced by the project. */
+	transitive: boolean,
+	vulnerabilities: Advisory[],
+	deprecation: Deprecation | null,
+	/**
+	 *  Where it belongs in the project file: the `PackageReference`, else (transitive,
+	 *  or referenced from an imported file) the `Project` element. Unset when the file cannot be read.
+	 */
+	range: Range | null,
 };
 
 /**  Editor › General › Auto Import (LSP code actions). */
@@ -1806,6 +1966,29 @@ export type BeforeLaunchTask = {
 	 */
 	kind: string,
 	target?: string,
+};
+
+/**  A member a XAML binding can name, with where it is declared. */
+export type BindableMember = {
+	name: string,
+	typeName: string | null,
+	kind: MemberKind,
+	path: IpcPath,
+	range: Range,
+	/**  The type that declares it (a base type for inherited members). */
+	declaredIn: string,
+};
+
+/**
+ *  A C# type of the project: where it is declared and its members, inherited
+ *  ones (from base types in the project) after its own.
+ */
+export type BindableType = {
+	name: string,
+	namespace: string,
+	path: IpcPath,
+	range: Range,
+	members: BindableMember[],
 };
 
 export type Binlog = {
@@ -1886,6 +2069,31 @@ export type BlameLine = {
 	author: string,
 	timeMs: number | null,
 	summary: string,
+};
+
+/**  History for Selection: the commits that changed a block of lines, newest first. */
+export type BlockHistory = {
+	/**  The selected lines in HEAD (0-based, inclusive); None when none of them is committed. */
+	headLines: [number, number] | null,
+	revisions: BlockRevision[],
+};
+
+/**  A commit that changed the block, with the block in its first parent and in it. */
+export type BlockRevision = {
+	id: string,
+	shortId: string,
+	author: string,
+	email: string,
+	timeMs: number | null,
+	summary: string,
+	/**  Repository-relative path of the file in this commit (before a later rename). */
+	path: string,
+	/**  The block before the commit; empty when the commit added it. */
+	before: string,
+	after: string,
+	/**  0-based first line of the block before and after the commit. */
+	beforeLine: number,
+	afterLine: number,
 };
 
 export type Branch = {
@@ -2276,24 +2484,7 @@ export type CommandForm = {
 	formAnswers: FormAnswer[],
 };
 
-export type Commit = {
-	id: string,
-	shortId: string,
-	parents: string[],
-	author: string,
-	email: string,
-	timeMs: number | null,
-	summary: string,
-	message: string,
-	refs: string[],
-	/**  Committer time (Log › View Options › Commit Timestamp). */
-	commitTimeMs?: number | null,
-	/**
-	 *  Per parent, under a user or text filter: the link passes commits the filter hides
-	 *  (`parents` then name the nearest shown ancestors). Empty when no parent is rewritten.
-	 */
-	dashed?: boolean[],
-};
+export type Commit = Commit_Serialize | Commit_Deserialize;
 
 /**  Commit Options (IDEA's commit options popup). */
 export type CommitOptions = {
@@ -2332,6 +2523,64 @@ export type CommitSettings = {
 	bodyLimit?: number,
 	showRightMargin?: boolean,
 	wrapAtMargin?: boolean,
+};
+
+export type Commit_Deserialize = {
+	id: string,
+	shortId: string,
+	parents: string[],
+	/**  Connections in the filtered graph; never use these as revision/diff parents. */
+	graphParents?: string[] | null,
+	graphDashed?: boolean[],
+	/**  Repository-relative filename at this revision in rename-following history. */
+	historyPath?: string | null,
+	logPosition?: number | null,
+	logTotal?: number | null,
+	graphBoundaryParents?: string[],
+	/**  Reachability from HEAD, computed independently of the visible filters. */
+	onCurrentBranch?: boolean | null,
+	author: string,
+	email: string,
+	committer?: string,
+	committerEmail?: string,
+	timeMs: number | null,
+	summary: string,
+	message: string,
+	messageTruncated?: boolean,
+	refs: string[],
+	/**  Committer time (Log › View Options › Commit Timestamp). */
+	commitTimeMs?: number | null,
+	/**  Legacy alias of `graph_dashed`, indexed by displayed parents. */
+	dashed?: boolean[],
+};
+
+export type Commit_Serialize = {
+	id: string,
+	shortId: string,
+	parents: string[],
+	/**  Connections in the filtered graph; never use these as revision/diff parents. */
+	graphParents?: string[] | null,
+	graphDashed?: boolean[],
+	/**  Repository-relative filename at this revision in rename-following history. */
+	historyPath?: string | null,
+	logPosition?: number | null,
+	logTotal?: number | null,
+	graphBoundaryParents?: string[],
+	/**  Reachability from HEAD, computed independently of the visible filters. */
+	onCurrentBranch?: boolean | null,
+	author: string,
+	email: string,
+	committer: string,
+	committerEmail: string,
+	timeMs: number | null,
+	summary: string,
+	message: string,
+	messageTruncated: boolean,
+	refs: string[],
+	/**  Committer time (Log › View Options › Commit Timestamp). */
+	commitTimeMs: number | null,
+	/**  Legacy alias of `graph_dashed`, indexed by displayed parents. */
+	dashed?: boolean[],
 };
 
 export type CompareResult = {
@@ -2432,6 +2681,11 @@ export type Consent = {
 	 *  ones are implied by consenting at all.
 	 */
 	optional: string[],
+	/**
+	 *  The user accepted a package signed by another key than the installed
+	 *  copy ([`InstallPreview::signer_changed`]).
+	 */
+	signerChange?: boolean,
 };
 
 /**  Build, Execution, Deployment › Console. */
@@ -2861,6 +3115,8 @@ export type DebugCapabilities = {
 	logPoints: boolean,
 	/**  HotSwap ("Reload Changed Classes"): java-debug's `redefineClasses` request. */
 	hotCodeReplace: boolean,
+	/**  Set Next Statement: `gotoTargets` and `goto`. */
+	gotoTargets: boolean,
 };
 
 /**  A completion the adapter offers for an expression (DAP `completions`). */
@@ -3001,6 +3257,13 @@ export type DeploymentSettings = {
 };
 
 export type DeploymentType = "sftp" | "local";
+
+/**  Why the author deprecated a package version, and what to use instead. */
+export type Deprecation = {
+	/**  `Legacy`, `CriticalBugs`, `Other`. */
+	reasons: string[],
+	alternative: string | null,
+};
 
 export type DiagArtifact = {
 	path: IpcPath,
@@ -3583,6 +3846,12 @@ export type ExpressionAt = {
 	functionBoundary: SyntaxNode | null,
 	/**  The statement (or the expression when there is none) contains syntax errors. */
 	hasError: boolean,
+};
+
+/**  How many indexed files share an extension (lower case, without the dot). */
+export type ExtensionCount = {
+	extension: string,
+	files: number,
 };
 
 /**  A formatter that runs outside the language servers, with its own settings group. */
@@ -4467,6 +4736,14 @@ export type IndexEntry = {
 	/**  [`package_digest`] of its contents. */
 	digest: string,
 	capabilities?: string[],
+	/**
+	 *  The plugin API versions it loads in (a semver requirement): its
+	 *  manifest's `engines.openidea` and the API its component was built for.
+	 *  Required: an entry without one is offered to no IDE.
+	 */
+	engine?: string,
+	/**  Marketplace categories (`CATEGORIES`); an IDE ignores those it doesn't know. */
+	categories?: string[],
 };
 
 export type IndexStatus = {
@@ -4624,6 +4901,18 @@ export type InstallPreview = {
 	unsigned: boolean,
 	/**  The verified publisher. */
 	publisher: string | null,
+	/**
+	 *  Replaces an installed copy signed with another key, which didn't
+	 *  endorse this package's (or this one is unsigned): the user confirms it
+	 *  ([`Consent::signer_change`]).
+	 */
+	signerChanged: boolean,
+	/**
+	 *  Something to confirm: a first install, an unsigned package, another
+	 *  signer, or capabilities the installed version wasn't granted or
+	 *  refused. Without, an update installs with the grants it has.
+	 */
+	needsConsent: boolean,
 };
 
 /**  A theme of a plugin installed in a JetBrains IDE. */
@@ -4853,6 +5142,8 @@ export type LanguageInfo_Deserialize = {
 	filenames?: string[],
 	/**  First-line regex of the definition (shebangs, `<?php`). */
 	firstLine?: string | null,
+	/**  Content of a new scratch file; `$END$` marks where the caret goes. */
+	scratchTemplate?: string | null,
 };
 
 /**  The UI-facing view of a language. */
@@ -4872,6 +5163,8 @@ export type LanguageInfo_Serialize = {
 	filenames?: string[],
 	/**  First-line regex of the definition (shebangs, `<?php`). */
 	firstLine?: string | null,
+	/**  Content of a new scratch file; `$END$` marks where the caret goes. */
+	scratchTemplate?: string | null,
 };
 
 export type LanguageServerSettings = LanguageServerSettings_Serialize | LanguageServerSettings_Deserialize;
@@ -5142,6 +5435,22 @@ export type Location = {
 	uri?: string | null,
 };
 
+export type LogDetails = {
+	message: string,
+	containingBranches: string[],
+	/**  Git's verification code: G/U good, B bad, E error, N unsigned, X/Y expired, R revoked. */
+	signature: string,
+	signer: string,
+	key: string,
+	fingerprint: string,
+};
+
+export type LogIndexProgress = {
+	indexed: number,
+	total: number,
+	running: boolean,
+};
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogLocation = {
@@ -5155,11 +5464,19 @@ export type LogOrder =
 /**  `--topo-order`: lines of history are not intermixed. */
 "topo" | 
 /**  `--date-order`: commit time, but never a parent before its children. */
-"date";
+"date" | "standard";
 
 export type LogQuery = {
+	speedSearch?: string | null,
+	searchFields?: string[],
+	/**  Jump directly to an indexed window containing this commit (50 rows of context). */
+	seek?: string | null,
+	retainUntil?: string | null,
 	branch: string | null,
 	path: IpcPath | null,
+	paths?: IpcPath[],
+	/**  File history follows renames; structure filters retain fixed paths. */
+	follow?: boolean,
 	author: string | null,
 	text: string | null,
 	skip: number,
@@ -5169,6 +5486,8 @@ export type LogQuery = {
 	 *  not the left). Takes precedence over `branch`.
 	 */
 	range?: string | null,
+	/**  Additional ranges unioned with each other and with selected branches. */
+	ranges?: string[],
 	/**  `text` is a regular expression (Log filter `.*`). */
 	textRegex?: boolean,
 	/**  `text` matches case-sensitively (Log filter `Cc`). */
@@ -5177,6 +5496,7 @@ export type LogQuery = {
 	branches?: string[],
 	/**  More author needles next to `author`; a commit matches any of them (Log User filter). */
 	authors?: string[],
+	authorsExact?: boolean,
 	order?: LogOrder,
 	/**  Follow only the first parent of merges (`--first-parent`). */
 	firstParent?: boolean,
@@ -5189,6 +5509,10 @@ export type LogQuery = {
 	 */
 	sinceMs?: number | null,
 	untilMs?: number | null,
+	request?: RequestId | null,
+	summaryOnly?: boolean,
+	/**  Inclusive refresh boundary. Clients join only verified linear prefixes. */
+	stopAt?: string | null,
 };
 
 export type LspRefreshKind = "inlayHints" | "semanticTokens" | "codeLens";
@@ -5239,6 +5563,8 @@ export type MarkdownSettings = {
 export type MarketPlugin = {
 	/**  Installed version, if any. */
 	installed: string | null,
+	/**  Whether this IDE can load `entry` (the newest version it can, else the newest). */
+	compatible: boolean,
 } & IndexEntry;
 
 export type Markup = {
@@ -5334,7 +5660,21 @@ export type MavenSettings = {
 	userSettings?: string,
 	/**  Local repository (`-Dmaven.repo.local`); empty = from `settings.xml`. */
 	localRepository?: string,
+	/**
+	 *  Run Maven through the Maven Daemon (`mvnd`) for faster builds. mvnd embeds
+	 *  its own Maven, so `home` and the project's `mvnw` are bypassed when it is on.
+	 */
+	daemon?: boolean,
+	/**
+	 *  Maven Daemon home (or its `mvnd` executable); empty = `$MVND_HOME`, else
+	 *  `mvnd` on `PATH` / common install dirs. Only used when `daemon` is on.
+	 */
+	mvndHome?: string,
 };
+
+export type MemberKind = "property" | 
+/**  A `[RelayCommand]` method's generated command property. */
+"command";
 
 export type MemoryCategory = 
 /**  The backend and its WebView processes. */
@@ -5412,6 +5752,22 @@ export type MergeVersions = {
 	merged: string | null,
 };
 
+/**  The signature under the caret. */
+export type MethodSignature = {
+	name: string,
+	/**  `method`, `constructor`, `localFunction` or `delegate`. */
+	kind: string,
+	/**  The enclosing type's name. */
+	container: string | null,
+	parameters: Parameter[],
+	/**  The first parameter is `this` (an extension method). */
+	extension: boolean,
+	/**  The declared name, where references are looked up. */
+	nameRange: Range,
+	/**  The declaration as written up to its body, for the dialog's preview. */
+	header: string,
+};
+
 /**  Per-function totals (a recursive function's samples count once in `total`). */
 export type MethodStat = {
 	frame: number,
@@ -5449,6 +5805,16 @@ export type NewAgentTask = {
 	isolation: Isolation,
 	/**  Branch to start the worktree from; the current branch when `None`. */
 	base: string | null,
+};
+
+/**  A parameter of the new signature. */
+export type NewParameter = {
+	/**  Index of the existing parameter it is; `None` for a new one. */
+	from: number | null,
+	/**  The declaration, e.g. `CancellationToken token = default`. */
+	text: string,
+	/**  What callers pass for a new parameter; empty or `None` omits it when it has a default. */
+	value: string | null,
 };
 
 /**  Result of `node_at`: the smallest named node covering a range, with its ancestors. */
@@ -5579,6 +5945,12 @@ export type OutputChunk = { kind: "stdout"; text: string } | { kind: "stderr"; t
 /**  System message from the IDE (command line echo, exit code). */
 { kind: "system"; text: string };
 
+/**  Vulnerable and deprecated packages of every project. */
+export type PackageAudit = {
+	projects: ProjectAudit[],
+	problems: string[],
+};
+
 /**  A text file of a package the UI generated, at its `/`-separated path in the package. */
 export type PackageFile = {
 	path: string,
@@ -5600,6 +5972,17 @@ export type PackageSummary = {
 	owners: string | null,
 	totalDownloads: number | null,
 	projectUrl: string | null,
+};
+
+/**  One declared parameter. */
+export type Parameter = {
+	/**  The whole declaration, e.g. `int count = 0`. */
+	text: string,
+	/**  As written, with any `@`. */
+	name: string,
+	/**  `this`, `params`, `ref`, `out`, `in`, `scoped`, `readonly`. */
+	modifiers: string[],
+	hasDefault: boolean,
 };
 
 /**  A file of a partial commit: which of its changes against HEAD to commit. */
@@ -5637,6 +6020,21 @@ export type PathCompletion = {
 export type PhpSettings = {
 	/**  `php` CLI executable; empty = the one on `PATH`. */
 	interpreter?: string,
+	/**
+	 *  PHP version the language server checks the code against (`7.4`); empty = from
+	 *  `composer.json` (`config.platform.php`, else the lowest version `require.php` allows).
+	 */
+	languageLevel?: string,
+	/**
+	 *  Folders outside the project whose code the language server indexes too (a platform a
+	 *  module extends); absolute, `~/`, or relative to the project.
+	 */
+	includePaths?: string[],
+	/**
+	 *  Intelephense stub sets loaded on top of its defaults and the `ext-*` entries of
+	 *  `composer.json` (`wordpress`).
+	 */
+	stubs?: string[],
 };
 
 /**  The focused editor when a plugin command is invoked. */
@@ -5649,7 +6047,12 @@ export type PluginEditor = {
 /**  Backend → UI notifications (Tauri event `ide://plugin`). */
 export type PluginEvent = 
 /**  Plugins, their status or their contributions changed: re-fetch `plugin_list`. */
-{ type: "commandsChanged" } | { type: "notification"; pluginId: string; level: NotificationLevel; title: string; body: string } | 
+{ type: "commandsChanged" } | 
+/**
+ *  The marketplace offers newer versions of installed plugins (announced
+ *  once per set of versions).
+ */
+{ type: "updatesAvailable"; updates: PluginUpdate[] } | { type: "notification"; pluginId: string; level: NotificationLevel; title: string; body: string } | 
 /**  A plugin's status bar item was set (`item`) or removed. */
 { type: "statusItemChanged"; pluginId: string; id: string; item: StatusItem | null } | 
 /**  A plugin began a task: show it with the background tasks. */
@@ -5756,6 +6159,13 @@ export type PluginStatusItem = {
 	pluginId: string,
 	id: string,
 	item: StatusItem,
+};
+
+/**  A newer version of an installed plugin in the marketplace. */
+export type PluginUpdate = {
+	id: string,
+	name: string,
+	version: string,
 };
 
 export type PluginsSnapshot = {
@@ -5868,6 +6278,17 @@ export type PreparedRequest = {
 	body: string | null,
 };
 
+/**  What the preview reports to the UI. */
+export type PreviewEvent = { kind: "phase"; phase: PreviewPhase; message: string | null } | 
+/**  A rendered frame: a PNG (base64), its size in device pixels and the scale it was drawn at. */
+{ kind: "frame"; png: string; width: number; height: number; scale: number | null } | 
+/**  The XAML could not be loaded; the last good frame stays. 0-based line and column. */
+{ kind: "xamlError"; message: string; line: number | null; column: number | null } | 
+/**  The XAML loaded. */
+{ kind: "xamlLoaded" };
+
+export type PreviewPhase = "building" | "starting" | "ready" | "failed" | "stopped";
+
 export type ProblemSeverity = "info" | "warning" | "error" | 
 /**  The refactoring can't run at all; there is no edit. */
 "fatal";
@@ -5944,6 +6365,11 @@ export type ProfilerInstall = {
 	cwd: IpcPath | null,
 };
 
+export type ProjectAudit = {
+	path: IpcPath,
+	findings: AuditFinding[],
+};
+
 /**
  *  One compilation a document belongs to: Roslyn loads a multi-targeting project once
  *  per target framework, and each is a context with its own symbols and `#if` regions.
@@ -5979,6 +6405,7 @@ export type ProjectInfo_Deserialize = {
 	isGit: boolean,
 	settings: Settings_Deserialize,
 	workspace?: Workspace_Deserialize | null,
+	unity?: UnityProjectInfo | null,
 };
 
 export type ProjectInfo_Serialize = {
@@ -5988,6 +6415,7 @@ export type ProjectInfo_Serialize = {
 	isGit: boolean,
 	settings: Settings_Serialize,
 	workspace?: Workspace_Serialize | null,
+	unity?: UnityProjectInfo | null,
 };
 
 export type ProjectLanguage = "csharp" | "fsharp" | "visualbasic" | "sql" | "other";
@@ -6071,6 +6499,30 @@ export type PruneTarget = "containers" |
 "allImages" | "volumes" | "networks" | 
 /**  Stopped containers, unused networks, dangling images and build cache. */
 "system";
+
+export type PublishCommand = {
+	command: string,
+	args: string[],
+	cwd: IpcPath,
+};
+
+/**  A `.pubxml` of the project. */
+export type PublishProfile = {
+	/**  File name without `.pubxml`: what `-p:PublishProfile` takes. */
+	name: string,
+	path: IpcPath,
+	/**  `FileSystem`, `Container`, `MSDeploy`, `ZipDeploy`, … */
+	method: string | null,
+	/**  Where it publishes: a folder, a registry, a site. */
+	target: string | null,
+	configuration: string | null,
+	runtime: string | null,
+};
+
+/**  What to publish to. */
+export type PublishTarget = { kind: "profile"; name: string; configuration: string | null } | { kind: "folder"; output: string; configuration: string; runtime: string | null; selfContained: boolean } | 
+/**  An image for the local container runtime (`PublishContainer`). */
+{ kind: "container"; configuration: string; repository: string | null; tag: string | null };
 
 export type PullRequestDetails = {
 	summary: PullRequestSummary,
@@ -6929,6 +7381,14 @@ export type SignatureHelp = {
 	activeParameter: number,
 };
 
+export type SignatureRewrite = {
+	edit: WorkspaceEdit,
+	/**  Declarations rewritten (the method and any overrides or implementations). */
+	declarations: number,
+	calls: number,
+	skipped: SkippedSite[],
+};
+
 export type SkipReason = 
 /**  A configuration with this name already exists. */
 { kind: "nameTaken" } | 
@@ -6958,6 +7418,12 @@ export type SkipReason =
 export type SkippedRunConfig = {
 	name: string,
 	reason: SkipReason,
+};
+
+export type SkippedSite = {
+	path: IpcPath,
+	range: Range,
+	reason: string,
 };
 
 /**  Editor › General › Smart Keys. */
@@ -7414,6 +7880,8 @@ export type TestEvent = { kind: "phase"; project: IpcPath | null; phase: TestPha
 { kind: "tests"; project: IpcPath; tests: TestNode[] } | 
 /**  Build or test-process output. */
 { kind: "output"; project: IpcPath | null; line: string } | 
+/**  A debug run's test app of `project` started and waits for a debugger to attach to `pid`. */
+{ kind: "debug"; project: IpcPath; pid: number } | 
 /**  The Cobertura report a coverage run of `project` wrote. */
 { kind: "coverage"; project: IpcPath; report: IpcPath };
 
@@ -7656,6 +8124,13 @@ export type UndoOutcome = {
 	moves: FileMove[],
 	/**  Edited files changed since the refactoring, so their edits were kept. */
 	conflicts: IpcPath[],
+};
+
+export type UnityProjectInfo = {
+	editorVersion: string | null,
+	/**  File names relative to the Unity root, in stable order. */
+	solutions: string[],
+	projects: string[],
 };
 
 export type UpdateCheck = {

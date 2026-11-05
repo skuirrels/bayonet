@@ -37,6 +37,25 @@ changes can keep flowing in.
     `store_virtual`, which skips the cache for them.
   - App icons, product name, identifier and version in `tauri.conf.json`, and the
     README stay ours.
+- **2026-11-05, `9669e583` (v0.1.36 and 86 commits).**
+  - **Pull diagnostics.** Upstream now pulls `textDocument/diagnostic` from every server
+    that advertises `diagnosticProvider` (`20c439ba`), keeping pulled and pushed
+    diagnostics apart, and declares pull support to all servers. `crates/ide-lsp/src/pull.rs`
+    is upstream's document pull plus our `workspace/diagnostic` loop. `pull-diagnostics`
+    now only adds servers that did not advertise the capability. The workspace pull's
+    findings are stored as the server's pushed diagnostics. A file's own pull clears them
+    while it is open, and on close its pulled findings are kept as pushed ones, since
+    Roslyn reports a closed file again only when it changes.
+  - **Unity.** Upstream's Unity support (`7e9acdc5`) is kept. The Roslyn server gets the
+    same `ProjectSettings/ProjectVersion.txt` root marker as csharp-ls, and the Project
+    view lists Solution and Unity panes. `suggestViewMode` leaves a Unity project in its
+    Unity pane, which hides the solution Unity generates.
+  - **Keymap.** The Visual Studio keymap's Alt+Down (Move Line Down) took the key from
+    upstream's search-history actions in the Find popup. Those actions keep it, because
+    they don't clash in practice: Move Line Down acts in the editor and history only
+    in a search field.
+  - The new Polish and Portuguese catalogues drop upstream's .NET run configuration
+    strings and use the DotnetIDEA names, as fr/ko/zh do.
 
 ## What was renamed
 
@@ -77,9 +96,15 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 
 - The app icon and splash mark are DotnetIDEA's own (".d" on a violet frame, source in
   `src-tauri/icons/source/dotnetidea.svg`; regenerate with `pnpm tauri icon` on that file).
-  The `openidea-wordmark*.svg` files still spell "OpenIDEA" and need redrawing.
-- `.github/workflows/release.yml` still assumes OpenIDEA's signing secrets and updater
-  artifacts.
+  The wordmarks (`dotnetidea-wordmark.svg`, `-dark.svg`) set "Dotnet" in Inter Bold and
+  "IDEA" in Inter Light, outlined from the Inter font the UI already ships. The Windows
+  icons come from `dotnetidea-windows.svg` (a larger mark) via `pnpm gen:windows-icons`.
+- There is no release workflow: OpenIDEA's `release.yml` (its signing secrets, updater
+  artifacts and `openidea-server` uploads) was removed until DotnetIDEA plans releases.
+  Remote development still downloads `openidea-server` from OpenIDEA's GitHub releases of
+  the same version (`crates/ide-tools/src/server.rs`).
+- Unity and Mono debugging (DBG-7) is out of scope for now: it needs a Mono soft-debugger
+  adapter, and nothing on the development machine can check it.
 
 ## Changed defaults
 
@@ -119,13 +144,19 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - It runs the SDK's own `dotnet package search / list / add / remove` (`crates/ide-dotnet/src/nuget.rs`) instead of a NuGet client in the sidecar. That way `nuget.config`, package source mapping, credential providers (NUG-3) and central package management behave exactly as on the command line. Installing into a CPM project writes the version to `Directory.Packages.props` (NUG-2). Tests and solution edits likewise use the SDK (MTP server mode, `dotnet sln`, `dotnet reference`), so phase 3 needed no sidecar.
 - **Check for Updates** runs `dotnet package list --outdated`, which needs the sources, so it only runs when asked.
 - Removing a package keeps its `PackageVersion` in `Directory.Packages.props`, as the SDK does.
+- Vulnerable and deprecated packages (NUG-4): each time the packages load, `dotnet package list --vulnerable --include-transitive` and `--deprecated` run in the background (`nuget_audit`). Findings become warnings on the `Include` of the `PackageReference` in the project file. Packages that come in under another package, or are referenced from an imported file, get theirs on the `Project` element. The warnings use NuGet's audit codes (NU1901 to NU1904 by severity), and deprecated packages are struck through. They show in the editor and in Problems without the file open. The window badges such packages, lists their advisories and alternative, and has a **Vulnerable Transitive Packages** section. Installing a patched version directly is the fix there. When the sources cannot be reached, the last results stay.
+
+## User secrets (PLT-4)
+
+- **Manage User Secrets** (project context menu, or the palette for the active file's project) opens the project's `secrets.json` in the editor. The file lives where `Microsoft.Extensions.Configuration.UserSecrets` reads it: `~/.microsoft/usersecrets/<id>/` on macOS and Linux, `%APPDATA%\Microsoft\UserSecrets\<id>\` on Windows (`crates/ide-dotnet/src/secrets.rs`).
+- The id comes from the project file, else from MSBuild (`-getProperty:UserSecretsId`, which covers `Directory.Build.props`). A project without one gets one from `dotnet user-secrets init`, then an empty `{}` file. An id that would leave the secrets folder is refused.
 
 ## Unit tests (phase 3)
 
 - The Unit Tests tool window (bottom stripe) lists every test of the solution's test projects by project, namespace, class and method. Data-driven rows are grouped under their method. It can build and discover, run all, run the selection, stop, and filter by name or to failed tests. The selected test shows its message, expected and actual values, a stack trace whose frames open the source, and its output.
 - Tests are driven through Microsoft.Testing.Platform's JSON-RPC server mode (`crates/ide-dotnet/src/testing.rs`). The host listens on a local port and starts `dotnet exec <TargetPath> --server --client-host 127.0.0.1 --client-port N`. It sends `initialize`, then `testing/discoverTests` or `testing/runTests` (with the selected uids), and folds the `testing/testUpdates/tests` notifications into the tree. This gives each test's type, method, file and line, which `dotnet test`'s console output does not. NUnit reports no file, so its locations are found in the project's sources.
 - C# (and VB, F#) editors get gutter run icons on test methods and classes from the discovered locations, coloured by the last result. Clicking one runs just those tests.
-- Not yet: VSTest-only test projects (they show "only Microsoft.Testing.Platform test projects are supported so far"), debugging a test (needs netcoredbg, DBG-5), and continuous testing (TST-3).
+- Not yet: VSTest-only test projects (they show "only Microsoft.Testing.Platform test projects are supported so far"), and continuous testing (TST-3).
 
 ## Solution editing (phase 3)
 
@@ -144,6 +175,10 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - **Solution-wide analysis (CI-7).** Analyser and compiler diagnostics run on the whole solution (`fullSolution`). Servers marked `workspace-diagnostics` in their TOML are pulled with `workspace/diagnostic` once they send a refresh. Roslyn holds a workspace pull open until something changes, so there is one pull at a time per server, sent with the previous result ids and sent again as soon as it answers (`crates/ide-lsp/src/pull.rs`). Problems in files that are not open appear in the Problems view and clear when fixed. Servers marked `pull-diagnostics` are now told the client supports pull diagnostics: Roslyn only answers workspace pulls and sends refreshes to such clients.
 - **Reformat (CI-8).** Reformat Code and reformat on save use Roslyn's formatter. Reformatting now sends the Code Style or `.editorconfig` indentation, not the indentation detected in the file (which IDEA also uses for typing only), so the result matches `dotnet format`. Indent detection also skips preprocessor lines at column 0, which made C# files with `#if` blocks look 8-space indented. Optimise imports and cleanup on save ask for `source.organizeImports` / `source.fixAll` code actions; whether Roslyn offers them is not checked yet.
 - **Source generators (CI-17).** A C# or VB project in the Solution Explorer starts with **Dependencies › Analyzers**: one folder per analyser assembly, and below a generator its files (`<assembly>/<generator type>/<hint name>`), read-only. Roslyn keeps generated sources in memory, so the IDE compiles the project once more with `EmitCompilerGeneratedFiles` into its build cache (`crates/ide-dotnet/src/generators.rs`, `src/features/dotnet/generated.ts`). An import passed as `CustomAfterMicrosoftCommonTargets` and conditioned on the project's path moves only that project's intermediate folder there, so its `obj` and `bin` (and those of the projects it references) are not touched. The project's own `CustomAfterMicrosoftCommonTargets` is evaluated first and imported from that file, since the global property would replace it. This runs when the node is first expanded, and again shortly after the project's sources change while it is expanded (build output in `bin` and `obj` does not count; a change during a compile runs it again afterwards). A compile that fails without output, such as while code is being typed, keeps the earlier listing; one that fails because referenced projects are not built offers to build. Go to Declaration into generated code opens Roslyn's own copy (`roslyn-source-generated://`, read with `sourceGeneratedDocument/_roslyn_getText` and never cached), with a banner naming the generator. Packages, project references and frameworks are not listed under Dependencies yet.
+- **.NET Aspire (BLD-5).** A solution with an AppHost (`Aspire.AppHost.Sdk`) gets an **Aspire** tool window. It talks to the AppHost through the Aspire CLI, which needs no workload (`~/.aspire/bin`, a global tool or the search path; the window offers `dotnet tool install --global Aspire.Cli` when it is missing). Whether the AppHost runs comes from polling `aspire ps` every two seconds, so an AppHost started from a terminal shows too; while it runs, `aspire describe --follow` streams its resources: name, type, state and health, endpoints (opened in the browser) and the commands each offers (start, stop, restart, rebuild and custom ones, through `aspire resource`). Selecting a resource follows its console with `aspire logs --follow` (history first, ANSI colours kept, the last 5,000 lines). **Run** starts the AppHost's detected `dotnet run` configuration, so it also shows in the Run window; **Stop** runs `aspire stop`; the globe opens the dashboard with its login token (`crates/ide-dotnet/src/aspire.rs`, `crates/ide-host/src/ops/aspire.rs`, `src/features/dotnet/aspire/`). Resources can be debugged too (DBG-5, below).
+- **Debugging tests and Aspire resources (DBG-5).** **Debug** in the Unit Tests window (toolbar, context menu) and on a test's gutter icon builds and runs the tests with the test app started waiting for a debugger (`TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER`); the backend reports the process it started (`TestEvent::Debug`) and the window attaches netcoredbg to it, after which the run goes on and breakpoints in tests hit. A debug run collects no coverage. The Aspire window attaches the debugger to a running project resource (its `executable.pid`). Both need netcoredbg; with no debugger attached, the test app waits up to ten minutes.
+- **C# refactorings (CI-6).** Roslyn's refactorings appear as IDEA's: Extract Method (and local function), Introduce Variable, Constant and Parameter, Extract Interface and Extract Superclass (new Refactor menu entries), Inline and Move (Move type to file, which creates the file); Rename and Safe Delete are the IDE's own. Roslyn groups some of them (Introduce Parameter "and update call sites directly", "into new overload", …) under one action whose command, `roslyn.client.nestedCodeAction`, asks the client for a submenu; the backend offers each member as its own action titled with its path, so they resolve like any other (`crates/ide-lsp/src/convert.rs`). `roslyn_refactorings` in `crates/ide-lsp/tests/real_servers.rs` runs each on `fixtures/dotnet/src/Fixture.Core/Pricing.cs` and checks the result. Roslyn offers Change Signature only with Visual Studio's dialog, not over LSP, so the IDE does it for C# itself: `registerRefactoringFallback` (`src/editor/refactor/refactorThis.ts`) hands `refactor.changeSignature` in C# files to `src/features/dotnet/signature/`, which also lists it in Refactor This. The caret's callee (or the declaration around the caret) is read with tree-sitter (`signature_at`, `crates/ide-analysis/src/signature.rs`), the dialog reorders, removes and adds parameters (a new one gets a value for callers, or is omitted when it has a default), and Roslyn's references, declaration included, give the sites. Each site is rewritten on its own: arguments follow their parameters, nested calls are rewritten inside the outer call, an omitted optional argument turns what follows into named arguments, an extension method's receiver stays put, and declarations Roslyn cascades to (the interface member, overrides) change with it. Method groups and lists that cannot be mapped safely are left alone and listed in a warning. Renaming a parameter is left to Rename, so the body never refers to a name that is gone. `roslyn_change_signature` in `crates/ide-lsp/tests/real_servers.rs` runs it against Roslyn's references across two files.
+- **Continuous testing (TST-3).** The ↻ button in the Unit Tests toolbar reruns the tests affected by a change, on save or after a successful build (remembered per project; off by default). Each open C#, F# or VB file's members (from its outline) are compared with their text when it was opened or last saved; for a changed member, the tests whose method it is, or that reach it through Roslyn's find references up to three calls away (40 searches at most), run. Before tests are discovered, a change runs them all once. Tests are matched by their source line, so a change reaches only tests the Unit Tests window has located (`src/features/dotnet/tests/continuous.ts`). It does not use coverage data, so calls through interfaces, reflection or dependency injection are only followed where find references sees them.
 - **F# (CI-14).** fsautocomplete (`languages/fsharp.toml`) gives F# completion, diagnostics and hover; an ignored end-to-end test in `crates/ide-lsp/tests/real_servers.rs` (`OPENIDEA_TEST_FSAC`) checks them on the fixture's F# project. F# has no source generators, so F# projects have no Dependencies node.
 - The fixture now has a source generator, `src/Fixture.Generators` (an incremental generator collecting minimal API `WithName` names into `EndpointNames`), referenced by `Fixture.Api` as an analyser, which also uses `[GeneratedRegex]`.
 
@@ -161,7 +196,16 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 ## Attach to Process (phase 4)
 
 - **Attach to Process…** lists .NET processes first, under ".NET (netcoredbg)" (DBG-4). A process counts as .NET when the runtime has opened its diagnostics IPC endpoint (`dotnet-diagnostic-<pid>-…-socket` in `$TMPDIR`, a `dotnet-diagnostic-<pid>` pipe on Windows), so apphosts, `dotnet exec` apps and tools are all found; `dotnet <App>.dll` hosts show the app's name. Attaching sends netcoredbg `attach` with `processId` and Just My Code from the debugger settings.
-- Not verified end to end: netcoredbg is not installed on the development machine.
+- Checked against netcoredbg 3.2.0 (installed by the IDE's tool installer) with ignored tests in `crates/ide-dap/tests/real_adapters.rs`. `netcoredbg_launches_a_project_and_reads_threads_and_collections` builds a console project through the `dotnet` launch block and stops at a breakpoint. `netcoredbg_attaches_to_a_running_process` attaches to `dotnet <app>.dll` and hits a breakpoint set after attaching. `netcoredbg_debugs_a_waiting_test_app` starts an MSTest (Microsoft.Testing.Platform) app with `TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER=1`, attaches and stops in the test (DBG-5). The Unit Tests window and the Aspire window that start these were not driven in the app.
+- netcoredbg matches breakpoints by the path the compiler recorded, which is the real path. A project opened through a symlinked folder (on macOS, `/var` is `/private/var`) never binds its breakpoints.
+
+## Parallel Stacks (DBG-6)
+
+- The debugger tool window has a **Parallel Stacks** tab: while the program is suspended, every thread's call stack is merged into one graph (`src/features/debugger/parallel/`). Threads that share callers share boxes, entry points at the bottom and each thread's own frames above, and a box's header counts its threads (the tooltip names them). Clicking a frame selects that thread and frame, and the current thread's path is highlighted. Frames of one method in one file merge even when threads are on different lines. Up to 64 threads are read.
+- It uses only DAP `threads` and `stackTrace`, so it works with any adapter. Checked against Xcode's lldb-dap with a four-thread C program (`lldb_dap_reports_every_threads_stack` in `crates/ide-dap/tests/real_adapters.rs`). That check found that lldb-dap 21 answers the first `threads` request after `configurationDone` with the thread list it cached at launch, so the debug manager now asks for the threads once after configuration, as VS Code does.
+- **Set Next Statement** (Run menu; Ctrl+Shift+F10 in the Visual Studio keymap) moves the paused thread's execution point to the caret's line without running the code in between: DAP `gotoTargets` for the line, then `goto` to the first target. It is offered only when the adapter reports `supportsGotoTargetsRequest` (debugpy, CodeLLDB and vsdbg do; lldb-dap 21 and netcoredbg 3.2 do not). Checked with the mock adapter only, since no installed adapter supports it. Dragging the execution point is not done.
+- **View as Table** (the variables context menu, on any expandable value) opens the collection visualiser (`src/features/debugger/grid/`): the collection's elements as rows and their members as columns, sortable by any column (numbers numerically, missing cells last). Scalar elements go in a Value column. Elements are the children named `[0]` or `0`. Range groups (`[0 … 99]`, from js-debug and debugpy) and a Results View are opened to reach them. netcoredbg has no type proxies, so a `List<T>` appears as its fields: the table reads its `_items` array up to `_size`. For other .NET collections without elements it evaluates `(expression).ToArray()`, which netcoredbg can call on instance methods (not on LINQ's static `Enumerable.ToArray`); a `Dictionary` therefore shows nothing yet. Adapter groupings such as Raw View, Static members and `[[Prototype]]` are not columns. Up to 500 elements are read, and members are fetched 16 elements at a time. At a later stop, a value that has an expression is read again in the selected frame. Otherwise the table is dimmed and marked as from an earlier stop. Checked with unit and component tests, and netcoredbg's view of a `List<T>` with the real adapter test above.
+- With netcoredbg, the Parallel Stacks data (four parked worker threads, each with its own stack) is checked by `netcoredbg_launches_a_project_and_reads_threads_and_collections`.
 
 ## Visual Studio `.http` files (phase 4)
 
@@ -176,6 +220,67 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - Each runs `dotnet ef … --project <project> --startup-project <startup>` in the Run tool window. The startup project is the project itself when it can start, else the first executable project in the solution that references it.
 - The tool is `dotnet ef` when that works in the project folder, else the global tool's executable `~/.dotnet/tools/dotnet-ef` (a local tool manifest that was never restored hides the global tool from `dotnet ef`), else a notification offers `dotnet tool install --global dotnet-ef`.
 - Migrations for Update Database come from the migration file names (no build).
+
+## Run in Container (PLT-5)
+
+- **Run in Container** (a project's context menu, or Find Action) asks for an image name. It then runs one shell line in the Run window: `dotnet publish -t:PublishContainer` (the SDK's container support, no Dockerfile) builds `<name>:dev`, and `docker run --rm -i` runs it (`crates/ide-dotnet/src/publish.rs`).
+- For a web project, the first `http://` port of its launch profiles (else 8080) maps to 8080, the port ASP.NET Core listens on in its images. Stopping the run stops the container, because `docker run` forwards the signal.
+- **Debugging in a container** (DBG-8): Attach to Process also lists the .NET processes of running Docker containers, named by the container (`docker exec` runs a POSIX `sh` loop over the runtime's diagnostics sockets in `/tmp`, so images without `ps` work). Attaching copies a Linux netcoredbg for the container's architecture (`uname -m`, downloaded once into `tools-linux-<arch>` in the app data) to `/tmp/openidea-netcoredbg` unless it is already there, then starts it through `docker exec -i <container>` as a `pipeTransport` (the C# extension's launch.json shape: `pipeProgram`, `pipeArgs`, `debuggerPath`, `debuggerArgs`, `pipeCwd`) (`crates/ide-dap/src/container.rs`, `prepare_container` in `crates/ide-host/src/ops/debug.rs`).
+- Breakpoints bind only when the paths in the PDB match the host's sources: run what the host built (Run in Container's `PublishContainer`, or a bind mount of the build output). An image whose Dockerfile builds the code inside the image records `/src/…` paths, and its breakpoints do not bind; source path mapping is not done.
+- `pipeTransport` in a launch configuration also works for SSH (`"pipeProgram": "ssh", "pipeArgs": ["box"]`), but there is no UI for it, and netcoredbg must already be on the remote machine.
+- Checked by `attaches_to_a_dotnet_app_in_a_container` (ignored; `crates/ide-host/tests/container_debug.rs`): an app built on the host runs in `mcr.microsoft.com/dotnet/aspnet:10.0`, is listed, attached to through Docker Desktop and stops at a breakpoint. The popup was not driven in the app.
+
+## Language server crashes (NFR-4)
+
+- The .NET processes are services: the text of open files lives in the Rust core, so editing and saving go on while Roslyn (or fsautocomplete, lemminx) is down. A crashed server restarts on its own with backoff (a server that crashes repeatedly waits for **Restart** in the language server popup). Once it is running again, every open document is opened on it again with the editor's current text, so unsaved edits are not lost to it.
+- While a file's server is crashed or restarting after a crash, a banner above the editor says so and that editing and saving still work; while crashed it offers **Restart** (`src/features/code-insight/degradedBanner.ts`). The banner goes once the server is running, and does not show when another running server covers the file's language.
+- Checked by `roslyn_restarts_after_a_crash_with_the_unsaved_text` (ignored; `crates/ide-lsp/tests/real_servers.rs`). It kills Roslyn, edits the file while Roslyn is down, waits for the restart, and hovers a variable that exists only in the unsaved text. The banner is covered by component tests, not driven in the app.
+
+## Telemetry and licences (NFR-6, NFR-7)
+
+- The IDE sends no telemetry. Every SDK command it runs itself sets `DOTNET_CLI_TELEMETRY_OPTOUT=1` (and `TESTINGPLATFORM_TELEMETRY_OPTOUT`, `ASPIRE_CLI_TELEMETRY_OPTOUT` where they apply), as do the Roslyn language server's environment and the Avalonia previewer's build and host.
+- `THIRD_PARTY_LICENSES.md` lists the .NET tools that are downloaded on request (Roslyn, csharp-ls, FsAutoComplete, LemMinX, netcoredbg, the diagnostics tools); none is bundled. The crates this port added (`png`, `base64`) are MIT or Apache-2.0, within `deny.toml`'s allow list.
+
+## Typing latency (NFR-3)
+
+- `pnpm perf --only typing,typingLarge,keyRepeat,popups` (production bundle in Chromium, CPU 1x, 3 runs, 2026-11-04): typing p95 16.7 ms (max 17.3), a large file p95 16.3 ms, key repeat p95 16.6 ms with 1.1 % missed frames; Find Action and Search Everywhere open in 17 and 14 ms. All are within `perf/budgets.json`. The harness reports p50, p95 and max, not the spec's p99; at the 60 Hz frame (16.7 ms) the p95 is one frame.
+- The same run fails the bundle budgets: initial JS 1446 KB (budget 850) and CSS 83.6 KB (budget 60). Upstream already fails them: the merged upstream base (48e23c01) measures 1401 KB and 82.1 KB, so this port adds 45 KB (3 %) and 1.5 KB. CI does not run `pnpm perf`. The size is spread across the workbench (react-dom, the LSP editor code, GitHub, Run, VCS, Search …); the Avalonia previewer is loaded on demand.
+- **Completion popup**: the new `completion` scenario times Ctrl+Space to the painted lookup: p50 55 ms, p95 59 to 67 ms across runs (budget 75 ms). About 50 ms of that is CodeMirror's fixed wait before it queries the sources of an explicit completion. Roslyn's own answer is timed by `roslyn_completion_latency` (ignored, `crates/ide-lsp/tests/real_servers.rs`): member completion on the fixture after loading, p50 3.7 ms, p95 5.8 ms, max 11.3 ms over 40 requests at one position. Together that is well under NFR-3's 150 ms, for a small solution.
+- Not measured: NFR-1 and NFR-2 against Rider (no Rider on this machine).
+
+## Go to Everything (CI-11)
+
+- Search Everywhere, Go to Class / Symbol / File and File Structure use the project's own tree-sitter index, which includes C# types and members. Results do not wait for Roslyn to load the solution. The test `csharp_symbols_are_found_quickly_in_a_large_solution` indexes 5,000 C# files and checks that lookups stay under 100 ms, even in a debug build.
+
+## Hierarchies, structural search and the dependency diagram (CI-12, CI-13)
+
+- Call hierarchy (incoming and outgoing) and type hierarchy (supertypes and subtypes) come from Roslyn over LSP through the shared hierarchy views. The ignored test `roslyn_hierarchies` checks all four against the real server. File structure is Roslyn's document outline.
+- Structural search and replace runs ast-grep on the tree-sitter C# grammar, so `$x$ == null` finds null comparisons however they are formatted. Replacing with `$x$ is null` rewrites them (test `csharp_null_comparisons`).
+- **Show Project Dependency Diagram** (Find Action, and the solution's context menu) opens a tab that draws the solution's projects and their project references in layers: a project sits above everything it references. References on a cycle are dashed. Clicking a project highlights what it references and what references it, and double-clicking opens its project file.
+- Data-driven tests (TST-5): in the Unit Tests window, each `InlineData` / `TestCase` row is a node under its test method.
+
+## Razor and Blazor (CI-15)
+
+- `.razor` and `.cshtml` files are the `razor` language (`languages/razor.toml`). Roslyn's server hosts Razor itself (cohosting, `Microsoft.VisualStudioCode.RazorExtension.dll` ships in the `roslyn-language-server` tool), so the same instance as C# serves them: components and their parameters, directives, and the C# in `@code` blocks and expressions, with diagnostics and semantic tokens. The two languages must start Roslyn identically, which `razor_starts_the_same_roslyn_as_csharp` checks.
+- Roslyn hands the HTML half of a Razor request back to the client: `razor/updateHtml` with the HTML projection, then the request itself with a `checksum`. No HTML server is attached to the projection, so these get empty answers (`crates/ide-lsp/src/handler.rs`); a `null` completion would drop Razor's own items too. The editor's HTML mode gives tag and attribute completion for the markup.
+- `roslyn_razor_completion` in `crates/ide-lsp/tests/real_servers.rs` creates a Blazor app with `dotnet new blazor` and checks that `<Cou` completes the app's components and the framework's.
+
+## XAML bindings (CI-16)
+
+- In `.xaml` and `.axaml` files (WPF, Avalonia, MAUI, WinUI), binding paths complete with the members of the binding's data type, and Go to Declaration opens the C# member or type a binding path, an element tag (`<local:Card>`) or a type attribute (`x:DataType`, `DataType`, `x:Class`, `TargetType`) names (`src/features/dotnet/xaml/`).
+- The data type is the nearest `x:DataType`, a WPF `d:DataContext="{d:DesignInstance …}"`, or a `DataTemplate`'s `DataType`; `x:Bind` binds to the `x:Class`. `xmlns` prefixes map to CLR namespaces through `clr-namespace:` and `using:`. Each path segment is followed into its member's type, and into a collection's element type after an indexer (`Items[0].Title`).
+- The members come from the project's C# sources, not a compiler: the index finds the type's files, tree-sitter reads every partial part (`crates/ide-analysis/src/csharp_types.rs`, `csharp_type_members` in `crates/ide-host/src/ops/analysis.rs`), and base types declared in the project add theirs. Public properties count, and so does what CommunityToolkit.Mvvm generates: `[ObservableProperty]` fields as properties (`_name` is `Name`) and `[RelayCommand]` methods as `…Command`. Members of types from referenced assemblies (a base `ObservableObject`, a framework type) are not listed.
+- **Avalonia previewer.** An `.axaml` file opens as Editor and Preview, like Markdown, with Editor Only and Preview Only in the tab strip (`src/features/dotnet/xaml/preview/`). The preview builds the file's project once, then runs Avalonia's own designer host (`Avalonia.Designer.HostApp`, found through MSBuild's `AvaloniaPreviewerNetCoreToolPath`) on the project's runtime config and deps file. The host connects back to a loopback port and speaks Avalonia's remote protocol: a little-endian length, the message's GUID and a BSON body (`crates/ide-dotnet/src/avalonia.rs`, a small BSON codec of its own). Every edit sends the editor's text (debounced 250 ms). A XAML error keeps the last good frame dimmed and shows the message with a link to its line; the compiler's aggregate errors are split into their distinct parts. Frames arrive as RGBA at the window's pixel ratio and are passed on as PNGs. Zoom out, actual size, zoom in, and Build and Restart (for code-behind or view model changes) are in the preview's toolbar. Hiding the preview stops the host.
+- Checked against Avalonia 12.1.5 with `fixtures/avalonia/AvaloniaFixture` (a window using `Design.DataContext`): the ignored test `renders_xaml_and_reports_xaml_errors` in `crates/ide-dotnet/tests/avalonia_preview.rs` gets an 800×480 frame at scale 2, a misspelt element's error on its line, and a new frame after the fix. WPF and MAUI `.xaml` files have no previewer.
+- Not done: element and attribute completion beyond what LemMinX gives for XML.
+
+## Publish (BLD-6)
+
+- **Publish…** (on a project's context menu, or in Find Action for the active file's project) runs `dotnet publish` in the Run tool window (`crates/ide-dotnet/src/publish.rs`). It offers three kinds of target:
+  - One of the project's `Properties/PublishProfiles/*.pubxml` profiles (`-p:PublishProfile`, with the profile's configuration).
+  - A folder (`-c Release -o <folder>`).
+  - A container image. This uses the SDK's container support (`-t:PublishContainer -p:ContainerRepository=<name>`), so it needs no Dockerfile, and the image goes into the local Docker or Podman.
+- The list shows each profile's method and destination, read from the `.pubxml`. Profiles that publish to a remote host (MSDeploy, ZipDeploy) run as the SDK runs them, using the credentials in the matching `.pubxml.user`.
 
 ## Build progress and binary logs (phase 4)
 

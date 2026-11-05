@@ -107,6 +107,9 @@ pub enum TestEvent {
     /// Build or test-process output.
     #[serde(rename_all = "camelCase")]
     Output { project: Option<IpcPath>, line: String },
+    /// A debug run's test app of `project` started and waits for a debugger to attach to `pid`.
+    #[serde(rename_all = "camelCase")]
+    Debug { project: IpcPath, pid: u32 },
     /// The Cobertura report a coverage run of `project` wrote.
     #[serde(rename_all = "camelCase")]
     Coverage { project: IpcPath, report: IpcPath },
@@ -292,6 +295,8 @@ pub struct TestApp {
     pub env: Vec<(String, String)>,
     /// More options for the test app (code coverage).
     pub args: Vec<String>,
+    /// Start it waiting for a debugger to attach (`TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER`).
+    pub wait_for_debugger: bool,
 }
 
 /// The NuGet package that collects code coverage in a Microsoft.Testing.Platform app.
@@ -330,6 +335,8 @@ impl Handler for Notifications {
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+/// A test app waiting for a debugger connects once one attached: allow for a slow attach.
+const DEBUG_CONNECT_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn io_error(e: impl std::fmt::Display) -> IdeError {
     IdeError::new(ErrorKind::Io, e.to_string())
@@ -343,6 +350,19 @@ pub async fn session(
     cancel: &CancellationToken,
     on_tests: impl Fn(Vec<TestNode>),
     on_output: impl Fn(String) + Send + Sync + 'static,
+) -> IdeResult<()> {
+    session_with(app, request, cancel, on_tests, on_output, |_| {}).await
+}
+
+/// [`session`], also reporting the test app's process id once it started (`on_started`):
+/// with [`TestApp::wait_for_debugger`], the process to attach a debugger to.
+pub async fn session_with(
+    app: &TestApp,
+    request: SessionRequest,
+    cancel: &CancellationToken,
+    on_tests: impl Fn(Vec<TestNode>),
+    on_output: impl Fn(String) + Send + Sync + 'static,
+    on_started: impl FnOnce(u32),
 ) -> IdeResult<()> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(io_error)?;
     let port = listener.local_addr().map_err(io_error)?.port();
@@ -365,8 +385,15 @@ pub async fn session(
     for (k, v) in &app.env {
         cmd.env(k, v);
     }
+    if app.wait_for_debugger {
+        cmd.env("TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER", "1");
+    }
     let mut child =
         cmd.spawn().map_err(|e| IdeError::unavailable(format!("cannot start {}: {e}", app.assembly.display())))?;
+    if let Some(pid) = child.id() {
+        on_started(pid);
+    }
+    let timeout = if app.wait_for_debugger { DEBUG_CONNECT_TIMEOUT } else { CONNECT_TIMEOUT };
     let on_output = Arc::new(on_output);
     for pipe in [
         child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
@@ -394,7 +421,7 @@ pub async fn session(
     // host connects. The controller's connection stays open until the session ends.
     let mut controllers = Vec::new();
     let peer = loop {
-        let stream = accept(&listener, &mut child, cancel).await?;
+        let stream = accept(&listener, &mut child, cancel, timeout).await?;
         let (reader, writer) = stream.into_split();
         let peer = Peer::connect(reader, writer, Arc::new(Notifications(tx.clone())));
         let reply =
@@ -465,9 +492,10 @@ async fn accept(
     listener: &TcpListener,
     child: &mut tokio::process::Child,
     cancel: &CancellationToken,
+    timeout: Duration,
 ) -> IdeResult<tokio::net::TcpStream> {
     tokio::select! {
-        r = tokio::time::timeout(CONNECT_TIMEOUT, listener.accept()) => match r {
+        r = tokio::time::timeout(timeout, listener.accept()) => match r {
             Ok(Ok((s, _))) => Ok(s),
             Ok(Err(e)) => Err(io_error(e)),
             Err(_) => Err(IdeError::new(ErrorKind::Io, "the test app did not connect; is it a Microsoft.Testing.Platform project?")),
@@ -567,6 +595,55 @@ mod tests {
         assert_eq!(names, ["Fixture.Core.MSTests", "Fixture.Core.NUnitTests", "Fixture.Core.XunitTests"]);
     }
 
+    /// Real SDK (DBG-5): a debug run's test app is the process reported to attach to, and it
+    /// waits for a debugger instead of connecting. Needs `dotnet` and a built fixture.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "builds the fixture with the .NET SDK"]
+    async fn a_debug_run_waits_for_the_debugger_in_the_reported_process() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
+        let project = root.join("tests/Fixture.Core.XunitTests/Fixture.Core.XunitTests.csproj");
+        let status =
+            std::process::Command::new("dotnet").args(["build", "-nologo", "-tl:off"]).arg(&project).status().unwrap();
+        assert!(status.success());
+        let out = std::process::Command::new("dotnet")
+            .args(["msbuild", "-getProperty:TargetPath"])
+            .arg(&project)
+            .output()
+            .unwrap();
+        let props = parse_msbuild_properties(&String::from_utf8_lossy(&out.stdout), &["TargetPath"]);
+        let app = TestApp {
+            dotnet: PathBuf::from("dotnet"),
+            assembly: PathBuf::from(&props[0].1),
+            cwd: project.parent().unwrap().to_path_buf(),
+            env: Vec::new(),
+            args: Vec::new(),
+            wait_for_debugger: true,
+        };
+        let cancel = CancellationToken::new();
+        let output = Arc::new(std::sync::Mutex::new(String::new()));
+        let pid = std::sync::Mutex::new(None);
+        let lines = output.clone();
+        let stop = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            stop.cancel();
+        });
+        let result = session_with(
+            &app,
+            SessionRequest::Run(Vec::new()),
+            &cancel,
+            |_| {},
+            move |line| lines.lock().unwrap().push_str(&format!("{line}\n")),
+            |p| *pid.lock().unwrap() = Some(p),
+        )
+        .await;
+        // Nobody attached: still waiting when cancelled, not connected.
+        assert_eq!(result.unwrap_err().kind, ErrorKind::Cancelled);
+        let pid = pid.into_inner().unwrap().expect("no process id");
+        let output = output.lock().unwrap().clone();
+        assert!(output.contains(&format!("Waiting for debugger to attach... Process Id: {pid}")), "{output}");
+    }
+
     /// Real SDK: builds the fixture's xUnit project, discovers and runs one test. Needs `dotnet`.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -588,6 +665,7 @@ mod tests {
             cwd: project.parent().unwrap().to_path_buf(),
             env: Vec::new(),
             args: Vec::new(),
+            wait_for_debugger: false,
         };
         let cancel = CancellationToken::new();
         let found = std::sync::Mutex::new(Vec::new());
@@ -629,6 +707,7 @@ mod tests {
             cwd: project.parent().unwrap().to_path_buf(),
             env: Vec::new(),
             args: coverage_args(dir.path(), "out.cobertura.xml"),
+            wait_for_debugger: false,
         };
         let cancel = CancellationToken::new();
         let ran = std::sync::Mutex::new(Vec::new());

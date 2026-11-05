@@ -319,6 +319,16 @@ mod tests {
     }
 
     #[test]
+    fn csharp_null_comparisons() {
+        let cs = "class A {\n    bool B(string s, object o) {\n        if (s == null) return true;\n        var e = o\n            == null;\n        return s.Length == 0 || null == o;\n    }\n}\n";
+        let m = matches("csharp", cs, "$x$ == null", None);
+        let found: Vec<&str> = m.iter().map(|x| x.text.as_str()).collect();
+        assert_eq!(found, ["s == null", "o\n            == null"]);
+        let m = matches("csharp", cs, "$x$ == null", Some("$x$ is null"));
+        assert_eq!(m[0].replacement.as_deref(), Some("s is null"));
+    }
+
+    #[test]
     fn invalid_templates_and_languages_are_reported() {
         let syntax = Syntax::new();
         assert!(validate_structural(&syntax, &query("typescript", "", None)).is_err());

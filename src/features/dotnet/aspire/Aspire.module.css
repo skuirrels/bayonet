@@ -1,0 +1,176 @@
+.view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.apphost {
+  flex: 0 1 240px;
+  min-width: 140px;
+}
+.apphostName {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.banner {
+  flex: none;
+  padding: 3px 10px;
+  font-size: var(--fs-small);
+  color: var(--warning);
+  white-space: pre-wrap;
+  border-bottom: 1px solid var(--border);
+}
+.split {
+  flex: 1;
+  min-height: 0;
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.panel > * {
+  flex: 1;
+  min-height: 0;
+}
+.status,
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.status {
+  font-size: var(--fs-small);
+  color: var(--fg-muted);
+}
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.running .dot {
+  background: var(--success);
+}
+.starting .dot {
+  background: var(--accent);
+}
+.warning .dot {
+  background: var(--warning);
+}
+.failed .dot {
+  background: var(--danger);
+}
+.stopped .dot {
+  background: var(--fg-muted);
+}
+.table {
+  overflow: auto;
+}
+.tr {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(70px, 0.6fr) minmax(110px, 1fr) minmax(120px, 1.4fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  cursor: default;
+}
+.tr > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th {
+  position: sticky;
+  top: 0;
+  min-height: 24px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-island, var(--bg-app));
+  border-bottom: 1px solid var(--border);
+}
+.tr:not(.th):hover {
+  background: var(--bg-hover);
+}
+.tr:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.selected,
+.selected:hover {
+  background: var(--bg-list-selected);
+}
+.name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.muted {
+  color: var(--fg-muted);
+}
+.urls {
+  display: flex;
+  gap: 8px;
+}
+.urls a {
+  color: var(--accent);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.urls a:hover {
+  text-decoration: underline;
+}
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.console {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.consoleHead {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.lines {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  line-height: 1.45;
+}
+.line {
+  white-space: pre;
+}
+.stderr {
+  color: var(--danger);
+}

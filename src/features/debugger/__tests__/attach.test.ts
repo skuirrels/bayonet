@@ -1,6 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AttachableProcess } from "@/platform/ipc";
 
+const prepared = vi.hoisted((): string[] => []);
+vi.mock("@/platform/ipc", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/platform/ipc")>();
+  return {
+    ...real,
+    commands: {
+      ...real.commands,
+      debugPrepareContainer: (container: string) => {
+        prepared.push(container);
+        return Promise.resolve({
+          status: "ok" as const,
+          data: JSON.stringify({
+            pipeProgram: "/usr/local/bin/docker",
+            pipeArgs: ["exec", "-i", container],
+            debuggerPath: "/tmp/openidea-netcoredbg/netcoredbg",
+          }),
+        });
+      },
+    },
+  };
+});
+
 vi.mock("../java", () => ({
   javaAttachConfig: vi.fn(async (t: { name: string; hostName: string; port: number }, root: string) => ({
     name: t.name,
@@ -29,6 +51,7 @@ const proc = (p: Partial<AttachableProcess> & Pick<AttachableProcess, "pid" | "k
   }[p.kind],
   host: null,
   port: null,
+  container: null,
   ...p,
 });
 
@@ -98,5 +121,21 @@ describe("Attach to Process popup model", () => {
     const dotnet = await attachConfig(list[6]!, "/proj");
     expect(dotnet).toMatchObject({ adapter: "netcoredbg", request: "attach", name: "Fixture.Api (40)" });
     expect(JSON.parse(dotnet.extraJson!)).toMatchObject({ processId: 40 });
+  });
+
+  it("attaches to a .NET process in a container through docker exec", async () => {
+    const p = proc({ pid: 1, kind: "dotnet", name: "Api", commandLine: "dotnet /app/Api.dll", container: "shop-api" });
+    expect(attachDetail(p)).toBe("shop-api, pid 1");
+    expect(attachRows([p, list[6]!], "shop").map((r) => r.key)).toEqual(["group:dotnet", "dotnet:shop-api:1"]);
+    const config = await attachConfig(p, "/proj");
+    expect(prepared).toEqual(["shop-api"]);
+    expect(config.name).toBe("Api (shop-api)");
+    expect(JSON.parse(config.extraJson!)).toMatchObject({
+      processId: 1,
+      pipeTransport: { pipeProgram: "/usr/local/bin/docker", pipeArgs: ["exec", "-i", "shop-api"] },
+    });
+    // A local process needs no preparation.
+    await attachConfig(list[6]!, "/proj");
+    expect(prepared).toHaveLength(1);
   });
 });

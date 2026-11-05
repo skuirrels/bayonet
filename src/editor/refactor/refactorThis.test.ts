@@ -68,7 +68,7 @@ const startHierarchyRefactoring = vi.fn();
 vi.mock("./hierarchy", () => ({ startHierarchyRefactoring }));
 
 const { classifyAction, kindAdvertised, cannotPerform } = await import("./catalog");
-const { refactorThis, runRefactoring } = await import("./refactorThis");
+const { refactorThis, registerRefactoringFallback, runRefactoring } = await import("./refactorThis");
 const { useLspPopup, closePopup } = await import("@/editor/lsp/popupStore");
 const { lspDoc } = await import("@/editor/lsp/lsp");
 const { inplaceRenameExtension, inplaceSession } = await import("@/editor/lsp/inplaceRename");
@@ -153,6 +153,17 @@ describe("catalog", () => {
     expect(c("Move to a new file", "refactor")).toBe("move");
     expect(c("Inline variable", "refactor")).toBe("inline");
     expect(c("Convert to template string", "refactor")).toBeNull();
+    // Roslyn (CI-6), its action groups flattened by the backend.
+    expect(c("Extract method", "refactor.extract")).toBe("extractMethod");
+    expect(c("Extract local function", "refactor.extract")).toBe("extractMethod");
+    expect(c("Introduce local for 'subtotal * 0.1m'", "refactor")).toBe("extractVariable");
+    expect(c("Introduce constant for '0.1m'", "refactor")).toBe("extractConstant");
+    expect(c("Introduce parameter for '0.1m' and update call sites directly", "refactor")).toBe("extractParameter");
+    expect(c("Extract interface...", "refactor.extract")).toBe("extractInterface");
+    expect(c("Extract base class...", "refactor.extract")).toBe("extractSuperclass");
+    expect(c("Inline temporary variable", "refactor.inline")).toBe("inline");
+    expect(c("Move type to Receipt.cs", "refactor")).toBe("move");
+    expect(c("Generate constructor 'Receipt()'", "refactor")).toBeNull();
   });
 
   it("knows which kinds an advertised list can produce", () => {
@@ -301,6 +312,18 @@ describe("Refactor menu actions", () => {
     query = async () => unavailable;
     await runRefactoring(v, "changeSignature");
     expect(showHint).toHaveBeenLastCalledWith(v, "Cannot perform refactoring. No language server for Rust is running");
+  });
+
+  it("hand a refactoring no server offers to the feature that implements it", async () => {
+    const run = vi.fn(async () => true);
+    const dispose = registerRefactoringFallback("changeSignature", "rust", run);
+    const v = editor();
+    await runRefactoring(v, "changeSignature");
+    expect(run).toHaveBeenCalledWith(v);
+    expect(showHint).not.toHaveBeenCalled();
+    dispose();
+    await runRefactoring(v, "changeSignature");
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("Introduce Variable falls back to the syntax refactoring", async () => {

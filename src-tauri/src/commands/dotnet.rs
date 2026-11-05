@@ -4,7 +4,7 @@ use crate::state::AppState;
 use ide_core::RequestId;
 use ide_core::{IdeResult, IpcPath};
 use ide_dotnet::Solution;
-use ide_dotnet::nuget::{InstalledPackages, PackageSearch};
+use ide_dotnet::nuget::{InstalledPackages, PackageAudit, PackageSearch};
 use ide_dotnet::templates::{ProjectTemplate, TemplateValue};
 use ide_dotnet::testing::{TestEvent, TestProject, TestSelection};
 use tauri::ipc::Channel;
@@ -62,6 +62,55 @@ pub async fn nuget_installed(
     ide_host::ops::dotnet::nuget_installed(&state.host, window.label(), outdated, prerelease).await
 }
 
+/// The publish profiles of `project` (BLD-6).
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_publish_profiles(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+) -> IdeResult<Vec<ide_dotnet::publish::PublishProfile>> {
+    ide_host::ops::dotnet::dotnet_publish_profiles(&state.host, window.label(), project).await
+}
+
+/// The `dotnet publish` command line for publishing `project` to `target`.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_publish_command(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+    target: ide_dotnet::publish::PublishTarget,
+) -> IdeResult<ide_dotnet::publish::PublishCommand> {
+    ide_host::ops::dotnet::dotnet_publish_command(&state.host, window.label(), project, target).await
+}
+
+/// The shell line that publishes `project` as a container image and runs it (PLT-5).
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_container_run(
+    window: Window,
+    state: State<'_, AppState>,
+    project: IpcPath,
+    repository: String,
+) -> IdeResult<ide_dotnet::publish::PublishCommand> {
+    ide_host::ops::dotnet::dotnet_container_run(&state.host, window.label(), project, repository).await
+}
+
+/// Opens the way to a project's user secrets: its `secrets.json`, created if needed (PLT-4).
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_user_secrets(window: Window, state: State<'_, AppState>, project: IpcPath) -> IdeResult<IpcPath> {
+    ide_host::ops::dotnet::dotnet_user_secrets(&state.host, window.label(), project).await
+}
+
+/// Vulnerable and deprecated packages of the solution's projects (NUG-4).
+#[tauri::command]
+#[specta::specta]
+pub async fn nuget_audit(window: Window, state: State<'_, AppState>) -> IdeResult<PackageAudit> {
+    ide_host::ops::dotnet::nuget_audit(&state.host, window.label()).await
+}
+
 /// Installs or updates package `id` in `projects`.
 #[tauri::command]
 #[specta::specta]
@@ -96,14 +145,18 @@ pub async fn dotnet_test_projects(window: Window, state: State<'_, AppState>) ->
 
 /// Builds, then discovers or runs the tests of `selection` (every test project when
 /// empty), streaming events on `on_event`. Cancel with `cancel_request(request)`.
+/// A `debug` run starts each test app waiting for a debugger and reports its
+/// process (`TestEvent::Debug`) for the client to attach to.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 pub async fn dotnet_tests(
     window: Window,
     state: State<'_, AppState>,
     request: RequestId,
     run: bool,
     coverage: bool,
+    debug: bool,
     selection: Vec<TestSelection>,
     on_event: Channel<TestEvent>,
 ) -> IdeResult<()> {
@@ -113,10 +166,43 @@ pub async fn dotnet_tests(
         request,
         run,
         coverage,
+        debug,
         selection,
         crate::commands::sender(on_event),
     )
     .await
+}
+
+/// Avalonia previewer for a XAML file (CI-16); runs until `cancel_request(request)`.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+pub async fn dotnet_xaml_preview(
+    window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    path: std::path::PathBuf,
+    text: String,
+    scale: f64,
+    on_event: Channel<ide_dotnet::avalonia::PreviewEvent>,
+) -> IdeResult<()> {
+    ide_host::ops::dotnet::dotnet_xaml_preview(
+        &state.host,
+        window.label(),
+        request,
+        path,
+        text,
+        scale,
+        crate::commands::sender(on_event),
+    )
+    .await
+}
+
+/// New XAML text for a running preview; false when it has stopped.
+#[tauri::command]
+#[specta::specta]
+pub fn dotnet_xaml_preview_update(request: RequestId, text: String) -> IdeResult<bool> {
+    Ok(ide_host::ops::dotnet::dotnet_xaml_preview_update(request, text))
 }
 
 /// Installed project and solution templates, custom ones included.

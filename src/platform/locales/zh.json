@@ -138,6 +138,7 @@
   "menu.debug.smartStepInto": "智能步入",
   "menu.debug.forceRunToCursor": "强制运行到光标处",
   "menu.debug.showExecutionPoint": "显示执行点",
+  "menu.debug.setNextStatement": "设置下一条语句",
   "menu.debug.resetFrame": "重置帧",
   "menu.debug.toggleTemporaryBreakpoint": "切换临时行断点",
   "menu.debug.toggleMethodBreakpoint": "切换方法断点",
@@ -236,6 +237,8 @@
   "menu.refactor": "重构",
   "menu.refactor.changeSignature": "更改签名…",
   "menu.refactor.extractConstant": "引入常量…",
+  "menu.refactor.extractInterface": "提取接口…",
+  "menu.refactor.extractSuperclass": "提取超类…",
   "menu.refactor.extractField": "引入字段…",
   "menu.refactor.extractMethod": "提取方法…",
   "menu.refactor.extractParameter": "引入参数…",
@@ -340,6 +343,7 @@
   "menu.vcs.addToVcs": "添加到 VCS",
   "menu.vcs.compareWithBranch": "与分支或修订比较…",
   "menu.vcs.showHistory": "显示历史记录",
+  "menu.vcs.showHistoryForSelection": "显示所选内容的历史记录",
   "menu.build": "构建",
   "menu.build.buildProject": "构建项目",
   "menu.build.buildModule": "构建模块",
@@ -449,5 +453,7 @@
   "menu.editor.contextInfo": "上下文信息",
   "run.services.configurationCount": "{count} 个配置",
   "search.bookmarks.count": "{count} 个书签",
+  "search.find.matches": "在 {files} 个文件中有 {matches} 个匹配项",
+  "search.find.matchesIncomplete": "在 {files}+ 个文件中有 {matches}+ 个匹配项",
   "settings.zoom.hint": "使用 {zoomIn} 或 {zoomOut} 更改，使用 {reset} 重置为 100%"
 }

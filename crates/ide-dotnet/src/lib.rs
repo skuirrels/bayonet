@@ -4,6 +4,8 @@
 //! Only the files are read; nothing is evaluated (MSBuild and NuGet belong to the
 //! .NET sidecar), so a solution opens instantly and also when no SDK is installed.
 
+pub mod aspire;
+pub mod avalonia;
 pub mod binlog;
 pub mod diagnostics;
 pub mod ef;
@@ -11,6 +13,8 @@ pub mod generators;
 pub mod msbuild;
 pub mod nuget;
 mod project;
+pub mod publish;
+pub mod secrets;
 mod sln;
 mod slnx;
 pub mod templates;

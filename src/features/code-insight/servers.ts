@@ -13,6 +13,13 @@ export interface ServerEntry {
   message: string | null;
   languages: string[];
   root: string | null;
+  /** Crashed and not running again yet (it may be restarting). */
+  afterCrash?: boolean;
+}
+
+function afterCrash(status: ServerStatus, before: boolean | undefined): boolean {
+  if (status === "crashed") return true;
+  return status === "starting" && !!before;
 }
 
 interface ServersState {
@@ -52,6 +59,7 @@ export function upsertServer(entry: Partial<ServerEntry> & { id: ServerId; name:
     ...prev,
     ...entry,
   };
+  next.afterCrash = afterCrash(next.status, prev?.afterCrash);
   useServers.setState((s) => ({ servers: new Map(s.servers).set(entry.id, next) }));
   if (next.status === "missing") notifyMissing(next);
 }
@@ -78,6 +86,7 @@ export async function refreshServers() {
         languages: s.languages,
         root: s.root,
         message: p?.message ?? null,
+        afterCrash: afterCrash(newer ? p.status : s.status, p?.afterCrash),
       });
     }
     useServers.setState({ servers: map });

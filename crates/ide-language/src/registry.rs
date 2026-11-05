@@ -68,6 +68,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("proto", include_str!("../../../languages/proto.toml")),
     ("python", include_str!("../../../languages/python.toml")),
     ("r", include_str!("../../../languages/r.toml")),
+    ("razor", include_str!("../../../languages/razor.toml")),
     ("ruby", include_str!("../../../languages/ruby.toml")),
     ("rust", include_str!("../../../languages/rust.toml")),
     ("sass", include_str!("../../../languages/sass.toml")),
@@ -743,6 +744,24 @@ mod tests {
     }
 
     #[test]
+    fn razor_starts_the_same_roslyn_as_csharp() {
+        // One server instance serves both (shared by name and root), started with
+        // whichever language opened first: the definitions must not drift apart.
+        let reg = reg();
+        let server = |lang: &str| {
+            reg.get(&LanguageId::new(lang))
+                .unwrap()
+                .language_servers
+                .into_iter()
+                .find(|s| s.name == "roslyn-language-server")
+                .unwrap()
+        };
+        assert_eq!(server("razor"), server("csharp"));
+        assert_eq!(reg.detect(Path::new("/s/Pages/Home.razor"), None), LanguageId::new("razor"));
+        assert_eq!(reg.detect(Path::new("/s/Views/Index.cshtml"), None), LanguageId::new("razor"));
+    }
+
+    #[test]
     fn every_builtin_file_is_registered_and_parses() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../languages");
         let on_disk: HashSet<String> = std::fs::read_dir(&dir)
@@ -771,6 +790,10 @@ mod tests {
                     assert_eq!(d.transport, "tcp", "{name}: `connect` needs the tcp transport");
                     assert!(addr.parse::<std::net::SocketAddr>().is_ok(), "{name}: bad connect address {addr}");
                 }
+            }
+            if let Some(t) = &cfg.scratch_template {
+                assert_eq!(t.matches("$END$").count(), 1, "{name}: scratch-template needs one $END$");
+                assert!(!cfg.extensions.is_empty(), "{name}: scratch-template without an extension");
             }
             for ext in &cfg.extensions {
                 assert_eq!(ext, &ext.to_ascii_lowercase(), "{name}: extensions must be lower case");

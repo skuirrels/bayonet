@@ -6,6 +6,8 @@ import type { RequestId, TestEvent, TestNode, TestSelection } from "@/bindings";
 import { call, isCancelled, isTauri, nextRequestId } from "@/platform/ipc";
 import { mergeTest, type ProjectTests } from "./model";
 import { collectTestCoverage } from "./coverage";
+import { tx } from "@/platform/i18n";
+import { attachDotnetDebugger } from "../attach";
 
 const MAX_OUTPUT = 2000;
 
@@ -98,6 +100,7 @@ function apply(e: TestEvent) {
         };
       }
       case "coverage":
+      case "debug":
         return {};
     }
   });
@@ -127,7 +130,14 @@ export async function loadProjects(): Promise<void> {
   }
 }
 
-async function start(run: boolean, selection: TestSelection[], coverage = false): Promise<void> {
+/** Attaches netcoredbg to a debug run's test app, which waits for it before running. */
+async function attachDebugger(project: string, pid: number) {
+  const { useProject } = await import("@/platform/project");
+  const cwd = useProject.getState().project?.root ?? project.replace(/[\\/][^\\/]*$/, "");
+  await attachDotnetDebugger(pid, tx`Debug tests: ${projectName(project)}`, cwd);
+}
+
+async function start(run: boolean, selection: TestSelection[], coverage = false, debug = false): Promise<void> {
   if (!isTauri() || useUnitTests.getState().busy) return;
   const request = nextRequestId();
   const channel = new Channel<TestEvent>();
@@ -135,6 +145,10 @@ async function start(run: boolean, selection: TestSelection[], coverage = false)
   const reports = new Map<string, string>();
   channel.onmessage = (e) => {
     if (e.kind === "coverage") reports.set(e.project, e.report);
+    else if (e.kind === "debug")
+      void attachDebugger(e.project, e.pid).catch((err: unknown) =>
+        useUnitTests.setState({ error: err instanceof Error ? err.message : String(err) }),
+      );
     else apply(e);
   };
   const wanted = new Map(selection.map((t) => [t.project, new Set(t.uids)]));
@@ -171,7 +185,7 @@ async function start(run: boolean, selection: TestSelection[], coverage = false)
   }));
   let finished = false;
   try {
-    await call(commands.dotnetTests(request, run, coverage, selection, channel));
+    await call(commands.dotnetTests(request, run, coverage, debug, selection, channel));
     finished = true;
   } catch (e) {
     if (!isCancelled(e))
@@ -200,6 +214,9 @@ export const discoverTests = () => start(false, []);
 
 /** Builds and runs `selection` (every test when empty). */
 export const runTests = (selection: TestSelection[] = []) => start(true, selection);
+
+/** Builds and runs `selection` (every test when empty) under the debugger (DBG-5). */
+export const debugTests = (selection: TestSelection[] = []) => start(true, selection, false, true);
 
 /** Builds and runs `selection` (every test when empty) with Microsoft Code Coverage. */
 export const runTestsWithCoverage = (selection: TestSelection[] = []) => start(true, selection, true);

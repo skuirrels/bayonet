@@ -15,6 +15,7 @@ import { findUsages, rerunActiveUsages, resetUsages, showUsageResults, showUsage
 import { HierarchyTabs, HierarchyView } from "./HierarchyView";
 import { resetHierarchy, showHierarchy } from "./hierarchy";
 import { installServerEvents } from "./servers";
+import { installDegradedBanner } from "./degradedBanner";
 import { ServerStatus } from "./ServerStatus";
 import { installWorkspaceEditUndo } from "./workspaceUndo";
 
@@ -45,6 +46,7 @@ export function activate(): () => void {
     installProblemsEvents(),
     installProblemDecorations(),
     installServerEvents(),
+    installDegradedBanner(),
     installWorkspaceEditUndo(),
     registerToolWindow({
       id: "problems",

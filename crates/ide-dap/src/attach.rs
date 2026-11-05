@@ -33,6 +33,8 @@ pub struct AttachableProcess {
     /// Debug port the process listens on (JDWP, `--inspect`, `debugpy --listen`).
     pub host: Option<String>,
     pub port: Option<u16>,
+    /// The container it runs in (its name); attached to with netcoredbg inside it (DBG-8).
+    pub container: Option<String>,
 }
 
 /// One row of the process table.
@@ -93,7 +95,7 @@ fn debugpy_listen(args: &str) -> Option<(Option<String>, u16)> {
     host_port(words.get(i + 1)?)
 }
 
-fn file_name(path: &str) -> &str {
+pub(crate) fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
@@ -103,7 +105,7 @@ fn is_python(name: &str) -> bool {
 }
 
 /// The app a `dotnet [exec [options]] <App.dll>` host runs: `App`; else `None`.
-fn dotnet_app(args: &str) -> Option<String> {
+pub(crate) fn dotnet_app(args: &str) -> Option<String> {
     let mut words = args.split_whitespace();
     let host = file_name(words.next()?);
     if host.strip_suffix(".exe").unwrap_or(host) != "dotnet" {
@@ -139,6 +141,7 @@ pub fn classify(
             adapter: adapter.to_owned(),
             host,
             port,
+            container: None,
         })
     };
     if dotnet {

@@ -30,6 +30,7 @@ import {
   useExceptionBreakpoints,
 } from "../breakpoints/exceptions";
 import { closeBreakpointPopover, useOverlays } from "./popoverStore";
+import { DataGridDialog } from "../grid/DataGridDialog";
 import { VariablesView, type VarRoot } from "./VariablesView";
 import { useExpressionCompletion } from "./ExpressionCompletion";
 import { pushHistory, readHistory } from "./expressionHistory";
@@ -46,6 +47,7 @@ export function DebuggerOverlays() {
       <ConfigChooser />
       <AttachPopup />
       <SmartStepChooser />
+      <DataGridDialog />
     </>
   );
 }
@@ -886,7 +888,17 @@ function AttachPopup() {
     close();
     if (!root) return;
     try {
-      await startSession(await attachConfig(p, root), { rerunnable: false });
+      if (p.container != null)
+        notifications().notify({
+          group: "run",
+          level: "info",
+          key: "debug.attach",
+          title: `Preparing the debugger in ${p.container}…`,
+          body: "The first attach copies netcoredbg into the container.",
+        });
+      const config = await attachConfig(p, root);
+      notifications().expire?.("debug.attach");
+      await startSession(config, { rerunnable: false });
     } catch (e) {
       notifications().notify({
         group: "run",

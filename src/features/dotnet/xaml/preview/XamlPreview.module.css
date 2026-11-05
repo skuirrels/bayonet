@@ -1,0 +1,117 @@
+.split {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+
+.editor {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mode-preview .editor {
+  display: none;
+}
+
+.mode-split .editor {
+  border-right: 1px solid var(--border-editor-tabs, var(--border));
+}
+
+.layoutActions {
+  display: flex;
+  align-items: center;
+}
+
+.layoutActions > button {
+  width: var(--h-floating-toolbar-button);
+  height: var(--h-floating-toolbar-button);
+}
+
+.preview {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-editor, var(--bg-app));
+}
+
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+}
+
+.status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failed {
+  color: var(--danger);
+  white-space: pre-line;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.error {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font-size: var(--fs-small);
+}
+
+.errorText {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.frame {
+  display: block;
+  box-shadow: 0 0 0 1px var(--border);
+  image-rendering: auto;
+}
+
+.stale {
+  opacity: 0.5;
+}

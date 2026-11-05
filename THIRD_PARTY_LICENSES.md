@@ -2,12 +2,12 @@
 
 ## Project Lombok
 
-`plugins/lombok/lombok-1.18.48-openidea.2.jar` contains Project Lombok v1.18.48 with the Equinox
+`java/lombok/lombok-1.18.48-openidea.2.jar` contains Project Lombok v1.18.48 with the Equinox
 classloader fix from [projectlombok/lombok#4059](https://github.com/projectlombok/lombok/pull/4059)
 and the ECJ constructor-call fix from [projectlombok/lombok#4089](https://github.com/projectlombok/lombok/pull/4089).
 Copyright (C) 2009-2021 The Project Lombok Authors. MIT license and bundled component
-notices are retained in [plugins/lombok/LICENSE](plugins/lombok/LICENSE) and inside the jar.
-Source tag, patch commits and build instructions: [plugins/lombok/README.md](plugins/lombok/README.md).
+notices are retained in [java/lombok/LICENSE](java/lombok/LICENSE) and inside the jar.
+Source tag, patch commits and build instructions: [java/lombok/README.md](java/lombok/README.md).
 
 ## JetBrains IntelliJ Platform icons
 
@@ -52,6 +52,15 @@ Their original copyright headers and Apache-2.0 licensing are retained.
 
 At render time `src/ui/icons.tsx` may recolour monochrome icons to `currentColor`.
 
+## JetBrains IntelliJ Platform VCS log graph algorithms
+
+`crates/ide-vcs/src/bek.rs` and `src/features/vcs/graph.ts` adapt the Bek ordering,
+graph layout and LinearBek merge linearization algorithms from
+[intellij-community](https://github.com/JetBrains/intellij-community/tree/1d70d5c54302d655758edbd2f808fb8dea8b1764/platform/vcs-log/graph/src/com/intellij/vcs/log/graph)
+(`impl/facade/sort/bek`, `impl/permanent/GraphLayoutBuilder.kt` and
+`linearBek/LinearBekGraphBuilder.java`). Modified from the originals.
+Copyright 2000-2026 JetBrains s.r.o. and contributors. Apache License 2.0 (below).
+
 ## JetBrains IntelliJ Platform diff algorithm
 
 `src/features/vcs/comparison/**` is a TypeScript port of the text comparison of
@@ -78,9 +87,9 @@ expui `fileTypes/h.svg`; that outline is modified from the original by JetBrains
 `src/ui/openidea/runConfigurations/springBoot*.svg` (the Spring Boot run configuration
 leaf) is OpenIDEA's own drawing.
 
-The lettering in `src-tauri/icons/source/openidea-wordmark*.svg` is outlined from
-Inter Tight (Copyright 2022 The Inter Project Authors, SIL Open Font License 1.1,
-https://github.com/rsms/inter-tight).
+The lettering in `src-tauri/icons/source/dotnetidea-wordmark*.svg` is outlined from
+Inter (Copyright 2016 The Inter Project Authors, SIL Open Font License 1.1,
+https://github.com/rsms/inter).
 
 ### MIT License (Rust and Cargo icons)
 
@@ -145,6 +154,18 @@ user's app-data directory only when the user asks; none of them ships with OpenI
   MIT-licensed), verifies its published SHA-256 and extracts only the jar; it is used
   unmodified, and its source is available from the repository above.
 - **Eclipse JDT Language Server** (jdtls): EPL-2.0, from download.eclipse.org.
+- **.NET tools** (installed with `dotnet tool install` into the app-data directory, or
+  from the projects' GitHub releases), each used unmodified:
+  - Roslyn language server (`roslyn-language-server`), MIT, <https://github.com/dotnet/roslyn>.
+  - csharp-ls, MIT, <https://github.com/razzmatazz/csharp-language-server>.
+  - FsAutoComplete, Apache-2.0, <https://github.com/ionide/FsAutoComplete>.
+  - LemMinX (XML), EPL-2.0, <https://github.com/eclipse/lemminx>.
+  - netcoredbg (.NET debugger, also copied into a container to debug there), MIT,
+    Copyright (c) Samsung Electronics, <https://github.com/Samsung/netcoredbg>.
+  - dotnet-counters, dotnet-trace and dotnet-monitor, MIT, <https://github.com/dotnet/diagnostics>
+    and <https://github.com/dotnet/dotnet-monitor>.
+- The Avalonia previewer host (`Avalonia.Designer.HostApp`, MIT) is not downloaded: it comes
+  with the Avalonia packages the user's project references.
 
 ## en_US / en_GB Hunspell dictionaries
 

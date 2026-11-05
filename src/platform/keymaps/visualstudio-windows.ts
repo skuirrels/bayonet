@@ -88,6 +88,7 @@ export const visualStudioOverrides: Record<string, string[]> = {
   "debug.stepInto": ["F11"],
   "debug.stepOut": ["Shift+F11"],
   "debug.runToCursor": ["Ctrl+F10"],
+  "debug.setNextStatement": ["Ctrl+Shift+F10"],
   "debug.attachToProcess": ["Ctrl+Alt+P"],
   "debug.evaluate": ["Shift+F9"],
 };
@@ -115,6 +116,10 @@ export const visualStudioAdditions: Record<string, string[]> = {
   "toolwindow.terminal": ["Ctrl+`"],
   "view.zoomIn": ["Ctrl+Shift+."],
   "view.zoomOut": ["Ctrl+Shift+,"],
+  // Alt+Down moves the line in the editor; in a search field it opens the history, as in
+  // Visual Studio's own Find dropdowns.
+  "find.popup.recentSearches": ["Alt+Down"],
+  "find.field.recentSearches": ["Alt+Down"],
 };
 
 /**

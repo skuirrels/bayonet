@@ -112,6 +112,28 @@ fn indexes_files_and_symbols_honouring_excludes() {
 }
 
 #[test]
+fn counts_file_extensions_most_common_first() {
+    let fx = Fixture::new(&[
+        ("src/a.rs", "fn a() {}\n"),
+        ("src/b.RS", "fn b() {}\n"),
+        ("src/lib.rs", "fn c() {}\n"),
+        ("Cargo.toml", "[package]\n"),
+        ("README.md", "# r\n"),
+        ("docs/guide.md", "# g\n"),
+        (".gitignore", "target\n"),
+        ("Makefile", "all:\n"),
+        ("target/debug/gen.rs", "fn generated() {}\n"),
+    ]);
+    let idx = fx.open();
+    let counts: Vec<(String, u32)> = idx.file_extensions().into_iter().map(|c| (c.extension, c.files)).collect();
+    assert_eq!(
+        counts,
+        [("rs".into(), 3), ("md".into(), 2), ("toml".into(), 1)],
+        "case-folded, excluded folders and extension-less files left out"
+    );
+}
+
+#[test]
 fn file_ranking_is_idea_like() {
     let fx = sample();
     let idx = fx.open();
@@ -136,6 +158,23 @@ fn file_ranking_is_idea_like() {
     let m = &idx.find_files("ui/btn", 1)[0];
     let shown: String = m.indices.iter().map(|&i| m.rel_path.chars().nth(i as usize).unwrap()).collect();
     assert_eq!(shown.to_lowercase(), "uibtn");
+}
+
+#[test]
+fn find_dirs_ranks_folder_names() {
+    let f = sample();
+    let idx = f.open();
+    let dirs = |q: &str| idx.find_dirs(q, 20).into_iter().map(|m| m.rel_path).collect::<Vec<_>>();
+    assert_eq!(dirs("order"), ["src/order/"]);
+    assert_eq!(dirs("src")[0], "src/");
+    assert!(dirs("src").contains(&"src/ui/".to_owned()), "{:?}", dirs("src"));
+    assert_eq!(dirs("src/ui/"), ["src/ui/"]);
+    assert!(dirs("").is_empty());
+    assert!(dirs("main").is_empty());
+
+    let m = &idx.find_dirs("ui", 1)[0];
+    assert_eq!(m.path.0, f.root.join("src/ui"));
+    assert_eq!(m.indices, vec![4, 5]);
 }
 
 #[test]
@@ -274,6 +313,56 @@ fn binary_and_huge_files_are_listed_without_symbols() {
     assert_eq!(files(&idx, "logo"), vec!["img/logo.rs"]);
     assert_eq!(files(&idx, "huge"), vec!["big/huge.rs"]);
     assert_eq!(idx.status().symbols, 0);
+}
+
+#[test]
+fn go_to_file_finds_ignored_files_but_not_their_symbols() {
+    let fx = Fixture::new(&[
+        (".gitignore", ".env\n*.local.ts\ndist/\n"),
+        (".env", "SECRET=1\n"),
+        ("src/app.ts", "export function app() {}\n"),
+        ("src/config.local.ts", "export function localOnly() {}\n"),
+        ("dist/bundle.js", "function bundled() {}\n"),
+    ]);
+    let idx = fx.open();
+    assert_eq!(files(&idx, ".env"), vec![".env"], "the reported case: a git-ignored root file");
+    assert_eq!(files(&idx, "config.local"), vec!["src/config.local.ts"]);
+    assert!(files(&idx, "bundle").is_empty(), "ignored directories stay out");
+    assert!(symbols(&idx, "localOnly", SymbolFilter::All).is_empty(), "ignored files are listed by name only");
+    assert_eq!(symbols(&idx, "app", SymbolFilter::All), vec!["app"]);
+
+    // Watcher updates keep the distinction.
+    let fresh = fx.write("src/fresh.local.ts", "export function freshLocal() {}\n");
+    let bundled = fx.write("dist/more.js", "function more() {}\n");
+    idx.update(&[fresh, bundled], &[]);
+    assert!(idx.wait_idle(WAIT));
+    assert_eq!(files(&idx, "fresh.local"), vec!["src/fresh.local.ts"]);
+    assert!(symbols(&idx, "freshLocal", SymbolFilter::All).is_empty());
+    assert!(files(&idx, "more.js").is_empty());
+
+    // Nested ignore files apply to watcher updates as they do to the scan.
+    fx.write("pkg/.gitignore", "gen.ts\n");
+    let generated = fx.write("pkg/gen.ts", "export function generatedThing() {}\n");
+    let kept = fx.write("pkg/kept.ts", "export function keptThing() {}\n");
+    idx.update(&[generated, kept], &[]);
+    assert!(idx.wait_idle(WAIT));
+    assert_eq!(files(&idx, "pkg/gen"), vec!["pkg/gen.ts"]);
+    assert!(symbols(&idx, "generatedThing", SymbolFilter::All).is_empty());
+    assert_eq!(symbols(&idx, "keptThing", SymbolFilter::All), vec!["keptThing"]);
+    drop(idx);
+
+    // No longer ignored: the next scan parses it although its mtime is unchanged.
+    std::fs::write(fx.root.join(".gitignore"), ".env\ndist/\n").unwrap();
+    let idx = fx.open();
+    assert_eq!(symbols(&idx, "localOnly", SymbolFilter::All), vec!["localOnly"]);
+    assert_eq!(files(&idx, ".env"), vec![".env"]);
+    drop(idx);
+
+    // Ignored again: its symbols are dropped.
+    std::fs::write(fx.root.join(".gitignore"), "*.local.ts\n").unwrap();
+    let idx = fx.open();
+    assert!(symbols(&idx, "localOnly", SymbolFilter::All).is_empty());
+    assert_eq!(files(&idx, "bundle"), vec!["dist/bundle.js"]);
 }
 
 #[test]
@@ -542,4 +631,48 @@ fn workspace_scope_excludes_state_from_scans_updates_and_cached_results() {
     idx.set_scope(crate::IndexRoots { include_root: false, folders: Vec::new() }, Vec::new());
     assert!(idx.wait_idle(WAIT));
     assert!(idx.find_files("", 100).is_empty());
+}
+
+/// CI-11: C# types and members are indexed for Go to Symbol / Search Everywhere, and
+/// lookups on a 5 000-file solution stay well under 100 ms.
+#[test]
+fn csharp_symbols_are_found_quickly_in_a_large_solution() {
+    let mut files: Vec<(String, String)> = (0..5_000)
+        .map(|i| {
+            (
+                format!("src/Module{}/Service{i}.cs", i % 50),
+                format!(
+                    "namespace Shop.Module{m};\n\npublic sealed class Service{i}\n{{\n    public int Count{i} {{ get; set; }}\n    public void Handle{i}(string order) {{ }}\n}}\n",
+                    m = i % 50
+                ),
+            )
+        })
+        .collect();
+    files.push(("src/Core/OrderService.cs".into(), "namespace Shop.Core;\n\npublic interface IOrderService\n{\n    void PlaceOrder(int id);\n}\n\npublic class OrderService : IOrderService\n{\n    public void PlaceOrder(int id) { }\n}\n".into()));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let fx = Fixture::new(&refs);
+    let idx = fx.open();
+    assert!(idx.status().files >= 5_001);
+
+    let m = &idx.find_symbols("PlaceOrder", SymbolFilter::All, 5);
+    assert!(
+        m.iter().any(|s| s.container.as_deref() == Some("OrderService") && s.rel_path == "src/Core/OrderService.cs"),
+        "{m:?}"
+    );
+    assert!(symbols(&idx, "IOrderService", SymbolFilter::All).contains(&"IOrderService".to_owned()));
+    assert_eq!(files_of(&idx, "OrderService.cs"), ["src/Core/OrderService.cs"]);
+
+    // Warm, then time typical queries (CamelHump and substring).
+    let _ = idx.find_symbols("Serv", SymbolFilter::All, 50);
+    for q in ["OrdSer", "Handle4999", "Service25", "PlOr"] {
+        let start = std::time::Instant::now();
+        let found = idx.find_symbols(q, SymbolFilter::All, 50);
+        let took = start.elapsed();
+        assert!(!found.is_empty(), "{q}");
+        assert!(took < Duration::from_millis(100), "{q} took {took:?}");
+    }
+}
+
+fn files_of(idx: &ProjectIndex, q: &str) -> Vec<String> {
+    files(idx, q).into_iter().take(1).collect()
 }

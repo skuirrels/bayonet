@@ -1,0 +1,49 @@
+id = "razor"
+name = "Razor"
+extensions = ["razor", "cshtml"]
+block-comment = ["@*", "*@"]
+indent = { tab-size = 4, insert-spaces = true }
+# Markup first: tag and attribute completion and highlighting of the HTML; the
+# C# parts and components come from the server.
+ui-mode = "HTML"
+
+# Roslyn's server, which hosts Razor itself (cohosting): components, directives
+# and the C# in `.razor` / `.cshtml` files. The same instance as C#'s (servers are
+# shared by name and root), so this block must match `csharp.toml`'s.
+# The server delegates the HTML parts back to the client (`razor/updateHtml`
+# and requests carrying a `checksum`); they get empty answers
+# (`crates/ide-lsp/src/handler.rs`), the editor's HTML mode covers the markup.
+[[language-servers]]
+name = "roslyn-language-server"
+command = "roslyn-language-server"
+args = ["--stdio", "--autoLoadProjects", "--telemetryLevel", "off", "--logLevel", "Information"]
+root-markers = ["*.sln", "*.slnx", "*.csproj", "global.json", "Directory.Build.props", "ProjectSettings/ProjectVersion.txt"]
+install-hint = "dotnet tool install --global roslyn-language-server --prerelease"
+pull-diagnostics = true
+# Problems in files that are not open, for the Problems view (solution-wide analysis).
+workspace-diagnostics = true
+
+# Roslyn's options, as `workspace/configuration` asks for them: `<language>|<group>.<option>`.
+[language-servers.settings."csharp|background_analysis"]
+dotnet_analyzer_diagnostics_scope = "fullSolution"
+dotnet_compiler_diagnostics_scope = "fullSolution"
+
+[language-servers.settings."csharp|inlay_hints"]
+dotnet_enable_inlay_hints_for_parameters = true
+dotnet_enable_inlay_hints_for_literal_parameters = true
+dotnet_enable_inlay_hints_for_indexer_parameters = true
+dotnet_enable_inlay_hints_for_object_creation_parameters = true
+dotnet_enable_inlay_hints_for_other_parameters = false
+dotnet_suppress_inlay_hints_for_parameters_that_differ_only_by_suffix = true
+dotnet_suppress_inlay_hints_for_parameters_that_match_method_intent = true
+dotnet_suppress_inlay_hints_for_parameters_that_match_argument_name = true
+csharp_enable_inlay_hints_for_types = true
+csharp_enable_inlay_hints_for_implicit_variable_types = true
+csharp_enable_inlay_hints_for_lambda_parameter_types = true
+csharp_enable_inlay_hints_for_implicit_object_creation = true
+csharp_enable_inlay_hints_for_collection_expressions = true
+
+# Go to definition into a referenced assembly: Source Link first, then decompiled code.
+[language-servers.settings.navigation]
+dotnet_navigate_to_source_link_and_embedded_sources = true
+dotnet_navigate_to_decompiled_sources = true

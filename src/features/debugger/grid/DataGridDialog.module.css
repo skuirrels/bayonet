@@ -1,0 +1,108 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  height: 420px;
+}
+
+.status {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+}
+
+.note {
+  color: var(--fg-subtle);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+
+.dim {
+  opacity: 0.6;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--fg-faint);
+  text-align: center;
+}
+
+.table {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-popup, var(--bg-app));
+  color: var(--fg-secondary);
+  font-family: var(--font-ui);
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  max-width: 320px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.indexCol {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sortButton:hover {
+  color: var(--fg);
+}
+
+.number {
+  color: var(--syn-number);
+}
+.string {
+  color: var(--syn-string);
+}
+.keyword {
+  color: var(--syn-keyword);
+}
+.object,
+.plain {
+  color: var(--fg);
+}

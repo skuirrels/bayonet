@@ -580,6 +580,28 @@ export function registerDebugActions(): () => void {
       },
     },
     {
+      id: "debug.setNextStatement",
+      title: "Set Next Statement",
+      category: "Debug",
+      icon: "run-to-cursor",
+      keywords: ["jump to line", "set execution point", "goto"],
+      description: "Move the execution point to the caret's line without running the code in between",
+      when: paused,
+      run: () => {
+        const t = pausedTarget();
+        const c = cursor();
+        if (!t || !c) return;
+        if (!sessionSupports("gotoTargets", t.s)) {
+          notSupported("Set Next Statement", t.s);
+          return;
+        }
+        void report(
+          "Set Next Statement failed",
+          call(commands.debugSetNextStatement(t.s.id, t.thread, c.path, c.line)),
+        );
+      },
+    },
+    {
       id: "debug.toggleBreakpoint",
       title: "Toggle Line Breakpoint",
       category: "Debug",

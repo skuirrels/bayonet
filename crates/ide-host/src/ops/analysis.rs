@@ -9,10 +9,14 @@ use crate::ops::Channel;
 use crate::rpc::Dispatcher;
 
 use super::doc::blocking;
+use ide_analysis::csharp_types::{DeclaredType, MemberKind, declared_types};
+use ide_analysis::signature::{MethodSignature, NewParameter, SignatureRewrite, SignatureSites};
 use ide_analysis::{
     DuplicateOptions, DuplicatesReport, SourceFile, StructuralFile, StructuralQuery, StructuralSummary,
 };
-use ide_core::{CancellationToken, Diagnostic, DocId, IdeResult, IpcPath, LanguageId, RequestId};
+use ide_core::{
+    CancellationToken, Diagnostic, DocId, IdeError, IdeResult, IpcPath, LanguageId, Location, Pos, Range, RequestId,
+};
 use ide_language::LanguageRegistry;
 use ide_lsp::{FileInspection, InspectHost, InspectOptions};
 use ide_search::{FileMask, SearchScope};
@@ -264,6 +268,176 @@ pub async fn structural_search(
     Ok(())
 }
 
+// ---- Change Signature (C#) ----
+
+/// The C# method, constructor, local function or delegate declared around `pos` in `path`.
+pub async fn signature_at(host: &Host, window: &str, path: IpcPath, pos: Pos) -> IdeResult<Option<MethodSignature>> {
+    let project = host.project(window)?;
+    let languages = project.languages.clone();
+    let syntax = host.syntax();
+    blocking(move || {
+        let (_, text) = load(&project, &languages, &path).ok_or_else(|| IdeError::not_found("cannot read the file"))?;
+        Ok(ide_analysis::signature::signature_at(&syntax, &text, pos))
+    })
+    .await
+}
+
+/// Rewrites `signature`'s declaration and the calls at `locations` (the
+/// language server's references, declaration included) for `change`; the UI
+/// applies the edit. Files outside the project are not touched.
+pub async fn change_signature(
+    host: &Host,
+    window: &str,
+    signature: MethodSignature,
+    change: Vec<NewParameter>,
+    locations: Vec<Location>,
+) -> IdeResult<SignatureRewrite> {
+    let project = host.project(window)?;
+    let languages = project.languages.clone();
+    let syntax = host.syntax();
+    blocking(move || {
+        let mut by_file: Vec<(IpcPath, Vec<Range>)> = Vec::new();
+        for l in locations.into_iter().filter(|l| l.uri.is_none() && l.path.starts_with(&project.root)) {
+            match by_file.iter_mut().find(|(p, _)| *p == l.path) {
+                Some((_, ranges)) => ranges.push(l.range),
+                None => by_file.push((l.path, vec![l.range])),
+            }
+        }
+        let files: Vec<SignatureSites> = by_file
+            .into_iter()
+            .filter_map(|(path, locations)| {
+                let (_, text) = load(&project, &languages, &path)?;
+                Some(SignatureSites { path, text, locations })
+            })
+            .collect();
+        ide_analysis::signature::change_signature(&syntax, &signature, &change, &files).map_err(IdeError::invalid)
+    })
+    .await
+}
+
+// ---- C# types for XAML (CI-16) ----
+
+/// A member a XAML binding can name, with where it is declared.
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BindableMember {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub kind: MemberKind,
+    pub path: IpcPath,
+    pub range: Range,
+    /// The type that declares it (a base type for inherited members).
+    pub declared_in: String,
+}
+
+/// A C# type of the project: where it is declared and its members, inherited
+/// ones (from base types in the project) after its own.
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BindableType {
+    pub name: String,
+    pub namespace: String,
+    pub path: IpcPath,
+    pub range: Range,
+    pub members: Vec<BindableMember>,
+}
+
+/// The parts (partial declarations) of the project's type `name`, in `namespace`
+/// when given, else preferably in `near`, else the first namespace found.
+fn type_parts(
+    project: &Project,
+    languages: &LanguageRegistry,
+    syntax: &ide_language::Syntax,
+    name: &str,
+    namespace: Option<&str>,
+    near: Option<&str>,
+) -> Vec<(IpcPath, DeclaredType)> {
+    let mut paths: Vec<IpcPath> = Vec::new();
+    for s in project.index.symbols_named(name, None, 64) {
+        if s.path.extension().is_some_and(|e| e == "cs") && !paths.contains(&s.path) {
+            paths.push(s.path);
+        }
+    }
+    // Partial declarations in a stable order, whatever order the index has.
+    paths.sort();
+    let mut parts: Vec<(IpcPath, DeclaredType)> = Vec::new();
+    for path in paths {
+        let Some((_, text)) = load(project, languages, &path) else { continue };
+        for t in declared_types(syntax, &text) {
+            if t.name == name {
+                parts.push((path.clone(), t));
+            }
+        }
+    }
+    let chosen = namespace
+        .or_else(|| near.filter(|n| parts.iter().any(|(_, t)| t.namespace == *n)))
+        .map(str::to_string)
+        .or_else(|| parts.first().map(|(_, t)| t.namespace.clone()));
+    parts.retain(|(_, t)| Some(&t.namespace) == chosen.as_ref());
+    parts
+}
+
+/// The project's C# type `name` (simple name, in `namespace` when given) and the
+/// members a binding can name; `None` when the project declares no such type.
+pub async fn csharp_type_members(
+    host: &Host,
+    window: &str,
+    name: String,
+    namespace: Option<String>,
+) -> IdeResult<Option<BindableType>> {
+    let project = host.project(window)?;
+    let languages = project.languages.clone();
+    let syntax = host.syntax();
+    blocking(move || {
+        let parts = type_parts(&project, &languages, &syntax, &name, namespace.as_deref(), None);
+        let Some((path, first)) = parts.first().cloned() else { return Ok(None) };
+        let mut out = BindableType {
+            name: first.name.clone(),
+            namespace: first.namespace.clone(),
+            path,
+            range: first.name_range,
+            members: Vec::new(),
+        };
+        // Own members, then each base type's, breadth first; names already seen hide inherited ones.
+        let mut queue = std::collections::VecDeque::from([(parts, 0usize)]);
+        let mut visited = std::collections::HashSet::new();
+        while let Some((parts, depth)) = queue.pop_front() {
+            let Some((_, head)) = parts.first() else { continue };
+            if !visited.insert(format!("{}.{}", head.namespace, head.name)) {
+                continue;
+            }
+            let near = head.namespace.clone();
+            let mut bases = Vec::new();
+            for (path, t) in &parts {
+                for m in &t.members {
+                    if !out.members.iter().any(|o| o.name == m.name) {
+                        out.members.push(BindableMember {
+                            name: m.name.clone(),
+                            type_name: m.type_name.clone(),
+                            kind: m.kind.clone(),
+                            path: path.clone(),
+                            range: m.range,
+                            declared_in: t.name.clone(),
+                        });
+                    }
+                }
+                bases.extend(t.bases.iter().cloned());
+            }
+            if depth < 4 {
+                for base in bases {
+                    let simple = base.rsplit('.').next().unwrap_or(&base).to_string();
+                    let found = type_parts(&project, &languages, &syntax, &simple, None, Some(&near));
+                    if !found.is_empty() {
+                        queue.push_back((found, depth + 1));
+                    }
+                }
+            }
+        }
+        Ok(Some(out))
+    })
+    .await
+}
+
 /// Commands of this module the remote server answers.
 pub(crate) fn register(d: &mut Dispatcher) {
     d.add("inspect_code", |c| async move {
@@ -271,6 +445,13 @@ pub(crate) fn register(d: &mut Dispatcher) {
     });
     d.add("analysis_locate_duplicates", |c| async move {
         analysis_locate_duplicates(&c.host, &c.window, c.arg("request")?, c.arg("scope")?, c.arg("options")?).await
+    });
+    d.add("csharp_type_members", |c| async move {
+        csharp_type_members(&c.host, &c.window, c.arg("name")?, c.arg("namespace")?).await
+    });
+    d.add("signature_at", |c| async move { signature_at(&c.host, &c.window, c.arg("path")?, c.arg("pos")?).await });
+    d.add("change_signature", |c| async move {
+        change_signature(&c.host, &c.window, c.arg("signature")?, c.arg("change")?, c.arg("locations")?).await
     });
     d.add("structural_languages", |c| async move { structural_languages(&c.host, &c.window).await });
     d.add("structural_validate", |c| async move { structural_validate(&c.host, &c.window, c.arg("query")?).await });
