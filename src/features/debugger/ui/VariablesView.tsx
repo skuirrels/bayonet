@@ -9,6 +9,7 @@ import { addFieldWatchpoint } from "../breakpoints/special";
 import { methodAt } from "../breakpoints/symbols";
 import { activeSession, addWatch, removeWatch, revealFrame, sessionSupports, setVariableValue } from "../state";
 import { blurDebugView, focusDebugView } from "./focusedView";
+import { openDataGrid } from "./popoverStore";
 import { classifyValue, oneLine, sortVariables } from "../values";
 import { workflowSettings } from "@/platform/workflowSettings";
 import styles from "./VariablesView.module.css";
@@ -283,6 +284,12 @@ export function VariablesView({
       items.push({ label: "Copy Name", run: () => void navigator.clipboard?.writeText(node.name) });
       if (node.kind === "var" && node.evaluateName)
         items.push({ label: "Add to Watches", icon: "eye", run: () => addWatch(node.evaluateName!) });
+      if (session != null && node.reference > 0)
+        items.push({
+          label: "View as Table",
+          icon: "db-table",
+          run: () => openDataGrid(session, node.reference, node.name, node.evaluateName),
+        });
       if (canWatch(node))
         items.push({
           label: "Add Field Watchpoint",

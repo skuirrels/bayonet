@@ -1,11 +1,12 @@
 /** NuGet tool window state: the search, the installed packages and the selected package. */
 import { create } from "zustand";
 import { commands } from "@/bindings";
-import type { InstalledPackages, PackageSearch } from "@/bindings";
+import type { InstalledPackages, PackageAudit, PackageSearch } from "@/bindings";
 import { call, isTauri } from "@/platform/ipc";
 import { tx } from "@/platform/i18n";
 import { notifications } from "@/workbench/contributions";
 import { isPrerelease } from "./model";
+import { publishAudit } from "./audit";
 
 /** Results per page, as `dotnet package search` defaults to. */
 export const PAGE = 20;
@@ -23,6 +24,9 @@ export interface NugetState {
   outdated: InstalledPackages | null;
   loading: boolean;
   checking: boolean;
+  /** Vulnerable and deprecated packages (asks the sources). */
+  audit: PackageAudit | null;
+  auditing: boolean;
   /** Selected package id. */
   selected: string | null;
   versions: string[] | null;
@@ -43,6 +47,8 @@ const initial = (): NugetState => ({
   outdated: null,
   loading: false,
   checking: false,
+  audit: null,
+  auditing: false,
   selected: null,
   versions: null,
   version: null,
@@ -57,10 +63,12 @@ export function resetNuget() {
   seq.search++;
   seq.versions++;
   seq.installed++;
+  seq.audit++;
+  publishAudit(null);
   useNuget.setState(initial());
 }
 
-const seq = { search: 0, versions: 0, installed: 0 };
+const seq = { search: 0, versions: 0, installed: 0, audit: 0 };
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -74,6 +82,7 @@ export async function loadInstalled(outdated = false): Promise<void> {
     const installed = await call(commands.nugetInstalled(false, false));
     if (id !== seq.installed) return;
     useNuget.setState({ installed, loading: false });
+    void checkAudit();
   } catch (e) {
     if (id === seq.installed) useNuget.setState({ loading: false, error: message(e) });
     return;
@@ -91,6 +100,23 @@ export async function checkUpdates(): Promise<void> {
     if (id === seq.installed) useNuget.setState({ outdated, checking: false });
   } catch (e) {
     if (id === seq.installed) useNuget.setState({ checking: false, error: message(e) });
+  }
+}
+
+/** Asks the sources which packages in use are vulnerable or deprecated, and warns in the project files. */
+export async function checkAudit(): Promise<void> {
+  if (!isTauri()) return;
+  const id = ++seq.audit;
+  useNuget.setState({ auditing: true });
+  try {
+    const audit = await call(commands.nugetAudit());
+    if (id !== seq.audit) return;
+    useNuget.setState({ audit, auditing: false });
+    publishAudit(audit);
+  } catch (e) {
+    // Offline or no sources: keep what the last check found.
+    if (id === seq.audit) useNuget.setState({ auditing: false });
+    console.warn("nuget: audit failed", e);
   }
 }
 

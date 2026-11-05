@@ -632,3 +632,47 @@ fn workspace_scope_excludes_state_from_scans_updates_and_cached_results() {
     assert!(idx.wait_idle(WAIT));
     assert!(idx.find_files("", 100).is_empty());
 }
+
+/// CI-11: C# types and members are indexed for Go to Symbol / Search Everywhere, and
+/// lookups on a 5 000-file solution stay well under 100 ms.
+#[test]
+fn csharp_symbols_are_found_quickly_in_a_large_solution() {
+    let mut files: Vec<(String, String)> = (0..5_000)
+        .map(|i| {
+            (
+                format!("src/Module{}/Service{i}.cs", i % 50),
+                format!(
+                    "namespace Shop.Module{m};\n\npublic sealed class Service{i}\n{{\n    public int Count{i} {{ get; set; }}\n    public void Handle{i}(string order) {{ }}\n}}\n",
+                    m = i % 50
+                ),
+            )
+        })
+        .collect();
+    files.push(("src/Core/OrderService.cs".into(), "namespace Shop.Core;\n\npublic interface IOrderService\n{\n    void PlaceOrder(int id);\n}\n\npublic class OrderService : IOrderService\n{\n    public void PlaceOrder(int id) { }\n}\n".into()));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let fx = Fixture::new(&refs);
+    let idx = fx.open();
+    assert!(idx.status().files >= 5_001);
+
+    let m = &idx.find_symbols("PlaceOrder", SymbolFilter::All, 5);
+    assert!(
+        m.iter().any(|s| s.container.as_deref() == Some("OrderService") && s.rel_path == "src/Core/OrderService.cs"),
+        "{m:?}"
+    );
+    assert!(symbols(&idx, "IOrderService", SymbolFilter::All).contains(&"IOrderService".to_owned()));
+    assert_eq!(files_of(&idx, "OrderService.cs"), ["src/Core/OrderService.cs"]);
+
+    // Warm, then time typical queries (CamelHump and substring).
+    let _ = idx.find_symbols("Serv", SymbolFilter::All, 50);
+    for q in ["OrdSer", "Handle4999", "Service25", "PlOr"] {
+        let start = std::time::Instant::now();
+        let found = idx.find_symbols(q, SymbolFilter::All, 50);
+        let took = start.elapsed();
+        assert!(!found.is_empty(), "{q}");
+        assert!(took < Duration::from_millis(100), "{q} took {took:?}");
+    }
+}
+
+fn files_of(idx: &ProjectIndex, q: &str) -> Vec<String> {
+    files(idx, q).into_iter().take(1).collect()
+}

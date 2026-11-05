@@ -4192,9 +4192,12 @@ dependencies = [
 name = "ide-dotnet"
 version = "0.1.36"
 dependencies = [
+ "base64 0.22.1",
+ "dirs 6.0.0",
  "flate2",
  "ide-core",
  "ide-jsonrpc",
+ "png 0.18.1",
  "quick-xml",
  "serde",
  "serde_json",
@@ -4432,6 +4435,7 @@ dependencies = [
  "dunce",
  "futures",
  "globset",
+ "ide-analysis",
  "ide-core",
  "ide-jsonrpc",
  "ide-language",

@@ -6,7 +6,7 @@
 //! installing into a CPM project writes the version to `Directory.Packages.props`.
 
 use ide_core::error::ErrorKind;
-use ide_core::{IdeError, IdeResult, IpcPath};
+use ide_core::{IdeError, IdeResult, IpcPath, Pos, Range};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
@@ -324,6 +324,219 @@ pub fn with_central_packages(mut list: InstalledPackages) -> InstalledPackages {
     list
 }
 
+/// A security advisory on the version of a package a project uses.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Advisory {
+    /// `Low`, `Moderate`, `High` or `Critical`.
+    pub severity: String,
+    pub url: String,
+}
+
+/// Why the author deprecated a package version, and what to use instead.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Deprecation {
+    /// `Legacy`, `CriticalBugs`, `Other`.
+    pub reasons: Vec<String>,
+    pub alternative: Option<String>,
+}
+
+/// A package of a project with known vulnerabilities or a deprecation (NUG-4).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditFinding {
+    pub id: String,
+    pub version: Option<String>,
+    pub frameworks: Vec<String>,
+    /// Brought in by another package rather than referenced by the project.
+    pub transitive: bool,
+    pub vulnerabilities: Vec<Advisory>,
+    pub deprecation: Option<Deprecation>,
+    /// Where it belongs in the project file: the `PackageReference`, else (transitive,
+    /// or referenced from an imported file) the `Project` element. Unset when the file cannot be read.
+    pub range: Option<Range>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAudit {
+    pub path: IpcPath,
+    pub findings: Vec<AuditFinding>,
+}
+
+/// Vulnerable and deprecated packages of every project.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageAudit {
+    pub projects: Vec<ProjectAudit>,
+    pub problems: Vec<String>,
+}
+
+/// `dotnet package list --vulnerable` (with the packages under them too), or `--deprecated`.
+pub fn audit_args(target: &Path, vulnerable: bool) -> Vec<String> {
+    let mut args = vec!["package".into(), "list".into(), "--project".into(), path_arg(target)];
+    args.extend(["--format".into(), "json".into()]);
+    if vulnerable {
+        args.extend(["--vulnerable".into(), "--include-transitive".into()]);
+    } else {
+        args.push("--deprecated".into());
+    }
+    args
+}
+
+/// Merges the JSON of `--vulnerable` and `--deprecated` listings: one finding per
+/// project, package and version, with the frameworks it is used for.
+pub fn parse_audit(listings: &[&str]) -> IdeResult<PackageAudit> {
+    let mut audit = PackageAudit::default();
+    for text in listings {
+        let v = json(text)?;
+        audit.problems.extend(problems(&v));
+        for p in array(&v, "projects") {
+            audit.problems.extend(problems(p));
+            let path = IpcPath::from(str_of(p, "path").unwrap_or_default());
+            let at = match audit.projects.iter().position(|x| x.path == path) {
+                Some(i) => i,
+                None => {
+                    audit.projects.push(ProjectAudit { path, findings: Vec::new() });
+                    audit.projects.len() - 1
+                }
+            };
+            let project = &mut audit.projects[at];
+            for f in array(p, "frameworks") {
+                let framework = str_of(f, "framework").unwrap_or_default();
+                let packages = array(f, "topLevelPackages")
+                    .map(|x| (x, false))
+                    .chain(array(f, "transitivePackages").map(|x| (x, true)));
+                for (x, transitive) in packages {
+                    let Some(id) = str_of(x, "id") else { continue };
+                    let vulnerabilities: Vec<Advisory> = array(x, "vulnerabilities")
+                        .filter_map(|a| {
+                            Some(Advisory {
+                                severity: str_of(a, "severity").unwrap_or_else(|| "Unknown".into()),
+                                url: str_of(a, "advisoryurl").or_else(|| str_of(a, "advisoryUrl"))?,
+                            })
+                        })
+                        .collect();
+                    let reasons: Vec<String> =
+                        array(x, "deprecationReasons").filter_map(|r| r.as_str().map(str::to_owned)).collect();
+                    if vulnerabilities.is_empty() && reasons.is_empty() {
+                        continue;
+                    }
+                    let version = str_of(x, "resolvedVersion");
+                    let i = match project
+                        .findings
+                        .iter()
+                        .position(|o| o.id.eq_ignore_ascii_case(&id) && o.version == version)
+                    {
+                        Some(i) => i,
+                        None => {
+                            project.findings.push(AuditFinding { id, version, transitive, ..Default::default() });
+                            project.findings.len() - 1
+                        }
+                    };
+                    let finding = &mut project.findings[i];
+                    // Referenced directly for one framework is referenced.
+                    finding.transitive &= transitive;
+                    if !framework.is_empty() && !finding.frameworks.contains(&framework) {
+                        finding.frameworks.push(framework.clone());
+                    }
+                    for a in vulnerabilities {
+                        if !finding.vulnerabilities.iter().any(|o| o.url == a.url) {
+                            finding.vulnerabilities.push(a);
+                        }
+                    }
+                    if !reasons.is_empty() {
+                        let alternative = x.get("alternativePackage").and_then(|a| str_of(a, "id"));
+                        finding.deprecation = Some(Deprecation { reasons, alternative });
+                    }
+                }
+            }
+        }
+    }
+    audit.projects.retain(|p| !p.findings.is_empty());
+    Ok(audit)
+}
+
+/// Fills in where each finding goes in its project file.
+pub fn locate_findings(mut audit: PackageAudit) -> PackageAudit {
+    for p in &mut audit.projects {
+        let Ok(text) = std::fs::read_to_string(&p.path) else { continue };
+        let root = project_range(&text);
+        for f in &mut p.findings {
+            let reference = if f.transitive { None } else { reference_range(&text, &f.id) };
+            f.range = reference.or(root);
+        }
+    }
+    audit
+}
+
+/// The value of the `Include` (or `Update`) of the `PackageReference` of `id`.
+pub fn reference_range(text: &str, id: &str) -> Option<Range> {
+    // ASCII lowercasing keeps byte offsets.
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find("<packagereference") {
+        let start = from + i;
+        let after = start + "<packagereference".len();
+        let end = lower[start..].find('>').map_or(lower.len(), |e| start + e);
+        from = end.max(after);
+        if !lower[after..].starts_with(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>') {
+            continue;
+        }
+        for name in ["include", "update"] {
+            let Some((s, e)) = attribute(&lower[start..end], name) else { continue };
+            let (s, e) = (start + s, start + e);
+            if text[s..e].split(';').any(|v| v.trim().eq_ignore_ascii_case(id)) {
+                return Some(Range::new(pos_at(text, s), pos_at(text, e)));
+            }
+        }
+    }
+    None
+}
+
+/// The name of the root `Project` element.
+fn project_range(text: &str) -> Option<Range> {
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find("<project") {
+        let start = from + i + 1;
+        let end = start + "project".len();
+        if lower[end..].starts_with(|c: char| c.is_ascii_whitespace() || c == '>') {
+            return Some(Range::new(pos_at(text, start), pos_at(text, end)));
+        }
+        from = end;
+    }
+    None
+}
+
+/// Byte range of the value of attribute `name` (lowercase) in the start tag `tag`.
+fn attribute(tag: &str, name: &str) -> Option<(usize, usize)> {
+    let bytes = tag.as_bytes();
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(name) {
+        let at = from + i;
+        from = at + name.len();
+        if at == 0 || !bytes[at - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let rest = tag[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else { continue };
+        let rest = rest.trim_start();
+        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else { continue };
+        let s = tag.len() - rest.len() + 1;
+        let e = tag[s..].find(quote).map(|e| s + e)?;
+        return Some((s, e));
+    }
+    None
+}
+
+fn pos_at(text: &str, offset: usize) -> Pos {
+    let before = &text[..offset];
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    Pos::new(before.matches('\n').count() as u32, before[line_start..].encode_utf16().count() as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +634,93 @@ mod tests {
         std::fs::write(&props, "<Project><PropertyGroup><ManagePackageVersionsCentrally> true </ManagePackageVersionsCentrally></PropertyGroup></Project>").unwrap();
         let found = central_packages_file(&dir.path().join("src/A/A.csproj")).unwrap();
         assert_eq!(found, dir.path().join("Directory.Packages.props"));
+    }
+
+    const VULNERABLE: &str = r#"{"version":1,"parameters":"--vulnerable --include-transitive","sources":["https://api.nuget.org/v3/index.json"],
+      "projects":[{"path":"/s/A/A.csproj","frameworks":[
+        {"framework":"net10.0",
+         "topLevelPackages":[{"id":"System.Text.Json","requestedVersion":"8.0.0","resolvedVersion":"8.0.0","vulnerabilities":[
+            {"severity":"High","advisoryurl":"https://github.com/advisories/GHSA-hh2w-p6rv-4g7w"},
+            {"severity":"High","advisoryurl":"https://github.com/advisories/GHSA-8g4q-xg66-9fp4"}]}],
+         "transitivePackages":[{"id":"Newtonsoft.Json","resolvedVersion":"10.0.2","vulnerabilities":[
+            {"severity":"High","advisoryurl":"https://github.com/advisories/GHSA-5crp-9r3c-p9vr"}]}]},
+        {"framework":"net9.0",
+         "topLevelPackages":[{"id":"System.Text.Json","requestedVersion":"8.0.0","resolvedVersion":"8.0.0","vulnerabilities":[
+            {"severity":"High","advisoryurl":"https://github.com/advisories/GHSA-hh2w-p6rv-4g7w"}]}]}]},
+        {"path":"/s/B/B.csproj","frameworks":[{"framework":"net10.0","topLevelPackages":[]}]}]}"#;
+    const DEPRECATED: &str = r#"{"version":1,"parameters":"--deprecated","projects":[{"path":"/s/A/A.csproj","frameworks":[
+        {"framework":"net10.0","topLevelPackages":[{"id":"WindowsAzure.Storage","requestedVersion":"9.3.3","resolvedVersion":"9.3.3",
+          "deprecationReasons":["Legacy"],"alternativePackage":{"id":"Azure.Storage.Common","versionRange":">= 0.0.0"}}]}]}]}"#;
+
+    #[test]
+    fn audits_merge_vulnerable_and_deprecated_listings() {
+        let audit = parse_audit(&[VULNERABLE, DEPRECATED]).unwrap();
+        assert_eq!(audit.projects.len(), 1, "projects with nothing to report are left out");
+        let f = &audit.projects[0].findings;
+        let ids: Vec<(&str, bool)> = f.iter().map(|x| (x.id.as_str(), x.transitive)).collect();
+        assert_eq!(ids, [("System.Text.Json", false), ("Newtonsoft.Json", true), ("WindowsAzure.Storage", false)]);
+        assert_eq!(f[0].frameworks, ["net10.0", "net9.0"]);
+        assert_eq!(f[0].vulnerabilities.len(), 2, "the same advisory for two frameworks is one");
+        assert_eq!(f[0].vulnerabilities[0].severity, "High");
+        let d = f[2].deprecation.as_ref().unwrap();
+        assert_eq!(
+            (d.reasons.as_slice(), d.alternative.as_deref()),
+            (&["Legacy".to_owned()][..], Some("Azure.Storage.Common"))
+        );
+        assert!(f[2].vulnerabilities.is_empty());
+    }
+
+    #[test]
+    fn audit_args_ask_for_transitive_vulnerabilities() {
+        let a = audit_args(Path::new("/s/x.sln"), true);
+        assert!(a.ends_with(&["--vulnerable".into(), "--include-transitive".into()]), "{a:?}");
+        assert_eq!(audit_args(Path::new("/s/x.sln"), false).last().map(String::as_str), Some("--deprecated"));
+    }
+
+    #[test]
+    fn findings_point_at_their_package_reference() {
+        let text = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup>\n    <PackageReferenceX Include=\"System.Text.Json\" />\n    <PackageReference Version=\"8.0.0\"\n        Include = 'system.text.json' />\n    <PackageReference Update=\"Other;WindowsAzure.Storage\" />\n  </ItemGroup>\n</Project>\n";
+        let r = reference_range(text, "System.Text.Json").unwrap();
+        assert_eq!((r.start, r.end), (Pos::new(4, 19), Pos::new(4, 35)));
+        let r = reference_range(text, "WindowsAzure.Storage").unwrap();
+        assert_eq!(r.start.line, 5);
+        assert_eq!(reference_range(text, "Missing"), None);
+        assert_eq!(project_range(text), Some(Range::new(Pos::new(0, 1), Pos::new(0, 8))));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("A.csproj");
+        std::fs::write(&path, text).unwrap();
+        let mut audit = parse_audit(&[VULNERABLE, DEPRECATED]).unwrap();
+        audit.projects[0].path = IpcPath::from(path);
+        let f = locate_findings(audit).projects.remove(0).findings;
+        assert_eq!(f[0].range.unwrap().start.line, 4);
+        assert_eq!(f[1].range, project_range(text), "a transitive package goes on the project");
+        assert_eq!(f[2].range.unwrap().start.line, 5);
+    }
+
+    /// Real SDK and nuget.org: a known vulnerable and a deprecated package. Needs `dotnet` and the network.
+    #[test]
+    #[ignore]
+    fn audits_a_real_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("Audit.csproj");
+        std::fs::write(
+            &project,
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><TargetFramework>net10.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup>\n  <ItemGroup>\n    <PackageReference Include=\"System.Text.Json\" Version=\"8.0.0\" />\n    <PackageReference Include=\"WindowsAzure.Storage\" Version=\"9.3.3\" />\n  </ItemGroup>\n</Project>\n",
+        )
+        .unwrap();
+        run(None, dir.path(), &["restore".into()]).unwrap();
+        let listings: Vec<String> =
+            [true, false].map(|v| run(None, dir.path(), &audit_args(&project, v)).unwrap()).into();
+        let audit = locate_findings(parse_audit(&listings.iter().map(String::as_str).collect::<Vec<_>>()).unwrap());
+        let f = &audit.projects[0].findings;
+        let json = f.iter().find(|x| x.id == "System.Text.Json").unwrap();
+        assert!(!json.vulnerabilities.is_empty() && !json.transitive);
+        assert_eq!(json.range.unwrap().start.line, 3);
+        let storage = f.iter().find(|x| x.id == "WindowsAzure.Storage").unwrap();
+        assert!(storage.deprecation.is_some());
+        assert_eq!(storage.range.unwrap().start.line, 4);
+        assert!(f.iter().any(|x| x.transitive && x.range.unwrap().start.line == 0), "{f:#?}");
     }
 
     /// Real SDK: lists the fixture solution. Needs `dotnet` on PATH.

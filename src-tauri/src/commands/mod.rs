@@ -9,6 +9,7 @@
 pub mod agent;
 pub mod analysis;
 pub mod app;
+pub mod aspire;
 pub mod build;
 pub mod bytes;
 pub mod caches;
@@ -426,11 +427,13 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         debug::debug_step_in_targets,
         debug::debug_step_in_target,
         debug::debug_restart_frame,
+        debug::debug_set_next_statement,
         debug::debug_capabilities,
         debug::debug_set_function_breakpoints,
         debug::debug_set_data_breakpoints,
         debug::debug_data_breakpoint_info,
         debug::debug_attachable_processes,
+        debug::debug_prepare_container,
         debug::debug_listen_for_jvm,
         debug::debug_redefine_classes,
         coverage::coverage_prepare,
@@ -441,10 +444,17 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         dotnet::nuget_search,
         dotnet::nuget_versions,
         dotnet::nuget_installed,
+        dotnet::nuget_audit,
+        dotnet::dotnet_user_secrets,
+        dotnet::dotnet_publish_profiles,
+        dotnet::dotnet_publish_command,
+        dotnet::dotnet_container_run,
         dotnet::nuget_install,
         dotnet::nuget_remove,
         dotnet::dotnet_test_projects,
         dotnet::dotnet_tests,
+        dotnet::dotnet_xaml_preview,
+        dotnet::dotnet_xaml_preview_update,
         dotnet::dotnet_templates,
         dotnet::dotnet_new_project,
         dotnet::dotnet_solution_add,
@@ -453,6 +463,12 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         dotnet::dotnet_sdk_target,
         dotnet::dotnet_binlog_read,
         dotnet::dotnet_binlogs,
+        aspire::aspire_cli,
+        aspire::aspire_apphosts,
+        aspire::aspire_watch,
+        aspire::aspire_logs,
+        aspire::aspire_command,
+        aspire::aspire_stop,
         diagnostics::diag_tools,
         diagnostics::diag_processes,
         diagnostics::diag_stacks,
@@ -528,6 +544,9 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         perf::clear_caches,
         analysis::inspect_code,
         analysis::analysis_locate_duplicates,
+        analysis::csharp_type_members,
+        analysis::signature_at,
+        analysis::change_signature,
         analysis::structural_languages,
         analysis::structural_validate,
         analysis::structural_search,

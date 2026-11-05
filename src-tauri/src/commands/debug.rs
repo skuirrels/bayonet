@@ -218,6 +218,19 @@ pub async fn debug_step_in_target(
     ide_host::ops::debug::debug_step_in_target(&state.host, "", session, thread_id, target_id).await
 }
 
+/// Set Next Statement: moves the thread's execution point to `line` (0-based) of `path`.
+#[tauri::command]
+#[specta::specta]
+pub async fn debug_set_next_statement(
+    state: State<'_, AppState>,
+    session: DebugSessionId,
+    thread_id: i64,
+    path: PathBuf,
+    line: u32,
+) -> IdeResult<()> {
+    ide_host::ops::debug::debug_set_next_statement(&state.host, "", session, thread_id, path, line).await
+}
+
 /// Reset Frame (Drop Frame).
 #[tauri::command]
 #[specta::specta]
@@ -268,6 +281,13 @@ pub async fn debug_data_breakpoint_info(
 #[specta::specta]
 pub async fn debug_attachable_processes(state: State<'_, AppState>) -> IdeResult<Vec<attach::AttachableProcess>> {
     ide_host::ops::debug::debug_attachable_processes(&state.host, "").await
+}
+
+/// Copies a Linux netcoredbg into a container; the `pipeTransport` JSON that attaches through it.
+#[tauri::command]
+#[specta::specta]
+pub async fn debug_prepare_container(state: State<'_, AppState>, container: String) -> IdeResult<String> {
+    ide_host::ops::debug::debug_prepare_container(&state.host, container).await
 }
 
 /// Remote JVM Debug in listen mode: waits (cancellable through `request`) for the remote

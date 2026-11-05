@@ -145,6 +145,22 @@ export async function unavailableReason(
 let menuRun: AbortController | null = null;
 
 /** A Refactor menu action (Move…, Inline…, Extract Method…): runs it or says why it can't. */
+/** A feature's own refactoring for a language; resolves `false` to fall through to the hint. */
+export type RefactoringFallback = (view: EditorView) => Promise<boolean>;
+const fallbacks = new Map<string, RefactoringFallback>();
+
+/**
+ * Runs `run` for refactoring `id` in `language` files when no language server
+ * offers it (Change Signature for C#, which Roslyn's server lacks).
+ */
+export function registerRefactoringFallback(id: RefactoringId, language: string, run: RefactoringFallback): () => void {
+  const key = `${id}\n${language}`;
+  fallbacks.set(key, run);
+  return () => {
+    if (fallbacks.get(key) === run) fallbacks.delete(key);
+  };
+}
+
 export async function runRefactoring(view: EditorView, id: RefactoringId): Promise<void> {
   const r = refactoring(id);
   const ctx = docOf(view);
@@ -176,6 +192,8 @@ export async function runRefactoring(view: EditorView, id: RefactoringId): Promi
     await runActions(view, r.label.replace(/…$/, ""), actions, id);
     return;
   }
+  const fallback = fallbacks.get(`${id}\n${ctx.language}`);
+  if (fallback && (await fallback(view))) return;
   const introduce = INTRODUCE[id];
   if (introduce) {
     const reason = answer.status === "ok" ? "empty" : answer.status === "notReady" ? "notReady" : "error";
@@ -242,6 +260,8 @@ export function refactorThisItems(
     else if (r.id === "safeDelete" && facts.symbol && !docOf(view)?.readOnly) go = () => run.safeDelete(view);
     else if (HIERARCHY_REFACTORINGS.has(r.id) && facts.hierarchy && serverUsable && run.hierarchy)
       go = () => run.hierarchy!(view, r.id === "pullMembersUp" ? "pullUp" : "pushDown");
+    else if (facts.symbol && !docOf(view)?.readOnly && fallbacks.has(`${r.id}\n${docOf(view)?.language}`))
+      go = () => runRefactoring(view, r.id);
     else if (INTRODUCE[r.id] && facts.expression && !serverUsable)
       go = () => introduceFallback(view, INTRODUCE[r.id]!, answer.status === "notReady" ? "notReady" : "error");
     if (!go) continue;

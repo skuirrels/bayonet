@@ -87,9 +87,9 @@ expui `fileTypes/h.svg`; that outline is modified from the original by JetBrains
 `src/ui/openidea/runConfigurations/springBoot*.svg` (the Spring Boot run configuration
 leaf) is OpenIDEA's own drawing.
 
-The lettering in `src-tauri/icons/source/openidea-wordmark*.svg` is outlined from
-Inter Tight (Copyright 2022 The Inter Project Authors, SIL Open Font License 1.1,
-https://github.com/rsms/inter-tight).
+The lettering in `src-tauri/icons/source/dotnetidea-wordmark*.svg` is outlined from
+Inter (Copyright 2016 The Inter Project Authors, SIL Open Font License 1.1,
+https://github.com/rsms/inter).
 
 ### MIT License (Rust and Cargo icons)
 
@@ -154,6 +154,18 @@ user's app-data directory only when the user asks; none of them ships with OpenI
   MIT-licensed), verifies its published SHA-256 and extracts only the jar; it is used
   unmodified, and its source is available from the repository above.
 - **Eclipse JDT Language Server** (jdtls): EPL-2.0, from download.eclipse.org.
+- **.NET tools** (installed with `dotnet tool install` into the app-data directory, or
+  from the projects' GitHub releases), each used unmodified:
+  - Roslyn language server (`roslyn-language-server`), MIT, <https://github.com/dotnet/roslyn>.
+  - csharp-ls, MIT, <https://github.com/razzmatazz/csharp-language-server>.
+  - FsAutoComplete, Apache-2.0, <https://github.com/ionide/FsAutoComplete>.
+  - LemMinX (XML), EPL-2.0, <https://github.com/eclipse/lemminx>.
+  - netcoredbg (.NET debugger, also copied into a container to debug there), MIT,
+    Copyright (c) Samsung Electronics, <https://github.com/Samsung/netcoredbg>.
+  - dotnet-counters, dotnet-trace and dotnet-monitor, MIT, <https://github.com/dotnet/diagnostics>
+    and <https://github.com/dotnet/dotnet-monitor>.
+- The Avalonia previewer host (`Avalonia.Designer.HostApp`, MIT) is not downloaded: it comes
+  with the Avalonia packages the user's project references.
 
 ## en_US / en_GB Hunspell dictionaries
 

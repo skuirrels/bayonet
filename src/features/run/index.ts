@@ -450,6 +450,22 @@ export function activate(): () => void {
         run: () => openImport("jetbrains"),
       },
       {
+        id: "run.runConfig",
+        title: "Run Configuration",
+        category: "Run",
+        hidden: true,
+        when: "projectOpen",
+        // `arg`: a configuration id or object. Reuses a running session of it, as Run does.
+        run: async ({ arg }) => {
+          await ensureConfigs();
+          const config = configFromArg(arg);
+          if (!config) return;
+          const target = selectedTarget(config.id, useRun.getState().sessions, useDebugRunSessions.getState().sessions);
+          if (target) target.rerun?.();
+          else await startRun(config);
+        },
+      },
+      {
         id: "run.debugConfig",
         title: "Debug Configuration",
         category: "Run",

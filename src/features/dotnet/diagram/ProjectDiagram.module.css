@@ -1,0 +1,92 @@
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-editor, var(--bg-app));
+  color: var(--fg);
+  font-size: var(--fs-ui);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.summary {
+  color: var(--fg-muted);
+}
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.canvas svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+
+.edge.cycle {
+  stroke: var(--warning);
+  stroke-dasharray: 4 3;
+  opacity: 0.9;
+}
+
+.edge.lit {
+  stroke: var(--accent);
+  opacity: 1;
+  stroke-width: 2;
+}
+
+.arrow {
+  fill: var(--fg-muted);
+}
+
+.arrowLit {
+  fill: var(--accent);
+}
+
+.node rect {
+  fill: var(--bg-elev);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.node {
+  cursor: pointer;
+}
+
+.node:hover rect,
+.node.lit rect {
+  stroke: var(--accent);
+}
+
+.node.selected rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.node.dim {
+  opacity: 0.35;
+}
+
+.node text {
+  fill: var(--fg);
+  font-size: 12px;
+  dominant-baseline: central;
+  text-anchor: middle;
+  pointer-events: none;
+}

@@ -28,6 +28,20 @@ impl<'a> Lines<'a> {
         Pos::new(line as u32, col as u32)
     }
 
+    /// Byte offset of `pos`, clamped to its line.
+    pub(crate) fn byte(&self, pos: Pos) -> usize {
+        let Some(&start) = self.starts.get(pos.line as usize) else { return self.text.len() };
+        let end = self.starts.get(pos.line as usize + 1).map_or(self.text.len(), |&s| s - 1);
+        let mut col = 0u32;
+        for (i, c) in self.text[start..end].char_indices() {
+            if col >= pos.col {
+                return start + i;
+            }
+            col += c.len_utf16() as u32;
+        }
+        end
+    }
+
     pub(crate) fn range(&self, start: usize, end: usize) -> Range {
         Range::new(self.pos(start), self.pos(end))
     }

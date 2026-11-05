@@ -36,6 +36,7 @@ import {
   type DebugSession,
 } from "../state";
 import { DebugConsole } from "./DebugConsole";
+import { ParallelStacks } from "../parallel/ParallelStacks";
 import { VariablesView, type VarRoot } from "./VariablesView";
 import { useExpressionCompletion } from "./ExpressionCompletion";
 import { sortVariables } from "../values";
@@ -100,7 +101,7 @@ function MoreActions() {
   );
 }
 
-type Tab = "variables" | "console";
+type Tab = "variables" | "parallel" | "console";
 
 function statusText(s: DebugSession): string {
   if (s.status === "terminated") return s.exitCode != null ? `Finished · exit code ${s.exitCode}` : "Finished";
@@ -147,7 +148,14 @@ export function DebugToolWindow() {
     setView({
       session: active.startedAt,
       status: active.status,
-      tab: active.status === "starting" ? "console" : active.status === "paused" ? "variables" : view.tab,
+      tab:
+        active.status === "starting"
+          ? "console"
+          : active.status === "paused"
+            ? view.tab === "parallel"
+              ? "parallel"
+              : "variables"
+            : view.tab,
     });
   const tab = view.tab;
 
@@ -168,8 +176,9 @@ export function DebugToolWindow() {
         <div role="tablist" aria-label={tx("Debug views")} className={styles.tabs}>
           {(
             [
-              ["variables", "Threads & Variables"],
-              ["console", "Console"],
+              ["variables", tx("Threads & Variables")],
+              ["parallel", tx("Parallel Stacks")],
+              ["console", tx("Console")],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -218,6 +227,8 @@ export function DebugToolWindow() {
       <div role="tabpanel" id={`debug-panel-${tab}`} aria-labelledby={`debug-tab-${tab}`} className={styles.panel}>
         {tab === "variables" ? (
           <ThreadsAndVariables session={active} />
+        ) : tab === "parallel" ? (
+          <ParallelStacks session={active} />
         ) : (
           <DebugConsole key={active.id} session={active} />
         )}

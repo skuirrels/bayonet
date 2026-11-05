@@ -308,7 +308,14 @@ impl Handler for ClientHandler {
                 Ok(Value::Null)
             }
             "workspace/inlineValue/refresh" => Ok(Value::Null),
-            other => Err((codes::METHOD_NOT_FOUND, format!("unsupported method {other}"))),
+            // Roslyn's Razor (cohosting) keeps the HTML of each Razor document on the
+            // client and asks it the HTML half of requests.
+            "razor/updateHtml" => Ok(Value::Null),
+            _ if is_razor_html_request(&params) => Ok(razor_html_answer(method)),
+            other => {
+                tracing::debug!("[{}] unsupported request {other}", self.server.name);
+                Err((codes::METHOD_NOT_FOUND, format!("unsupported method {other}")))
+            }
         }
     }
 
@@ -319,6 +326,34 @@ impl Handler for ClientHandler {
         {
             mgr.resync_documents(&self.server, self.generation);
         }
+    }
+}
+
+/// A request Roslyn's Razor sends for the HTML projection of a Razor document:
+/// the LSP method, with `{ checksum, request, textDocument }` as params.
+fn is_razor_html_request(params: &Value) -> bool {
+    params.get("checksum").is_some_and(Value::is_string) && params.get("request").is_some_and(Value::is_object)
+}
+
+/// "No HTML results" for a delegated request: no HTML server is attached to the
+/// projection, the editor's HTML mode covers the markup. A list where the method
+/// returns one (a `null` completion drops Razor's own items too).
+fn razor_html_answer(method: &str) -> Value {
+    match method {
+        "textDocument/completion" => json!({ "isIncomplete": false, "items": [] }),
+        "textDocument/documentHighlight"
+        | "textDocument/formatting"
+        | "textDocument/rangeFormatting"
+        | "textDocument/onTypeFormatting"
+        | "textDocument/foldingRange"
+        | "textDocument/documentColor"
+        | "textDocument/colorPresentation"
+        | "textDocument/codeAction"
+        | "textDocument/documentLink"
+        | "textDocument/references"
+        | "textDocument/implementation"
+        | "textDocument/documentSymbol" => json!([]),
+        _ => Value::Null,
     }
 }
 
@@ -360,5 +395,20 @@ fn merge(base: &mut Value, layer: Value) {
             }
         }
         (base, layer) => *base = layer,
+    }
+}
+
+#[cfg(test)]
+mod razor_tests {
+    use super::*;
+
+    #[test]
+    fn razor_html_requests_get_empty_answers() {
+        let html = json!({ "checksum": "0MCf", "request": { "position": { "line": 4, "character": 4 } }, "textDocument": { "uri": "file:///a/Home.razor" } });
+        assert!(is_razor_html_request(&html));
+        assert!(!is_razor_html_request(&json!({ "textDocument": { "uri": "file:///a/Home.razor" } })));
+        assert_eq!(razor_html_answer("textDocument/completion"), json!({ "isIncomplete": false, "items": [] }));
+        assert_eq!(razor_html_answer("textDocument/documentHighlight"), json!([]));
+        assert_eq!(razor_html_answer("textDocument/hover"), Value::Null);
     }
 }

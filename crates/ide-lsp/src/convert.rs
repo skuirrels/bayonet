@@ -568,6 +568,53 @@ pub fn code_action(conv: &Conv, a: lsp::CodeActionOrCommand, server: ServerId) -
     }
 }
 
+/// The command of Roslyn's action groups: its argument lists the actions of the
+/// group (`NestedCodeActions`), which the client is to offer as a submenu.
+const ROSLYN_NESTED: &str = "roslyn.client.nestedCodeAction";
+/// Groups within groups ("Suppress or configure issues") are followed this deep.
+const NESTED_DEPTH: usize = 3;
+
+/// One server action as the actions to offer: Roslyn's groups become their members,
+/// each titled with its path ("Introduce parameter for 'x' and update call sites
+/// directly"), so Refactor This and the intention list see them like any other
+/// action; resolving a member works as usual.
+pub fn code_actions(conv: &Conv, a: lsp::CodeActionOrCommand, server: ServerId) -> Vec<CodeAction> {
+    flatten_nested(conv, code_action(conv, a, server), 0)
+}
+
+fn flatten_nested(conv: &Conv, action: CodeAction, depth: usize) -> Vec<CodeAction> {
+    let nested = action
+        .command
+        .as_ref()
+        .filter(|c| c.command == ROSLYN_NESTED && depth < NESTED_DEPTH)
+        .and_then(|c| c.arguments.first())
+        .and_then(|a| a.get("NestedCodeActions"))
+        .and_then(|n| serde_json::from_value::<Vec<lsp::CodeAction>>(n.clone()).ok())
+        .filter(|n| !n.is_empty());
+    let Some(nested) = nested else { return vec![action] };
+    nested
+        .into_iter()
+        .flat_map(|child| {
+            let mut child = code_action(conv, lsp::CodeActionOrCommand::CodeAction(child), action.server);
+            child.title = nested_title(&action.title, &child.title);
+            child.kind = child.kind.or_else(|| action.kind.clone());
+            flatten_nested(conv, child, depth + 1)
+        })
+        .collect()
+}
+
+/// "Introduce local" + "Introduce local for 'x'" → the member's title; a member that
+/// continues the group's sentence ("and update call sites directly") follows it.
+fn nested_title(group: &str, member: &str) -> String {
+    if member.starts_with(group) {
+        member.to_owned()
+    } else if member.starts_with(char::is_lowercase) {
+        format!("{group} {member}")
+    } else {
+        format!("{group}: {member}")
+    }
+}
+
 pub fn lsp_code_action(a: &CodeAction) -> lsp::CodeAction {
     lsp::CodeAction {
         title: a.title.clone(),
@@ -1036,6 +1083,53 @@ pub fn ranges_overlap(a: lsp::Range, b: lsp::Range) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roslyn_action_groups_become_their_members() {
+        let member = |title: &str| serde_json::json!({ "title": title, "kind": "refactor", "data": { "CodeActionPath": ["g", title] } });
+        let group = |title: &str, kind: Option<&str>, members: Vec<serde_json::Value>| {
+            let mut a = lsp::CodeAction {
+                title: title.into(),
+                kind: kind.map(|k| lsp::CodeActionKind::from(k.to_owned())),
+                command: Some(lsp::Command {
+                    title: title.into(),
+                    command: ROSLYN_NESTED.into(),
+                    arguments: Some(vec![serde_json::json!({ "NestedCodeActions": members })]),
+                }),
+                ..Default::default()
+            };
+            a.data = None;
+            lsp::CodeActionOrCommand::CodeAction(a)
+        };
+        let conv = Conv::utf16();
+        let titles =
+            |a: Vec<CodeAction>| a.into_iter().map(|a| (a.title, a.kind, a.data.is_some())).collect::<Vec<_>>();
+        let params = group(
+            "Introduce parameter for '0.1m'",
+            Some("refactor"),
+            vec![member("and update call sites directly"), member("into new overload")],
+        );
+        assert_eq!(
+            titles(code_actions(&conv, params, ServerId(1))),
+            [
+                ("Introduce parameter for '0.1m' and update call sites directly".into(), Some("refactor".into()), true),
+                ("Introduce parameter for '0.1m' into new overload".into(), Some("refactor".into()), true),
+            ]
+        );
+        let local = group("Introduce local", None, vec![member("Introduce local for 'a * b'")]);
+        assert_eq!(titles(code_actions(&conv, local, ServerId(1)))[0].0, "Introduce local for 'a * b'");
+        // Groups in groups, and a group without members, which stays as it is.
+        let inner = match group("Suppress IDE0008", None, vec![member("in Source")]) {
+            lsp::CodeActionOrCommand::CodeAction(a) => serde_json::to_value(a).unwrap(),
+            lsp::CodeActionOrCommand::Command(_) => unreachable!(),
+        };
+        let outer = group("Suppress or configure issues", Some("quickfix"), vec![inner]);
+        assert_eq!(
+            titles(code_actions(&conv, outer, ServerId(1))),
+            [("Suppress or configure issues: Suppress IDE0008 in Source".into(), Some("refactor".into()), true)]
+        );
+        assert_eq!(code_actions(&conv, group("Empty", None, vec![]), ServerId(1)).len(), 1);
+    }
     use serde_json::json;
 
     #[test]

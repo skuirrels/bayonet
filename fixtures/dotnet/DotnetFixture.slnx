@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Fixture.Api/Fixture.Api.csproj" />
+    <Project Path="src/Fixture.AppHost/Fixture.AppHost.csproj" />
     <Project Path="src/Fixture.Cli/Fixture.Cli.csproj" />
     <Project Path="src/Fixture.Core/Fixture.Core.csproj" />
     <Project Path="src/Fixture.FSharp/Fixture.FSharp.fsproj" />

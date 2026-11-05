@@ -12,6 +12,7 @@ pub mod adapter;
 pub mod attach;
 mod cargo;
 pub mod connection;
+pub mod container;
 mod dotnet;
 pub mod jdwp;
 pub mod kotlin;
@@ -126,6 +127,8 @@ pub struct DebugCapabilities {
     pub log_points: bool,
     /// HotSwap ("Reload Changed Classes"): java-debug's `redefineClasses` request.
     pub hot_code_replace: bool,
+    /// Set Next Statement: `gotoTargets` and `goto`.
+    pub goto_targets: bool,
 }
 
 /// Result of [`DebugManager::redefine_classes`].
@@ -491,6 +494,7 @@ pub(crate) fn capabilities_from(caps: &Value) -> DebugCapabilities {
         hit_conditional_breakpoints: has("supportsHitConditionalBreakpoints"),
         log_points: has("supportsLogPoints"),
         hot_code_replace: false,
+        goto_targets: has("supportsGotoTargetsRequest"),
     }
 }
 
@@ -589,6 +593,9 @@ impl DebugManager {
         }
         if let Some(command) = custom_command(&spec.command) {
             spec.command = command;
+        }
+        if let Some(pipe) = arguments.as_object_mut().and_then(|o| o.remove("pipeTransport")) {
+            container::apply_pipe_transport(&mut spec, &pipe)?;
         }
         // debugpy: run the adapter with the debuggee's interpreter (venvs carry their own debugpy).
         if config.adapter == "debugpy" {
@@ -896,6 +903,12 @@ impl DebugManager {
                 }
                 Err(_) => return Err(DapError::Timeout(s.request.clone()).into()),
             }
+        }
+        // Like VS Code, ask for the threads once after configuration: lldb-dap answers the
+        // first `threads` request with the list it cached at launch (only the main thread),
+        // which would otherwise be what the Threads view and Parallel Stacks get at the first stop.
+        if s.adapter != kotlin::ADAPTER {
+            let _ = s.conn.send_request("threads", Value::Null);
         }
         if let Some(relay) = s.kotlin_relay.lock().as_mut() {
             relay.release();
@@ -1359,6 +1372,46 @@ impl DebugManager {
             return Err(IdeError::unavailable(format!("debug adapter `{}` cannot reset frames", session.adapter)));
         }
         session.conn.request_timeout("restartFrame", json!({ "frameId": frame_id }), REQUEST_TIMEOUT).await?;
+        Ok(())
+    }
+
+    /// Set Next Statement: moves `thread_id`'s execution point to `line` (0-based) of `path`
+    /// without running the code in between (`gotoTargets`, then `goto` to the first target).
+    /// The adapter reports the move as a `stopped` event.
+    pub async fn set_next_statement(
+        &self,
+        s: DebugSessionId,
+        thread_id: i64,
+        path: PathBuf,
+        line: u32,
+    ) -> IdeResult<()> {
+        let session = self.session(s)?;
+        if !session.supports("supportsGotoTargetsRequest") {
+            return Err(IdeError::unavailable(format!(
+                "debug adapter `{}` cannot set the next statement",
+                session.adapter
+            )));
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let body = session
+            .conn
+            .request_timeout(
+                "gotoTargets",
+                json!({ "source": { "name": name, "path": path.display().to_string() }, "line": line + 1 }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        let target = body
+            .get("targets")
+            .and_then(Value::as_array)
+            .and_then(|t| t.first())
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| IdeError::invalid(format!("execution cannot move to line {}", line + 1)))?;
+        session
+            .conn
+            .request_timeout("goto", json!({ "threadId": thread_id, "targetId": target }), REQUEST_TIMEOUT)
+            .await?;
         Ok(())
     }
 

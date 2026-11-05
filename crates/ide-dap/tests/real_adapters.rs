@@ -645,3 +645,378 @@ async fn attach_to_processes() {
     }
     assert!(failures.is_empty(), "failed: {failures:?}");
 }
+
+/// Parallel Stacks (DBG-6) needs every thread's stack while stopped: four workers parked in
+/// `wait_here` (through `worker`) and `main` in `pthread_join` all report their own frames.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs lldb-dap and clang"]
+async fn lldb_dap_reports_every_threads_stack() {
+    add_managed_tools_to_path();
+    if !installed("lldb-dap") {
+        eprintln!("lldb-dap not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("openidea-parallel-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("threads.c");
+    std::fs::write(
+        &source,
+        r#"#include <pthread.h>
+#include <stdatomic.h>
+#include <unistd.h>
+
+static atomic_int started;
+static volatile int spin = 1;
+
+static void wait_here(int id) {
+    while (spin) usleep(1000 * (id + 1));
+}
+
+static void *worker(void *arg) {
+    atomic_fetch_add(&started, 1);
+    wait_here((int)(long)arg);
+    return 0;
+}
+
+int main(void) {
+    pthread_t t[4];
+    for (long i = 0; i < 4; i++) pthread_create(&t[i], 0, worker, (void *)i);
+    while (atomic_load(&started) < 4) usleep(1000);
+    usleep(100000);
+    int stop = 0; // break here
+    for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
+    return stop;
+}
+"#,
+    )
+    .unwrap();
+    let program = dir.join("threads");
+    let built = std::process::Command::new("clang")
+        .args(["-g", "-O0", "-pthread", "-o"])
+        .arg(&program)
+        .arg(&source)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(built, "clang could not build the fixture");
+    let run = Run::new();
+    let m = &run.manager;
+    // 0-based line of `int stop = 0;`.
+    m.set_breakpoints(source.clone(), vec![line_bp_at(22)]).await.unwrap();
+    let seen = run.seen();
+    m.start(launch("lldb-dap", &program, &dir, serde_json::json!({})), run.owner.clone()).await.unwrap();
+    let (s, thread, _) = run.stopped_after(seen).await.expect("stopped at the breakpoint");
+    assert_eq!(run.top(s, thread).await.line, 22);
+    let threads = m.threads(s).await.unwrap();
+    let mut in_worker = 0;
+    for t in &threads {
+        let frames = m.stack_trace(s, t.id).await.unwrap();
+        let names: Vec<&str> = frames.iter().map(|f| f.name.as_str()).collect();
+        if names.iter().any(|n| n.contains("wait_here")) {
+            assert!(names.iter().any(|n| n.contains("worker")), "{names:?}");
+            in_worker += 1;
+        }
+    }
+    assert_eq!(in_worker, 4, "{} threads", threads.len());
+    m.stop(s).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- netcoredbg ------------------------------------------------------------------------
+
+const DEMO_CSPROJ: &str = r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"#;
+
+const DEMO_PROGRAM: &str = r#"record Order(int Id, decimal Total);
+
+static class Program
+{
+    static readonly CountdownEvent Started = new(4);
+    static readonly ManualResetEventSlim Gate = new(false);
+
+    static void Park(int id) => Gate.Wait();
+
+    static void Worker(object? id)
+    {
+        Started.Signal();
+        Park((int)id!);
+    }
+
+    static decimal Tick(decimal t)
+    {
+        Thread.Sleep(50);
+        return t + 1; // tick
+    }
+
+    static int Main(string[] args)
+    {
+        var total = 0m;
+        if (args.Length > 0 && args[0] == "wait")
+            while (total < 100_000) total = Tick(total);
+        var workers = new Thread[4];
+        for (var i = 0; i < 4; i++)
+        {
+            workers[i] = new Thread(Worker) { Name = $"Worker {i}" };
+            workers[i].Start(i);
+        }
+        Started.Wait();
+        var orders = new List<Order> { new(1, 12.5m), new(2, 3m), new(3, 40m) };
+        total = orders.Sum(o => o.Total); // break here
+        total += 1; // next
+        Gate.Set();
+        foreach (var w in workers) w.Join();
+        return total > 0 ? 0 : 1;
+    }
+}
+"#;
+
+/// 0-based line of the line containing `marker`.
+fn line_of(text: &str, marker: &str) -> u32 {
+    text.lines().position(|l| l.contains(marker)).unwrap_or_else(|| panic!("no {marker}")) as u32
+}
+
+/// A console project in a fresh temp directory (`Demo.csproj`, `Program.cs`).
+fn demo_project(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("openidea-netcoredbg-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Demo.csproj"), DEMO_CSPROJ).unwrap();
+    std::fs::write(dir.join("Program.cs"), DEMO_PROGRAM).unwrap();
+    real(dir)
+}
+
+/// The compiler records real paths and netcoredbg matches breakpoints by path, so the
+/// temp directory's `/var` → `/private/var` symlink must be resolved.
+fn real(dir: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&dir).unwrap_or(dir)
+}
+
+fn netcoredbg(request: &str, cwd: &Path, extra: serde_json::Value) -> LaunchConfig {
+    LaunchConfig {
+        name: "netcoredbg".into(),
+        adapter: "netcoredbg".into(),
+        request: request.into(),
+        program: None,
+        args: vec![],
+        cwd: Some(cwd.into()),
+        env: BTreeMap::new(),
+        extra_json: Some(extra.to_string()),
+    }
+}
+
+/// Waits up to `secs` for a `stopped` event after `seen`.
+async fn stopped_within(run: &Run, seen: usize, secs: u64) -> Option<(DebugSessionId, i64, String)> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        if let Some(found) = run.stopped_after(seen).await {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// DBG-1/3/6 with netcoredbg: a `dotnet` launch builds and runs the project and stops at a
+/// breakpoint; every worker thread's stack is readable (Parallel Stacks); a `List<T>`'s
+/// children are named `[0]`… with their own members (the collection visualiser's input);
+/// Set Next Statement works when netcoredbg advertises `gotoTargets`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs netcoredbg and the .NET SDK"]
+async fn netcoredbg_launches_a_project_and_reads_threads_and_collections() {
+    add_managed_tools_to_path();
+    if !installed("netcoredbg") {
+        eprintln!("netcoredbg not installed");
+        return;
+    }
+    let dir = demo_project("launch");
+    let source = dir.join("Program.cs");
+    let at = line_of(DEMO_PROGRAM, "// break here");
+    let run = Run::new();
+    let m = &run.manager;
+    m.set_breakpoints(source.clone(), vec![line_bp_at(at)]).await.unwrap();
+    let seen = run.seen();
+    let config = netcoredbg("launch", &dir, serde_json::json!({ "dotnet": { "project": dir } }));
+    m.start(config, run.owner.clone()).await.expect("start");
+    let (s, thread, reason) = stopped_within(&run, seen, 120).await.expect("stopped at the breakpoint");
+    println!("stopped: {reason}");
+    let top = run.top(s, thread).await;
+    assert_eq!(top.line, at, "{top:?}");
+
+    let threads = m.threads(s).await.unwrap();
+    let mut parked = 0;
+    for t in &threads {
+        let names: Vec<String> = m.stack_trace(s, t.id).await.unwrap().into_iter().map(|f| f.name).collect();
+        if names.iter().any(|n| n.contains("Program.Park")) {
+            assert!(names.iter().any(|n| n.contains("Program.Worker")), "{names:?}");
+            parked += 1;
+        }
+    }
+    assert_eq!(parked, 4, "{} threads", threads.len());
+
+    let scopes = m.scopes(s, top.id).await.unwrap();
+    let locals = m.variables(s, scopes[0].variables_reference).await.unwrap();
+    let orders = locals.iter().find(|v| v.name == "orders").expect("orders local");
+    assert!(orders.variables_reference > 0);
+    let children = m.variables(s, orders.variables_reference).await.unwrap();
+    let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+    println!("orders children: {names:?}");
+    // No type proxies: a list is its fields, `_items` holding `_size` elements and spare
+    // capacity (what the collection visualiser's `backingArray` reads).
+    let size = children.iter().find(|c| c.name == "_size").expect("_size field");
+    assert_eq!(size.value, "3");
+    let items = children.iter().find(|c| c.name == "_items").expect("_items field");
+    let elements = m.variables(s, items.variables_reference).await.unwrap();
+    assert_eq!(elements.first().map(|e| e.name.as_str()), Some("[0]"));
+    // The visualiser's fallback for other collections: an array copy by `ToArray()`.
+    let copy = m.evaluate(s, Some(top.id), "(orders).ToArray()".into()).await.expect("ToArray evaluates");
+    let copied = m.variables(s, copy.variables_reference).await.unwrap();
+    assert_eq!(copied.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["[0]", "[1]", "[2]"]);
+    let first = &elements[0];
+    let members = m.variables(s, first.variables_reference).await.unwrap();
+    let total = members.iter().find(|v| v.name == "Total").expect("Total member");
+    assert_eq!(total.value, "12.5");
+
+    let caps = m.capabilities(s).unwrap();
+    println!("netcoredbg gotoTargets: {}", caps.goto_targets);
+    if caps.goto_targets {
+        let next = line_of(DEMO_PROGRAM, "// next");
+        let seen = run.seen();
+        m.set_next_statement(s, thread, source.clone(), next).await.expect("set next statement");
+        let _ = stopped_within(&run, seen, 10).await;
+        assert_eq!(run.top(s, thread).await.line, next);
+    }
+    m.stop(s).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn dotnet_build(dir: &Path) {
+    let ok = std::process::Command::new("dotnet")
+        .args(["build", "-nologo", "-v:q"])
+        .current_dir(dir)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "dotnet build failed in {}", dir.display());
+}
+
+/// Kills the child when dropped (a failed assertion must not leave the debuggee running).
+struct Child(std::process::Child);
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// DBG-4: Attach to Process with netcoredbg (`attach` with `processId`) to a running
+/// `dotnet <app>.dll`, then a breakpoint set after attaching hits.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs netcoredbg and the .NET SDK"]
+async fn netcoredbg_attaches_to_a_running_process() {
+    add_managed_tools_to_path();
+    if !installed("netcoredbg") {
+        eprintln!("netcoredbg not installed");
+        return;
+    }
+    let dir = demo_project("attach");
+    dotnet_build(&dir);
+    let child = Child(
+        std::process::Command::new("dotnet")
+            .args(["bin/Debug/net10.0/Demo.dll", "wait"])
+            .current_dir(&dir)
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let run = Run::new();
+    let m = &run.manager;
+    let seen = run.seen();
+    let s = m
+        .start(netcoredbg("attach", &dir, serde_json::json!({ "processId": child.0.id() })), run.owner.clone())
+        .await
+        .expect("attach");
+    let tick = line_of(DEMO_PROGRAM, "// tick");
+    m.set_breakpoints(dir.join("Program.cs"), vec![line_bp_at(tick)]).await.unwrap();
+    let (s2, thread, _) = stopped_within(&run, seen, 30).await.expect("breakpoint hit after attaching");
+    assert_eq!(s2, s);
+    assert_eq!(run.top(s, thread).await.line, tick);
+    m.stop(s).await.unwrap();
+    drop(child);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// DBG-5: a Microsoft.Testing.Platform test app started with
+/// `TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER=1` (as the Unit Tests window's Debug does) waits;
+/// netcoredbg attaches and a breakpoint in the test hits.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs netcoredbg and the .NET SDK"]
+async fn netcoredbg_debugs_a_waiting_test_app() {
+    add_managed_tools_to_path();
+    if !installed("netcoredbg") {
+        eprintln!("netcoredbg not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("openidea-netcoredbg-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = real(dir);
+    std::fs::write(
+        dir.join("Demo.Tests.csproj"),
+        r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <EnableMSTestRunner>true</EnableMSTestRunner>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="4.5.2" />
+  </ItemGroup>
+</Project>
+"#,
+    )
+    .unwrap();
+    let test = r#"using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+[TestClass]
+public sealed class MathTests
+{
+    [TestMethod]
+    public void Adds()
+    {
+        var sum = 2 + 3; // test line
+        Assert.AreEqual(5, sum);
+    }
+}
+"#;
+    std::fs::write(dir.join("MathTests.cs"), test).unwrap();
+    dotnet_build(&dir);
+    let child = Child(
+        std::process::Command::new(dir.join("bin/Debug/net10.0/Demo.Tests"))
+            .env("TESTINGPLATFORM_WAIT_ATTACH_DEBUGGER", "1")
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let run = Run::new();
+    let m = &run.manager;
+    let at = line_of(test, "// test line");
+    m.set_breakpoints(dir.join("MathTests.cs"), vec![line_bp_at(at)]).await.unwrap();
+    let seen = run.seen();
+    let s = m
+        .start(netcoredbg("attach", &dir, serde_json::json!({ "processId": child.0.id() })), run.owner.clone())
+        .await
+        .expect("attach");
+    let (_, thread, _) = stopped_within(&run, seen, 60).await.expect("breakpoint in the test hit");
+    assert_eq!(run.top(s, thread).await.line, at);
+    m.stop(s).await.unwrap();
+    drop(child);
+    let _ = std::fs::remove_dir_all(&dir);
+}

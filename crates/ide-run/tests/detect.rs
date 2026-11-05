@@ -665,12 +665,20 @@ fn dotnet_runs_each_launch_profile_of_executable_projects() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
     let c = detect(&fixture);
     let dotnet: Vec<&str> = ids(&c).into_iter().filter(|id| id.starts_with("dotnet:")).collect();
-    assert_eq!(dotnet, ["dotnet:run:Fixture.Api:http", "dotnet:run:Fixture.Cli", "dotnet:test"]);
+    assert_eq!(
+        dotnet,
+        ["dotnet:run:Fixture.Api:http", "dotnet:run:Fixture.AppHost:http", "dotnet:run:Fixture.Cli", "dotnet:test"]
+    );
     let api = find(&c, "dotnet:run:Fixture.Api:http");
     assert_eq!((api.name.as_str(), api.kind.as_str()), ("Fixture.Api: http", "dotnet"));
     assert_eq!(cmdline(api), "dotnet run --project src/Fixture.Api/Fixture.Api.csproj --launch-profile http");
     assert_eq!(api.debug_adapter.as_deref(), Some("netcoredbg"));
     assert_eq!(cmdline(find(&c, "dotnet:run:Fixture.Cli")), "dotnet run --project src/Fixture.Cli/Fixture.Cli.csproj");
+    // The Aspire window starts the AppHost through this configuration (BLD-5).
+    assert_eq!(
+        cmdline(find(&c, "dotnet:run:Fixture.AppHost:http")),
+        "dotnet run --project src/Fixture.AppHost/Fixture.AppHost.csproj --launch-profile http"
+    );
     let test = find(&c, "dotnet:test");
     assert!(test.is_test);
     assert_eq!(cmdline(test), "dotnet test DotnetFixture.slnx");

@@ -268,6 +268,34 @@ const popups: Scenario = {
   },
 };
 
+/**
+ * NFR-3: Ctrl+Space → the completion lookup painted, 12 times in the Kotlin sample.
+ * This is the client's share (the lookup is built from the file's words when there is
+ * no language server); the server's answer time adds to it in the app. CodeMirror waits
+ * a fixed 50 ms before it queries the sources of an explicit Ctrl+Space.
+ */
+const completion: Scenario = {
+  id: "completion",
+  title: "Open the completion popup",
+  async run(h) {
+    await h.openFile(SAMPLE);
+    const st = await h.editorState();
+    await h.setCursor(Math.floor((st?.length ?? 0) / 2));
+    await h.page.keyboard.press("End");
+    await h.page.keyboard.press("Enter");
+    const samples: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      await h.page.keyboard.insertText("or");
+      samples.push(await h.measure(() => h.pressAction("code.completion"), ".cm-tooltip-autocomplete li"));
+      await h.page.keyboard.press("Escape");
+      await h.page.locator(".cm-tooltip-autocomplete").waitFor({ state: "detached" });
+      await h.page.keyboard.press("Backspace");
+      await h.page.keyboard.press("Backspace");
+    }
+    return latencySummary(samples, "popup");
+  },
+};
+
 const TOOL_WINDOWS: Array<[string, string]> = [
   ["toolwindow.problems", "Problems"],
   ["toolwindow.run", "Run"],
@@ -370,6 +398,7 @@ export const SCENARIOS: Scenario[] = [
   typingLarge,
   typingAngular,
   keyRepeat,
+  completion,
   scroll,
   tabs,
   popups,
