@@ -1,8 +1,8 @@
 /**
- * Memory indicator ("DotnetIDEA 560M") with a details popup. Unlike IDEA's JVM heap
+ * Memory indicator ("Bayonet 560M") with a details popup. Unlike IDEA's JVM heap
  * there is no maximum to measure headroom against, so the widget shows the
- * footprint of DotnetIDEA's own processes and no fill bar; the popup breaks down
- * DotnetIDEA, language servers and other processes.
+ * footprint of Bayonet's own processes and no fill bar; the popup breaks down
+ * Bayonet, language servers and other processes.
  */
 import { useEffect, useRef } from "react";
 import clsx from "clsx";

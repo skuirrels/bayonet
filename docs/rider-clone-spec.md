@@ -1,4 +1,4 @@
-# DotnetIDEA: specification for a Rider-class .NET IDE
+# Bayonet: specification for a Rider-class .NET IDE
 
 Status: draft 1, 2026-10-31
 Reference product: JetBrains Rider 2026.2.4 (build 262.11879.110), installed at `~/Applications/Rider.app`
@@ -94,7 +94,7 @@ Inference: the parts of Rider we cannot reuse are its own C# engine (PSI, daemon
 OpenIDEA is LSP-first with a tree-sitter fallback and no PSI of its own (section 4). The port keeps that shape: Rider's ReSharper Host is replaced by Roslyn's language server plus a small .NET sidecar, both driven from the existing Rust core.
 
 ```
-+---------------------- DotnetIDEA (ported from OpenIDEA) ----------------------+
++----------------------- Bayonet (ported from OpenIDEA) -----------------------+
 |  React 19 + CodeMirror 6 UI   src/features/*  (+ dotnet: Solution Explorer,  |
 |                               NuGet, Unit Tests, .NET run/debug forms)       |
 |  Rust core  crates/ide-*      ide-host, ide-lsp, ide-dap, ide-run, ide-sdk,  |
@@ -102,7 +102,7 @@ OpenIDEA is LSP-first with a tree-sitter fallback and no PSI of its own (section
 +-----------+------------------------------+------------------------+---------+
             | LSP (stdio)                  | JSON-RPC (ide-jsonrpc) | DAP
 +-----------v-------------+  +-------------v-------------+  +-------v--------+
-| Roslyn language server  |  | DotnetIDEA.Host (.NET 10) |  | netcoredbg     |
+| Roslyn language server  |  | Bayonet.Host (.NET 10)    |  | netcoredbg     |
 | Microsoft.CodeAnalysis. |  |  - sln/slnx/slnf edits    |  | (coreclr)      |
 | LanguageServer (MIT)    |  |    (SolutionPersistence)  |  | Mono soft dbg  |
 |  + Razor cohosting      |  |  - MSBuild evaluation     |  | later          |
@@ -117,7 +117,7 @@ Design rules:
 - **Reuse OpenIDEA's protocol clients.** Roslyn LSP goes through `ide-lsp` like jdtls does today; the sidecar uses `ide-jsonrpc`; netcoredbg goes through `ide-dap`. No new transport, and nothing like Rider's Rd protocol.
 - **Use Roslyn's language server unmodified**, downloaded on request by `ide-tools`, replacing `csharp-ls` in `languages/csharp.toml`. Its non-standard messages (`solution/open`, `project/open`, project initialisation status, source-generated documents, decompiled sources) get a server-specific module `crates/ide-lsp/src/roslyn.rs`, modelled on `jdtls.rs`. Fork it only if an extension point is missing.
 - **The sidecar covers what LSP does not**: solution structure and edits, NuGet, test discovery and execution, and decompilation for assemblies Roslyn will not open. It is a separate process so it can crash or restart without affecting editing (NFR-4).
-- **Rust owns UI-facing state.** Files, buffers, run configurations (`.dotnetidea/run.toml`) and the solution tree cache live in the Rust core. The .NET processes are services, not sources of truth.
+- **Rust owns UI-facing state.** Files, buffers, run configurations (`.bayonet/run.toml`) and the solution tree cache live in the Rust core. The .NET processes are services, not sources of truth.
 - **Resolve, do not bundle, what the user has**: the dotnet SDK and MSBuild through `global.json`. Download on request, as OpenIDEA does today, anything the SDK does not provide: Roslyn LSP, netcoredbg, fsautocomplete. Never use vsdbg or C# Dev Kit (K3).
 - **Use the latest .NET SDK (10.0.4xx on this machine) and latest stable NuGet packages** throughout, pinned and updated per release.
 
@@ -143,7 +143,7 @@ U1 is resolved: OpenIDEA has no PSI, so semantic depth depends entirely on the l
 ### 4.2 Port mechanics
 
 1. **Bring the history across.** Clone `/Users/tyomidi/Source/openidea` into `dotnetidea` with full history, then rename the remote to `upstream`, so OpenIDEA fixes can still be merged. Record the base commit (`4796265`) in `docs/porting.md`.
-2. **Rebrand in one commit.** Change product name, bundle id, icons, the `openidea-server` binary name, the `.openidea/` project directory (to `.dotnetidea/`, migrating existing ones), locale strings and the website links. Keep identifiers in Rust module paths for now; renaming those makes upstream merges harder.
+2. **Rebrand in one commit.** Change product name, bundle id, icons, the `openidea-server` binary name, the `.openidea/` project directory (to `.bayonet/`, migrating existing ones), locale strings and the website links. Keep identifiers in Rust module paths for now; renaming those makes upstream merges harder.
 3. **Keep attribution.** Preserve `LICENSE` and `NOTICE`, add a line crediting OpenIDEA, and keep `THIRD_PARTY_LICENSES.md` current. Keep `deny.toml` as it is.
 4. **Change the default focus.** Make the Visual Studio keymap and the .NET language set the defaults. Other languages stay available; removing them buys little and makes merges harder.
 5. **CI stays as is** (fmt, clippy, nextest on three OSes, cargo-deny, Playwright). Add a job that installs the .NET 10 SDK and runs the .NET fixtures.
@@ -173,7 +173,7 @@ U1 is resolved: OpenIDEA has no PSI, so semantic depth depends entirely on the l
 | `src/platform/keymap.ts`                                                                                                                                      | Adapt             | Visual Studio keymap, set as default                                                                                                                                                                              |
 | `src/editor/refactor/catalog.ts`                                                                                                                              | Adapt             | Map Roslyn code-action kinds and titles onto the refactoring menu                                                                                                                                                 |
 | **New** `crates/ide-dotnet`                                                                                                                                   | Build             | sln/slnx/slnf reader (fast, Rust, for instant tree), sidecar process manager, caches                                                                                                                              |
-| **New** `dotnet/DotnetIDEA.Host`                                                                                                                              | Build             | .NET 10 sidecar: SolutionPersistence, MSBuild evaluation (`Microsoft.Build` + MSBuildLocator), NuGet client, VSTest and Microsoft.Testing.Platform, ICSharpCode.Decompiler                                        |
+| **New** `dotnet/Bayonet.Host`                                                                                                                                 | Build             | .NET 10 sidecar: SolutionPersistence, MSBuild evaluation (`Microsoft.Build` + MSBuildLocator), NuGet client, VSTest and Microsoft.Testing.Platform, ICSharpCode.Decompiler                                        |
 | **New** `fixtures/dotnet/`                                                                                                                                    | Build             | Multi-project slnx with web API, class library, xUnit v3, NUnit and MSTest projects, CPM, multi-targeting, a source generator, an F# project and an Aspire AppHost                                                |
 | `ide-build` Maven/Gradle, `ide-notebook`, Java-specific `ops/java.rs`                                                                                         | Keep, not default | No work; keep so upstream merges stay clean                                                                                                                                                                       |
 | `ide-plugin`, `wit/plugin.wit`                                                                                                                                | Port as is        | None for .NET (OI8); later ABI growth is an upstream concern                                                                                                                                                      |
@@ -298,14 +298,14 @@ Git and hosting integrations, terminal, database client (including SQL Server), 
 
 Each phase ends with its acceptance tests passing in CI on the `fixtures/dotnet/` solution.
 
-| Phase                   | Goal                                                                    | Requirements                                    | Main work (section 4.3)                                                                                                  |
-| ----------------------- | ----------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 0. Port                 | DotnetIDEA builds, runs and passes OpenIDEA's own CI under the new name | none new                                        | Port mechanics 4.2, `fixtures/dotnet/`, .NET CI job                                                                      |
-| 1. Edit                 | A C# solution opens with full Roslyn insight                            | SLN-1, SLN-2, CI-1 to CI-5, CI-11, NUG-1, PLT-1 | `SdkKind::Dotnet`, Roslyn LSP install and `roslyn.rs`, `ide-dotnet` slnx reader, Solution Explorer, Visual Studio keymap |
-| 2. Build, run, debug    | Daily inner loop without leaving the IDE                                | BLD-1, BLD-2, DBG-1, DBG-2, SLN-3               | `BuildSystem::Dotnet`, `detect_dotnet`, coreclr launch template, TFM switcher                                            |
-| 3. Test and packages    | Tests and NuGet at Rider's level of convenience                         | TST-1, TST-2, NUG-2, NUG-3, SLN-4, SLN-5, SLN-7 | `DotnetIDEA.Host` sidecar (NuGet, VSTest/MTP, SolutionPersistence), NuGet window, Unit Tests window                      |
-| 4. Parity for daily use | Remaining P1                                                            | all P1 IDs                                      | Refactoring catalogue, decompiled sources, solution-wide analysis, Hot Reload, Aspire, coverage, EF Core, F#             |
-| 5. Beyond               | P2                                                                      | all P2 IDs                                      | Profiler, Razor, XAML, structural search, Unity/Mono, remote and container debugging                                     |
+| Phase                   | Goal                                                                 | Requirements                                    | Main work (section 4.3)                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 0. Port                 | Bayonet builds, runs and passes OpenIDEA's own CI under the new name | none new                                        | Port mechanics 4.2, `fixtures/dotnet/`, .NET CI job                                                                      |
+| 1. Edit                 | A C# solution opens with full Roslyn insight                         | SLN-1, SLN-2, CI-1 to CI-5, CI-11, NUG-1, PLT-1 | `SdkKind::Dotnet`, Roslyn LSP install and `roslyn.rs`, `ide-dotnet` slnx reader, Solution Explorer, Visual Studio keymap |
+| 2. Build, run, debug    | Daily inner loop without leaving the IDE                             | BLD-1, BLD-2, DBG-1, DBG-2, SLN-3               | `BuildSystem::Dotnet`, `detect_dotnet`, coreclr launch template, TFM switcher                                            |
+| 3. Test and packages    | Tests and NuGet at Rider's level of convenience                      | TST-1, TST-2, NUG-2, NUG-3, SLN-4, SLN-5, SLN-7 | `Bayonet.Host` sidecar (NuGet, VSTest/MTP, SolutionPersistence), NuGet window, Unit Tests window                         |
+| 4. Parity for daily use | Remaining P1                                                         | all P1 IDs                                      | Refactoring catalogue, decompiled sources, solution-wide analysis, Hot Reload, Aspire, coverage, EF Core, F#             |
+| 5. Beyond               | P2                                                                   | all P2 IDs                                      | Profiler, Razor, XAML, structural search, Unity/Mono, remote and container debugging                                     |
 
 Phase 1 is the go/no-go point. If Roslyn LSP inside OpenIDEA's LSP layer cannot reach CI-1 to CI-5 and NFR-3, revisit the architecture before building phases 2 to 5.
 
@@ -317,7 +317,7 @@ Phase 1 is the go/no-go point. If Roslyn LSP inside OpenIDEA's LSP layer cannot 
 | K2  | netcoredbg lags Rider's debugger (evaluation, Hot Reload, mixed mode).                                                      | Ship netcoredbg for P0; evaluate building a debugger on `ClrMD` and ICorDebug later.                                                   |
 | K3  | Microsoft's vsdbg and C# Dev Kit are licensed only for Microsoft products and must not be bundled or launched.              | Use only MIT/Apache components listed in 2.3 and section 4.                                                                            |
 | K4  | Roslyn's language server is not published as a stable library API.                                                          | Pin versions, keep a thin fork, upstream extension points.                                                                             |
-| K5  | Trademarks: "Rider", "ReSharper", "IntelliJ" must not appear in product naming or UI.                                       | Product name DotnetIDEA (working title); review before release.                                                                        |
+| K5  | Trademarks: "Rider", "ReSharper", "IntelliJ" must not appear in product naming or UI.                                       | Product name Bayonet (working title); review before release.                                                                           |
 | K6  | Upstream drift: OpenIDEA is moving fast (424 commits, several a day). A long-lived port diverges.                           | Merge `upstream` at least weekly; keep .NET work in new files and crates where possible; avoid renaming shared modules.                |
 | K7  | Two semantic models disagree: the sidecar's MSBuild evaluation and Roslyn LSP's BuildHost may see different project states. | Treat Roslyn LSP as the source of truth for compilation; the sidecar only for structure and edits; reload both on project file change. |
 | U2  | Unknown: whether Roslyn LSP's Razor cohosting works outside VS Code.                                                        | Spike in phase 4 before committing to CI-15.                                                                                           |

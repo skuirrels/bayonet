@@ -33,7 +33,7 @@ Status: proposal, 2026-11-04. Covers features for tuning the user's .NET applica
 | PRF-2 | CPU traces with flame graph and call tree, navigating to source | Hot method opens in editor | Met (A2, below): call tree, methods, callers and callees, source navigation and editor heat |
 | PRF-3 | gcdump with type and **retention** view                         | Largest types listed       | **Partly met**: types only, no retention                                                    |
 
-The spec also names `Microsoft.Diagnostics.NETCore.Client` as a dependency and a `DotnetIDEA.Host` .NET sidecar. Neither exists yet: the repo has no `.csproj` outside `fixtures/`.
+The spec also names `Microsoft.Diagnostics.NETCore.Client` as a dependency and a `Bayonet.Host` .NET sidecar. Neither exists yet: the repo has no `.csproj` outside `fixtures/`.
 
 ## 2. Gaps
 
@@ -59,7 +59,7 @@ Most gaps cannot be closed by parsing CLI text. The MIT-licensed libraries that 
 - `Microsoft.Diagnostics.Tracing.TraceEvent`: parse `.nettrace` into GC, allocation, exception, contention, thread pool, `Microsoft-Diagnostics-DiagnosticSource` (ASP.NET Core, HttpClient, EF Core) and `System.Diagnostics.Metrics` events; resolve methods to source lines through portable PDBs.
 - `Microsoft.Diagnostics.Runtime` (ClrMD): walk the heap of a dump or live process for retained sizes, dominators and GC root paths.
 
-Proposal: build `DotnetIDEA.Diagnostics`, a small .NET 10 console app speaking JSON-RPC over stdio (the repo already has `ide-jsonrpc`), shipped framework-dependent next to the IDE. It produces compact, pre-aggregated, columnar results so the UI never parses raw traces. The existing CLI paths stay as a fallback when the sidecar is unavailable. This also starts the `DotnetIDEA.Host` the spec already plans.
+Proposal: build `Bayonet.Diagnostics`, a small .NET 10 console app speaking JSON-RPC over stdio (the repo already has `ide-jsonrpc`), shipped framework-dependent next to the IDE. It produces compact, pre-aggregated, columnar results so the UI never parses raw traces. The existing CLI paths stay as a fallback when the sidecar is unavailable. This also starts the `Bayonet.Host` the spec already plans.
 
 ## 4. Proposed features
 

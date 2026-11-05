@@ -28,7 +28,7 @@ export function missingAdapter(adapter: string, e: unknown): MissingAdapter | nu
     return {
       tool: entry.tool,
       title: entry.title,
-      body: `${e.message}. DotnetIDEA can install a private copy that every Python interpreter uses for debugging.`,
+      body: `${e.message}. Bayonet can install a private copy that every Python interpreter uses for debugging.`,
     };
   }
   if (!e.message.startsWith(`debug adapter \`${adapter}\` not found`)) return null;

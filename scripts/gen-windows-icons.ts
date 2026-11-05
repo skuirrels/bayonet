@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const icons = join(root, "src-tauri", "icons");
 const tempRoot = realpathSync(tmpdir());
-const output = mkdtempSync(join(tempRoot, "dotnetidea-windows-icons-"));
+const output = mkdtempSync(join(tempRoot, "bayonet-windows-icons-"));
 function removeOutput() {
   // Only remove the unique directory this invocation created inside the system temp directory.
   if (dirname(realpathSync(output)) !== tempRoot) throw new Error("Unexpected icon output directory");
@@ -18,7 +18,7 @@ try {
   const cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js");
   const result = spawnSync(
     process.execPath,
-    [cli, "icon", join(icons, "source", "dotnetidea-windows.svg"), "--output", output],
+    [cli, "icon", join(icons, "source", "bayonet-windows.svg"), "--output", output],
     { cwd: root, stdio: "inherit" },
   );
   if (result.error) throw result.error;

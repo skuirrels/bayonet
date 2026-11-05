@@ -1,4 +1,4 @@
-<!-- DotnetIDEA: Unit Tests tool window (check in a circle with a list) -->
+<!-- Bayonet: Unit Tests tool window (check in a circle with a list) -->
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
 <circle cx="5" cy="5" r="3.5" stroke="#6C707E"/><path d="M3.5 5L4.5 6L6.5 4M10 4.5H14.5M10 7H13M2 11H14.5M2 13.5H11" stroke="#6C707E" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -59,7 +59,7 @@ async function exportSettings() {
   const path = await save({
     title: "Export Settings",
     defaultPath: "openidea-settings.json",
-    filters: [{ name: "DotnetIDEA settings", extensions: ["json"] }],
+    filters: [{ name: "Bayonet settings", extensions: ["json"] }],
   });
   if (!path) return;
   try {
@@ -80,7 +80,7 @@ async function importSettings() {
   const picked = await open({
     title: "Import Settings",
     multiple: false,
-    filters: [{ name: "DotnetIDEA settings", extensions: ["json"] }],
+    filters: [{ name: "Bayonet settings", extensions: ["json"] }],
   });
   const path = Array.isArray(picked) ? picked[0] : picked;
   if (!path) return;

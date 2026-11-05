@@ -173,7 +173,7 @@ const UNTRANSLATED = new Set<string>([
   "Python",
   "npm",
   "OpenIDEA",
-  "DotnetIDEA",
+  "Bayonet",
   "Spring Boot",
   "PostgreSQL",
   "Pyrefly",

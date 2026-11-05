@@ -1,4 +1,4 @@
-//! DotnetIDEA desktop shell: wires the backend crates into Tauri.
+//! Bayonet desktop shell: wires the backend crates into Tauri.
 //!
 //! This crate is glue only. Each `commands/<domain>.rs` is a thin, typed
 //! adapter from IPC to a backend crate; no domain logic lives here.
@@ -202,7 +202,7 @@ pub fn run() {
         _ => {}
     })
     .build(context)
-    .expect("error while running DotnetIDEA")
+    .expect("error while running Bayonet")
     .run(move |app, event| {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = &event {

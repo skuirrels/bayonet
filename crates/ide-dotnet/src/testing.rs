@@ -412,7 +412,7 @@ pub async fn session_with(
     }
     let init = json!({
         "processId": std::process::id(),
-        "clientInfo": { "name": "DotnetIDEA", "version": env!("CARGO_PKG_VERSION") },
+        "clientInfo": { "name": "Bayonet", "version": env!("CARGO_PKG_VERSION") },
         "capabilities": { "testing": { "debuggerProvider": false } },
     });
     let (tx, mut rx) = mpsc::unbounded_channel();

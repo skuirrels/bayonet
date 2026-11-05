@@ -87,7 +87,7 @@ expui `fileTypes/h.svg`; that outline is modified from the original by JetBrains
 `src/ui/openidea/runConfigurations/springBoot*.svg` (the Spring Boot run configuration
 leaf) is OpenIDEA's own drawing.
 
-The lettering in `src-tauri/icons/source/dotnetidea-wordmark*.svg` is outlined from
+The lettering in `src-tauri/icons/source/bayonet-wordmark*.svg` is outlined from
 Inter (Copyright 2016 The Inter Project Authors, SIL Open Font License 1.1,
 https://github.com/rsms/inter).
 

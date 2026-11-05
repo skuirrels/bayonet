@@ -1,6 +1,6 @@
 # Porting notes
 
-DotnetIDEA is a port of OpenIDEA. This file records how the two relate, so upstream
+Bayonet is a port of OpenIDEA. This file records how the two relate, so upstream
 changes can keep flowing in.
 
 ## Base
@@ -28,7 +28,7 @@ changes can keep flowing in.
     `file-csharp` run icon, the `netcoredbg` missing-adapter notice and the
     netcoredbg entry in the debugger list are kept.
   - **Reformat indent.** Upstream now sends the Code Style indent only when the
-    language has a Tabs and Indents override (`fcfe2647`). DotnetIDEA keeps sending it
+    language has a Tabs and Indents override (`fcfe2647`). Bayonet keeps sending it
     always (`DocModel.formatIndent`), as recorded under Roslyn features, but uses
     upstream's `formatIndentFacet` and the indent re-detection after Reformat Code
     (`c599265c`).
@@ -55,20 +55,26 @@ changes can keep flowing in.
     they don't clash in practice: Move Line Down acts in the editor and history only
     in a search field.
   - The new Polish and Portuguese catalogues drop upstream's .NET run configuration
-    strings and use the DotnetIDEA names, as fr/ko/zh do.
+    strings and use the Bayonet names, as fr/ko/zh do.
 
 ## What was renamed
 
 User-visible names only:
 
 - `src-tauri/tauri.conf.json`: product name, window title, bundle identifier
-  (`io.github.skuirrels.dotnetidea`), main binary (`dotnetidea`), descriptions.
+  (`io.github.skuirrels.bayonet`), main binary (`bayonet`), descriptions.
 - Menus (`src-tauri/src/menu.rs`), locale strings (`src/platform/locales/`), title bar,
   welcome screen, memory indicator, settings import/export dialogs, splash screen.
 - `README.md`, `NOTICE`.
 
-A new bundle identifier means DotnetIDEA keeps its own settings and caches, separate
+A new bundle identifier means Bayonet keeps its own settings and caches, separate
 from an installed OpenIDEA.
+
+The port was first called DotnetIDEA and was renamed to Bayonet on 2026-11-05. That
+rename covered the names above plus the port's own internals: the `bayonet-monitor-*`
+and `bayonet-coverage` temporary files, the test runner's LSP `clientInfo`, and the icon
+sources. The bundle identifier changed from `io.github.skuirrels.dotnetidea`, so Bayonet
+starts with fresh settings; DotnetIDEA's are not migrated.
 
 ## What deliberately kept the OpenIDEA name
 
@@ -78,7 +84,7 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 - `OPENIDEA_*` environment variables, `openidea-*` temporary file prefixes, thread names.
 - The per-project folder `.openidea/` (`crates/ide-core/src/project_dir.rs` and about 80
   other references). Projects can be opened by both IDEs. Spec section 4.2 planned a
-  rename to `.dotnetidea/`; that is deferred until the port has diverged enough to
+  rename to `.bayonet/`; that is deferred until the port has diverged enough to
   justify the merge cost.
 - The plugin ABI package `openidea:plugin@0.1.0` (`wit/plugin.wit`) and protocol
   extensions such as `_openidea/steer`.
@@ -89,18 +95,20 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 
 - **Auto-update.** OpenIDEA's updater feed and public key were removed from
   `tauri.conf.json`. With no endpoints, "Check for Updates" is hidden
-  (`src-tauri/src/commands/window.rs`). Re-enable once DotnetIDEA has its own signed
+  (`src-tauri/src/commands/window.rs`). Re-enable once Bayonet has its own signed
   release feed.
 
 ## Still to do
 
-- The app icon and splash mark are DotnetIDEA's own (".d" on a violet frame, source in
-  `src-tauri/icons/source/dotnetidea.svg`; regenerate with `pnpm tauri icon` on that file).
-  The wordmarks (`dotnetidea-wordmark.svg`, `-dark.svg`) set "Dotnet" in Inter Bold and
-  "IDEA" in Inter Light, outlined from the Inter font the UI already ships. The Windows
-  icons come from `dotnetidea-windows.svg` (a larger mark) via `pnpm gen:windows-icons`.
+- The app icon and splash mark are Bayonet's own (a "B" on a violet frame, source in
+  `src-tauri/icons/source/bayonet.svg`; regenerate with `pnpm tauri icon` on that file,
+  then delete the Android, iOS and 64x64 outputs it adds). The "B" is stroked at the same
+  weight as the frame's lettering. The wordmarks (`bayonet-wordmark.svg`, `-dark.svg`)
+  set "Bayonet" in Inter Bold at 66 px, outlined with fontTools from the variable Inter
+  the UI already ships (`@fontsource-variable/inter`, weight 700). The Windows
+  icons come from `bayonet-windows.svg` (a larger mark) via `pnpm gen:windows-icons`.
 - There is no release workflow: OpenIDEA's `release.yml` (its signing secrets, updater
-  artifacts and `openidea-server` uploads) was removed until DotnetIDEA plans releases.
+  artifacts and `openidea-server` uploads) was removed until Bayonet plans releases.
   Remote development still downloads `openidea-server` from OpenIDEA's GitHub releases of
   the same version (`crates/ide-tools/src/server.rs`).
 - Unity and Mono debugging (DBG-7) is out of scope for now: it needs a Mono soft-debugger
