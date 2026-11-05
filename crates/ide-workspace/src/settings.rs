@@ -302,9 +302,9 @@ impl SettingsStore {
     pub fn import_bundle(&self, path: &Path) -> IdeResult<(Settings, BTreeMap<String, String>)> {
         let bytes = std::fs::read(path)?;
         let bundle: SettingsBundle = serde_json::from_slice(&bytes)
-            .map_err(|e| IdeError::invalid(format!("not an DotnetIDEA settings file: {e}")))?;
+            .map_err(|e| IdeError::invalid(format!("not a Bayonet settings file: {e}")))?;
         if bundle.format != BUNDLE_FORMAT || bundle.version > BUNDLE_VERSION {
-            return Err(IdeError::invalid("not an DotnetIDEA settings file, or one from a newer version"));
+            return Err(IdeError::invalid("not a Bayonet settings file, or one from a newer version"));
         }
         let layer = parse_layer(&bundle.settings).map_err(|e| IdeError::invalid(format!("invalid settings: {e}")))?;
         try_merge(&mut defaults_json(), layer).map_err(|e| IdeError::invalid(format!("invalid settings: {e}")))?;

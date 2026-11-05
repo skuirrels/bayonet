@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DotnetIDEA",
+  "productName": "Bayonet",
   "version": "0.1.29",
-  "identifier": "io.github.skuirrels.dotnetidea",
+  "identifier": "io.github.skuirrels.bayonet",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "DotnetIDEA",
+        "title": "Bayonet",
         "width": 1440,
         "height": 900,
         "minWidth": 800,
@@ -35,16 +35,16 @@
     "createUpdaterArtifacts": false,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "category": "DeveloperTool",
-    "copyright": "Copyright © 2026 DotnetIDEA contributors",
+    "copyright": "Copyright © 2026 Bayonet contributors",
     "license": "Apache-2.0",
     "shortDescription": "An open-source .NET IDE",
-    "longDescription": "DotnetIDEA is an open-source .NET IDE, ported from OpenIDEA. Not affiliated with JetBrains or Microsoft.",
+    "longDescription": "Bayonet is an open-source .NET IDE, ported from OpenIDEA. Not affiliated with JetBrains or Microsoft.",
     "macOS": {
       "entitlements": "./Entitlements.plist",
       "minimumSystemVersion": "11.0"
     }
   },
-  "mainBinaryName": "dotnetidea",
+  "mainBinaryName": "bayonet",
   "plugins": {
     "updater": {
       "pubkey": "",

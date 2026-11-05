@@ -4,7 +4,7 @@
 //! and when the server asks for a refresh. Pulled diagnostics are kept apart from pushed ones
 //! and shown together.
 //!
-//! DotnetIDEA: `pull-diagnostics` in a language's TOML pulls from a server that did not
+//! Bayonet: `pull-diagnostics` in a language's TOML pulls from a server that did not
 //! advertise `diagnosticProvider`, and `workspace-diagnostics` (Roslyn) also pulls the whole
 //! workspace (`workspace/diagnostic`) so problems in files that are not open are listed. Those
 //! are kept as the server's pushed diagnostics: a file's own pull replaces them while it is

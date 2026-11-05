@@ -594,7 +594,7 @@ pub async fn dotnet_tests(
 /// Where a coverage run writes its reports: a fresh folder per run.
 fn coverage_dir(request: RequestId) -> PathBuf {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
-    std::env::temp_dir().join("dotnetidea-coverage").join(format!("{}-{}-{stamp}", std::process::id(), request.0))
+    std::env::temp_dir().join("bayonet-coverage").join(format!("{}-{}-{stamp}", std::process::id(), request.0))
 }
 
 #[allow(clippy::too_many_arguments)]

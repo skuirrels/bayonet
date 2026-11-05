@@ -26,14 +26,14 @@ export function summarizeMemory(m: Pick<AppMetrics, "memory" | "rssBytes"> | nul
   return { app, languageServers, processes, total: parts.length ? parts.reduce((a, b) => a + b, 0) : null };
 }
 
-/** Status bar text: `DotnetIDEA 560M` (no denominator: there is no heap limit to compare with). */
+/** Status bar text: `Bayonet 560M` (no denominator: there is no heap limit to compare with). */
 export function indicatorLabel(s: MemorySummary): string {
-  return s.app == null ? "DotnetIDEA –" : `DotnetIDEA ${formatBytes(s.app)}`;
+  return s.app == null ? "Bayonet –" : `Bayonet ${formatBytes(s.app)}`;
 }
 
-/** Status bar tooltip: `DotnetIDEA 560 MB · language servers 1.1 GB · processes 80 MB`. */
+/** Status bar tooltip: `Bayonet 560 MB · language servers 1.1 GB · processes 80 MB`. */
 export function indicatorTooltip(s: MemorySummary): string {
-  const parts = [`DotnetIDEA ${formatSize(s.app)}`];
+  const parts = [`Bayonet ${formatSize(s.app)}`];
   if (s.languageServers != null) parts.push(`language servers ${formatSize(s.languageServers)}`);
   if (s.processes != null) parts.push(`processes ${formatSize(s.processes)}`);
   return parts.join(" · ");
@@ -55,7 +55,7 @@ export interface BreakdownSection {
 }
 
 const SECTIONS: Array<{ category: MemoryCategory; title: string }> = [
-  { category: "app", title: "DotnetIDEA" },
+  { category: "app", title: "Bayonet" },
   { category: "languageServer", title: "Language servers" },
   { category: "process", title: "Debug adapters & processes" },
 ];

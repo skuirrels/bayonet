@@ -61,7 +61,7 @@ function ProjectButton() {
     list.push({ kind: "separator" }, { kind: "action", action: "file.closeProject" });
     return list;
   }, [actions]);
-  const label = name ?? "DotnetIDEA";
+  const label = name ?? "Bayonet";
   return (
     <>
       <BarButton

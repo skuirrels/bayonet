@@ -532,7 +532,7 @@ async fn monitor_port() -> IdeResult<u16> {
     }
     let exe = tool(DiagTool::Monitor).await?;
     let port = free_port()?;
-    let config = std::env::temp_dir().join(format!("dotnetidea-monitor-{}.json", std::process::id()));
+    let config = std::env::temp_dir().join(format!("bayonet-monitor-{}.json", std::process::id()));
     std::fs::write(&config, r#"{ "GlobalCounter": { "IntervalSeconds": 1 } }"#)?;
     let mut child = tokio::process::Command::new(&exe)
         .args(["collect", "--no-auth", "--metrics", "false", "--exit-on-stdin-disconnect", "--urls"])

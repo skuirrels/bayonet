@@ -100,7 +100,7 @@ impl Native {
             Native::Paste => "Paste",
             Native::SelectAll => "Select All",
             Native::Services => "Services",
-            Native::Hide => "Hide DotnetIDEA",
+            Native::Hide => "Hide Bayonet",
             Native::HideOthers => "Hide Others",
             Native::ShowAll => "Show All",
             Native::Minimize => "Minimize",
@@ -186,9 +186,9 @@ pub fn spec(os: Os) -> Vec<Entry> {
     if mac {
         menus.push(sub(
             "app",
-            "DotnetIDEA",
+            "Bayonet",
             vec![
-                act("app.about", "About DotnetIDEA"),
+                act("app.about", "About Bayonet"),
                 act("app.checkForUpdates", "Check for Updates…"),
                 SEP,
                 act("file.settings", "Settings…"),
@@ -199,7 +199,7 @@ pub fn spec(os: Os) -> Vec<Entry> {
                 Entry::Native(Native::HideOthers),
                 Entry::Native(Native::ShowAll),
                 SEP,
-                accel("app.quit", "Quit DotnetIDEA", "CmdOrCtrl+Q"),
+                accel("app.quit", "Quit Bayonet", "CmdOrCtrl+Q"),
             ],
         ));
     }
@@ -832,7 +832,7 @@ pub fn spec(os: Os) -> Vec<Entry> {
         act("help.showLog", show_log),
     ];
     if !mac {
-        help.extend([act("app.checkForUpdates", "Check for Updates…"), SEP, act("app.about", "About DotnetIDEA")]);
+        help.extend([act("app.checkForUpdates", "Check for Updates…"), SEP, act("app.about", "About Bayonet")]);
     }
     menus.push(sub("help", "Help", help));
     menus

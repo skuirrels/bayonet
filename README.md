@@ -1,8 +1,8 @@
-# DotnetIDEA
+# Bayonet
 
 An open-source .NET IDE with a Rust core, built on Tauri.
 
-DotnetIDEA is a port of [OpenIDEA](https://github.com/l0ng-ai/openidea), refocused on
+Bayonet is a port of [OpenIDEA](https://github.com/l0ng-ai/openidea), refocused on
 .NET: C#, F#, solutions and projects, NuGet, unit tests and debugging. It keeps OpenIDEA's
 editor, tool windows, Git, terminal, database and HTTP clients.
 

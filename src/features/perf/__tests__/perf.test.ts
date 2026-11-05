@@ -157,21 +157,21 @@ describe("memory breakdown", () => {
   it("sums per group and labels the indicator without a fake denominator", () => {
     const s = summarizeMemory({ memory: rows, rssBytes: 1 });
     expect(s).toEqual({ app: 520 * MB, languageServers: 1126 * MB, processes: null, total: 1646 * MB });
-    expect(indicatorLabel(s)).toBe("DotnetIDEA 520M");
-    expect(indicatorTooltip(s)).toBe("DotnetIDEA 520 MB · language servers 1.1 GB");
+    expect(indicatorLabel(s)).toBe("Bayonet 520M");
+    expect(indicatorTooltip(s)).toBe("Bayonet 520 MB · language servers 1.1 GB");
   });
 
   it("falls back to the backend's resident memory without a breakdown", () => {
     const s = summarizeMemory({ memory: [], rssBytes: 125 * MB });
-    expect(indicatorLabel(s)).toBe("DotnetIDEA 125M");
-    expect(indicatorTooltip(s)).toBe("DotnetIDEA 125 MB");
-    expect(indicatorLabel(summarizeMemory(null))).toBe("DotnetIDEA –");
+    expect(indicatorLabel(s)).toBe("Bayonet 125M");
+    expect(indicatorTooltip(s)).toBe("Bayonet 125 MB");
+    expect(indicatorLabel(summarizeMemory(null))).toBe("Bayonet –");
   });
 
   it("builds popup sections in category order", () => {
     const sections = memorySections(rows);
     expect(sections.map((s) => [s.title, s.total, s.rows.length])).toEqual([
-      ["DotnetIDEA", "520 MB", 4],
+      ["Bayonet", "520 MB", 4],
       ["Language servers", "1.1 GB", 2],
       ["Debug adapters & processes", "–", 1],
     ]);

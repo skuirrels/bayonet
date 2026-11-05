@@ -98,7 +98,7 @@ const A = (id: string) => ATTRIBUTES.find((a) => a.id === id);
 
 type Seg = [string, string?];
 const SAMPLE: Seg[][] = [
-  [["# DotnetIDEA color scheme preview", "lineComment"]],
+  [["# Bayonet color scheme preview", "lineComment"]],
   [["import ", "keyword"], ["os"]],
   [["@dataclass", "pyDecorator"]],
   [["class ", "keyword"], ["Greeter", "className"], [":"]],

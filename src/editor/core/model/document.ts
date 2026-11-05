@@ -408,7 +408,7 @@ export class DocModel {
   /**
    * Indentation explicit reformat requests use (`formatIndentFacet`): Code Style and
    * `.editorconfig`, never the file's detected indents, which (as in IDEA) apply to
-   * typing only. DotnetIDEA sends it whether or not the language has a Tabs and Indents
+   * typing only. Bayonet sends it whether or not the language has a Tabs and Indents
    * override (upstream sends it only with one), so Reformat Code matches `dotnet format`.
    */
   formatIndent() {

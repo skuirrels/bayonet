@@ -167,7 +167,7 @@ export function WelcomeView() {
           <img className={styles.logo} src={logo} alt="" draggable={false} />
           <span className={styles.brandText}>
             <span className={styles.appName}>
-              <T>DotnetIDEA</T>
+              <T>Bayonet</T>
             </span>
             {version && <span className={styles.version}>{version}</span>}
           </span>
