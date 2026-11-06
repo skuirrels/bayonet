@@ -44,7 +44,9 @@ export function VirtualBanner({
   const text = generated
     ? tx("Generated source (read-only); it changes when the code it is generated from does.")
     : decompiled
-      ? tx("Decompiled .class file: sources are not available.")
+      ? path.startsWith("csharp:")
+        ? tx("Decompiled assembly (read-only).")
+        : tx("Decompiled .class file: sources are not available.")
       : tx("Library source (read-only).");
   const reason = generated ? null : classFileBreakpointReason(path);
   return (

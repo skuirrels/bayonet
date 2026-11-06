@@ -33,6 +33,7 @@ import {
   selectableText,
   useSelectionBoundary,
   showContextMenu,
+  type IconName,
 } from "@/ui";
 import { useTx, tx } from "@/platform/i18n";
 import { isImeKey } from "@/platform/ime";
@@ -59,6 +60,7 @@ import {
 } from "./model";
 import {
   cancelTask,
+  stopBackgroundTask,
   loadEntries,
   markVisible,
   refreshChanges,
@@ -447,6 +449,11 @@ function Stream({ task, entries, subagent, onOpenSubagent, finding, findFocus, o
   }, [start]);
   // Hidden behind another tab, it has no layout to scroll; shown again, it follows the end again.
   const visible = useEditorShown();
+  /** A diagram that drew after the last streamed chunk grows the conversation: keep following. */
+  const onDiagramDrawn = useCallback(() => {
+    const el = ref.current;
+    if (el && position.current.stick) el.scrollTop = el.scrollHeight;
+  }, []);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || entries === null || !visible) return;
@@ -508,6 +515,7 @@ function Stream({ task, entries, subagent, onOpenSubagent, finding, findFocus, o
                 turn={turns?.get(start + i) ?? null}
                 turnCount={turns?.size ?? 0}
                 onOpenSubagent={onOpenSubagent}
+                onDiagramDrawn={onDiagramDrawn}
               />
             ))
         )}
@@ -739,6 +747,7 @@ const Entry = memo(function Entry({
   turn,
   turnCount,
   onOpenSubagent,
+  onDiagramDrawn,
 }: {
   task: AgentTask;
   entry: AgentEntry;
@@ -746,12 +755,13 @@ const Entry = memo(function Entry({
   turn: number | null;
   turnCount: number;
   onOpenSubagent: (id: string) => void;
+  onDiagramDrawn: () => void;
 }) {
   switch (entry.type) {
     case "user":
       return <UserMessage task={task} entry={entry} turn={turn} turnCount={turnCount} />;
     case "agent":
-      return <Markdown text={entry.text} cwd={task.cwd} />;
+      return <Markdown text={entry.text} cwd={task.cwd} onDiagramDrawn={onDiagramDrawn} />;
     case "thought":
       return (
         <div>
@@ -783,7 +793,14 @@ const Entry = memo(function Entry({
         </div>
       );
     case "subagent":
-      return <SubagentCard task={task} entry={entry} onOpen={() => onOpenSubagent(entry.id)} />;
+      return (
+        <SubagentCard
+          task={task}
+          entry={entry}
+          onOpen={() => onOpenSubagent(entry.id)}
+          onDiagramDrawn={onDiagramDrawn}
+        />
+      );
     case "message":
       return entry.incoming ? (
         <div className={styles.message}>
@@ -797,7 +814,7 @@ const Entry = memo(function Entry({
           <div className={styles.messageFrom}>
             <T>Report to the parent agent</T>
           </div>
-          <Markdown text={entry.text} cwd={task.cwd} />
+          <Markdown text={entry.text} cwd={task.cwd} onDiagramDrawn={onDiagramDrawn} />
         </div>
       );
     case "permission":
@@ -1083,7 +1100,17 @@ function SubagentStatusIcon({ status }: { status: SubagentEntry["status"] }) {
 }
 
 /** A subagent in its parent's conversation: what it does, its latest step, what it was asked and answered. */
-function SubagentCard({ task, entry, onOpen }: { task: AgentTask; entry: SubagentEntry; onOpen: () => void }) {
+function SubagentCard({
+  task,
+  entry,
+  onOpen,
+  onDiagramDrawn,
+}: {
+  task: AgentTask;
+  entry: SubagentEntry;
+  onOpen: () => void;
+  onDiagramDrawn: () => void;
+}) {
   const tx = useTx();
   const working = subagentWorking(entry.status);
   const now = useNow(working ? 1000 : 60_000);
@@ -1148,7 +1175,7 @@ function SubagentCard({ task, entry, onOpen }: { task: AgentTask; entry: Subagen
             <T>Result</T>
           </summary>
           <div className={styles.subagentReply}>
-            <Markdown text={entry.reply} cwd={task.cwd} />
+            <Markdown text={entry.reply} cwd={task.cwd} onDiagramDrawn={onDiagramDrawn} />
           </div>
         </details>
       )}
@@ -1293,6 +1320,7 @@ function SessionComposer({
         </div>
       )}
       <WorkingSubagents entries={entries} onOpen={onOpenSubagent} />
+      <BackgroundTasks task={task} />
       {task.queue.length > 0 && <Queue task={task} />}
       <Composer
         id={task.id}
@@ -1324,6 +1352,38 @@ function SessionComposer({
 }
 
 /** Messages waiting for the turn to end: send now, edit, or drop. */
+const BACKGROUND_ICON: Record<string, IconName> = { local_bash: "terminal", monitor: "eye" };
+
+/** What the agent runs in the background; its subagents show as chips of their own. */
+function BackgroundTasks({ task }: { task: AgentTask }) {
+  const tx = useTx();
+  const running = (task.background ?? []).filter((background) => background.kind !== "local_agent");
+  if (!running.length) return null;
+  const fail = (e: unknown) =>
+    notifications().notify({ level: "error", title: "Couldn't stop the background task", body: String(e) });
+  return (
+    <div className={styles.background} aria-label={tx("Running in the background")}>
+      {running.map((background) => (
+        <div key={background.id} className={styles.backgroundTask}>
+          <Icon name={BACKGROUND_ICON[background.kind] ?? "clock"} size={12} className={styles.muted} />
+          <span className={styles.backgroundText} title={background.description}>
+            {background.description || background.kind}
+          </span>
+          {background.startedMs != null && <Elapsed since={background.startedMs} />}
+          {task.capabilities?.backgroundTasks && (
+            <IconButton
+              icon="stop"
+              title="Stop"
+              size="small"
+              onClick={() => void stopBackgroundTask(task.id, background.id).catch(fail)}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Queue({ task }: { task: AgentTask }) {
   const fail = (e: unknown) =>
     notifications().notify({ level: "error", title: "Couldn't update the queue", body: String(e) });

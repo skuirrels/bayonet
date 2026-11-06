@@ -1,7 +1,11 @@
 {
   "Cannot copy reference": "Cannot copy reference",
+  "Decompiled assembly (read-only).": "Decompiled assembly (read-only).",
   "Connect through:": "Connect through:",
   "Connect through": "Connect through",
+  "GitHub Commit Checks": "GitHub Commit Checks",
+  "Checks passed": "Checks passed",
+  "Could not load commit checks": "Could not load commit checks",
   "WSL distribution:": "WSL distribution:",
   "WSL distribution": "WSL distribution",
   "Project runs on {label}": "Project runs on {label}",
@@ -39,5 +43,10 @@
   "Port {port} is already in use: another IDE or debug session may be listening on it. Stop it or choose another port.": "Port {port} is already in use: another IDE or debug session may be listening on it. Stop it or choose another port.",
   "Unable to load image: {path}": "Unable to load image: {path}",
   "Automatic": "Automatic",
-  "Remote connection cancelled": "Remote connection cancelled"
+  "Remote connection cancelled": "Remote connection cancelled",
+  "Xdebug is not loaded in PHP {version}": "Xdebug is not loaded in PHP {version}",
+  "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.": "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.",
+  "Open PHP Settings": "Open PHP Settings",
+  "Running in the background": "Running in the background",
+  "Couldn't stop the background task": "Couldn't stop the background task"
 }
