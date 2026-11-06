@@ -1,9 +1,10 @@
 name: CI
 on:
   push:
-    branches: [main]
+    # Bayonet's default branch is master and its work happens on dotnet-port; main is upstream's.
+    branches: [main, master, dotnet-port]
   pull_request:
-    branches: [main]
+    branches: [main, master]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -79,10 +80,10 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "clippy, rustfmt" }
-      # Only main saves the cache (saving takes minutes on Windows); PRs restore main's.
+      # Only pushes to main, master and dotnet-port save the cache (saving takes minutes on Windows); PRs restore theirs.
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ contains(fromJSON('["refs/heads/main", "refs/heads/master", "refs/heads/dotnet-port"]'), github.ref) }}
       - uses: taiki-e/install-action@nextest
       # .NET integration tests read fixtures/dotnet and call the dotnet CLI.
       - uses: actions/setup-dotnet@v4
@@ -159,7 +160,7 @@ jobs:
         with:
           key: plugins
           cache-directories: target-plugins
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ contains(fromJSON('["refs/heads/main", "refs/heads/master", "refs/heads/dotnet-port"]'), github.ref) }}
       - name: Format, lint (host and wasm) and test each crate
         shell: bash
         run: |

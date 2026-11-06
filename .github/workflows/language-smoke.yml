@@ -10,7 +10,8 @@ name: Language smoke
 # Step Over, Resume): smoke/debug.test.ts.
 on:
   push:
-    branches: [main]
+    # Bayonet's default branch is master and its work happens on dotnet-port; main is upstream's.
+    branches: [main, master, dotnet-port]
     paths: &paths
       - "crates/**"
       - "languages/**"
@@ -25,7 +26,7 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/language-smoke.yml"
   pull_request:
-    branches: [main]
+    branches: [main, master]
     types: [opened, synchronize, reopened]
     paths: *paths
   workflow_dispatch:
@@ -65,7 +66,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: language-smoke
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.language == 'rust' }}
+          save-if: ${{ contains(fromJSON('["refs/heads/main", "refs/heads/master", "refs/heads/dotnet-port"]'), github.ref) && matrix.language == 'rust' }}
 
       - uses: pnpm/action-setup@v4
         with: { version: 11 }
