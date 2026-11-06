@@ -83,11 +83,15 @@ describe("theme tokens", () => {
     expect(failures(light, ["--fg-muted"], ["--bg-selected", "--bg-hover"], 3.5)).toEqual([]);
   });
 
+  // Rider Light's method teal (~4.4:1) and field / constant cyan (~3.5:1) are its own values; pinned just below.
   it("light syntax colours stay readable on the editor and current line", () => {
     const soft = ["--syn-comment", "--syn-annotation", "--syn-inline-value", "--syn-invalid"];
-    const main = SYNTAX.filter((t) => !soft.includes(t));
-    expect(failures(light, main, ["--bg-app", "--bg-current-line", "--bg-elev"], 4.5)).toEqual([]);
-    expect(failures(light, soft, ["--bg-app", "--bg-current-line", "--bg-elev"], 3)).toEqual([]);
+    const rider = { "--syn-function": 4.3, "--syn-property": 3.4, "--syn-constant": 3.4 };
+    const main = SYNTAX.filter((t) => !soft.includes(t) && !(t in rider));
+    const surfaces = ["--bg-app", "--bg-current-line", "--bg-elev"];
+    expect(failures(light, main, surfaces, 4.5)).toEqual([]);
+    expect(failures(light, soft, surfaces, 3)).toEqual([]);
+    for (const [token, min] of Object.entries(rider)) expect(failures(light, [token], surfaces, min)).toEqual([]);
   });
 
   it("light status / VCS colours are readable", () => {

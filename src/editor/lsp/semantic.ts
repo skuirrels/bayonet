@@ -56,12 +56,30 @@ const TYPE_CLASS: Record<string, string> = {
   selfParameter: "self",
   clsParameter: "self",
   selfKeyword: "self",
+  // Roslyn's own types; Rider colours events apart from properties.
+  delegate: "type",
+  recordClass: "type",
+  recordStruct: "type",
+  event: "event",
+  field: "property",
+  constant: "constant",
+  extensionMethod: "function",
+  stringEscapeCharacter: "escape",
+  xmlDocCommentName: "doc-tag",
+  xmlDocCommentDelimiter: "doc-tag",
+  xmlDocCommentAttributeName: "doc-tag",
+  xmlDocCommentAttributeQuotes: "doc-tag",
+  xmlDocCommentAttributeValue: "doc-tag-value",
 };
+
+/** Types that also get `cm-sem-struct`: Rider colours value types and delegates apart from classes (C# only). */
+const STRUCT_TYPES = new Set(["struct", "enum", "delegate", "recordStruct"]);
 
 const MODIFIER_CLASS: Record<string, string> = {
   deprecated: "deprecated",
   static: "static",
   mutable: "mutable",
+  ReassignedVariable: "mutable",
   declaration: "declaration",
   definition: "declaration",
   defaultLibrary: "builtin",
@@ -172,6 +190,7 @@ export function semanticRanges(
       names.includes("constant") || (type === "variable" && names.includes("readonly") && names.includes("static"));
     if (constant && (type === "variable" || type === "property")) base = "constant";
     if (base && base !== "variable") classes.push(`cm-sem-${base}`);
+    if (STRUCT_TYPES.has(type)) classes.push("cm-sem-struct");
     // `hasOwn`: servers send names like `constructor` (jdtls) that `Object.prototype` also has.
     for (const n of names) if (Object.hasOwn(MODIFIER_CLASS, n)) classes.push(`cm-sem-${MODIFIER_CLASS[n]}`);
     if (language === "python" && names.includes("static")) classes.push("cm-sem-python-static");

@@ -378,6 +378,13 @@ export const lspTheme = EditorView.theme({
   ".cm-sem-python-keyword-arg": pythonStyle("keyword-arg", "param"),
   // --- semantic tokens -----------------------------------------------------
   ".cm-sem-type, .cm-sem-typeParameter": { color: "var(--syn-type)" },
+  // ReSharper's distinctions, which IntelliJ's other IDEs do not make.
+  '&[data-language="C#"] .cm-sem-struct': { color: "var(--syn-struct, var(--syn-type))" },
+  '&[data-language="C#"] .cm-sem-namespace': { color: "var(--syn-namespace, inherit)" },
+  ".cm-sem-event": { color: "var(--syn-event, var(--syn-property))" },
+  ".cm-sem-escape": { color: "var(--syn-escape)" },
+  ".cm-sem-doc-tag": { color: "var(--syn-doc-comment-tag, var(--syn-doc-comment))" },
+  ".cm-sem-doc-tag-value": { color: "var(--syn-string)" },
   // IDEA colours declarations, calls stay (nearly) plain text.
   ".cm-sem-function": { color: "var(--syn-function-call, var(--syn-function))" },
   ".cm-sem-function.cm-sem-declaration": { color: "var(--syn-function)" },

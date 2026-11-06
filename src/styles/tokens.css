@@ -35,7 +35,7 @@ html {
   --bg-selected-strong: #2e4d89;
   --bg-current-line: #1f2024;
   --bg-debug-line: #2a5091;
-  --bg-breakpoint-line: #3b2425;
+  --bg-breakpoint-line: #4a2421;
   --bg-backdrop: #26282c;
   --bg-input: #191a1c;
 
@@ -112,25 +112,25 @@ html {
   --flame-match: color-mix(in srgb, var(--accent) 60%, var(--bg-elev));
   --flame-fg: var(--fg-strong);
 
-  /* syntax (Islands Dark scheme) */
-  --syn-keyword: #cf8e6d;
-  --syn-string: #6aab73;
-  --syn-type: #bcbec4;
-  --syn-function: #56a8f5;
-  --syn-function-call: #bcbec4;
-  --syn-comment: #7a7e85;
-  --syn-comment-style: normal;
-  --syn-doc-comment: #5f826b;
+  /* syntax (Rider Islands Dark scheme; Python, PHP and Markdown keep PyCharm's / PhpStorm's) */
+  --syn-keyword: #6c95eb;
+  --syn-string: #c9a26d;
+  --syn-type: #c191ff;
+  --syn-function: #39cc9b;
+  --syn-function-call: #39cc9b;
+  --syn-comment: #85c46c;
+  --syn-comment-style: italic;
+  --syn-doc-comment: #85c46c;
   --syn-docstring: #5f826b;
-  --syn-annotation: #b3ae60;
-  --syn-decorator: #b3ae60;
-  --syn-number: #2aacb8;
-  --syn-punct: #bcbec4;
-  --syn-variable: #bcbec4;
+  --syn-annotation: #c191ff;
+  --syn-decorator: #c191ff;
+  --syn-number: #ed94c0;
+  --syn-punct: #bdbdbd;
+  --syn-variable: #bdbdbd;
   --syn-global: var(--syn-variable);
-  --syn-param: #bcbec4;
-  --syn-property: #c77dbb;
-  --syn-constant: #c77dbb;
+  --syn-param: #bdbdbd;
+  --syn-property: #66c3cc;
+  --syn-constant: #66c3cc;
   --syn-python-local-variable: var(--syn-variable);
   --syn-python-global-variable: var(--syn-global);
   --syn-python-instance-attribute: var(--syn-variable);
@@ -138,27 +138,27 @@ html {
   --syn-python-constant: var(--syn-constant);
   --syn-python-property: var(--syn-property);
   --syn-python-type-parameter: var(--syn-type);
-  --syn-python-builtin: var(--syn-builtin);
+  --syn-python-builtin: #8888c6;
   --syn-python-predefined-definition: var(--syn-predefined);
   --syn-python-predefined-usage: var(--syn-predefined);
   --syn-python-fstring: #a5c261;
   --syn-python-bytes: #a5c261;
   /* PhpStorm colours PHP variables and function calls on their own */
-  --syn-php-variable: var(--syn-property);
-  --syn-php-function-call: var(--syn-function);
-  --syn-builtin: #8888c6;
+  --syn-php-variable: #c77dbb;
+  --syn-php-function-call: #56a8f5;
+  --syn-builtin: #f0f0f0;
   --syn-self: #94558d;
   --syn-keyword-arg: #aa4926;
   --syn-predefined: #b200b2;
-  --syn-escape: #cf8e6d;
+  --syn-escape: #d688d4;
   --syn-regexp: #42c3d4;
-  --syn-tag: #d5b778;
-  --syn-attribute: #bcbec4;
-  --syn-todo: #8bb33d;
+  --syn-tag: #c191ff;
+  --syn-attribute: #85c46c;
+  --syn-todo: #66c3cc;
   --syn-link: #548af7;
   --syn-markup-heading: #cf8e6d;
   --syn-markup-code: #6aab73;
-  --syn-invalid: #f75464;
+  --syn-invalid: #ff5647;
   --syn-inline-value: #868a91;
   --syn-rainbow-1: #6fafbd;
   --syn-rainbow-2: #d79b6e;
@@ -168,38 +168,43 @@ html {
   --syn-bracket-1: #e8c25b;
   --syn-bracket-2: #d78bd6;
   --syn-bracket-3: #4ea7f0;
+  --syn-namespace: var(--syn-type);
+  --syn-struct: #e1bfff;
+  --syn-event: #ed94c0;
+  --syn-doc-comment-tag: #487d34;
+  --syn-static-italic: normal;
 
   /* editor (scheme colours) */
-  --fg-editor: #bcbec4;
-  --caret: #ced0d6;
-  --fg-line-number: #4b5059;
-  --fg-line-number-current: #a1a3ab;
+  --fg-editor: #d0d0d0;
+  --caret: #f0f0f0;
+  --fg-line-number: #808080;
+  --fg-line-number-current: #808080;
   --border-gutter: #26282c;
-  --border-indent-guide: #323438;
-  --border-indent-guide-active: #4e5157;
-  --border-right-margin: #323438;
-  --bg-editor-selection: #214283;
+  --border-indent-guide: #404040;
+  --border-indent-guide-active: #666666;
+  --border-right-margin: #404040;
+  --bg-editor-selection: #08335e;
   --bg-editor-selection-inactive: #1d3460;
   --bg-text-search-result: #114957;
   --bg-text-search-result-current: #165e70;
-  --bg-matched-brace: #43454a;
-  --matched-brace-weight: var(--fw-code-bold);
+  --bg-matched-brace: #422240;
+  --matched-brace-weight: inherit;
   --bg-matched-tag: #3f4045;
-  --bg-fold-placeholder: #393b40;
-  --fg-fold-placeholder: #868991;
+  --bg-fold-placeholder: #303030;
+  --fg-fold-placeholder: #787878;
   --fg-fold-marker: #6f737a;
-  --fg-whitespace: #6f737a;
-  --fg-unused: #6f737a;
-  --bg-identifier-under-caret: #373b39;
-  --bg-identifier-under-caret-write: #402f33;
+  --fg-whitespace: #686868;
+  --fg-unused: #787878;
+  --bg-identifier-under-caret: #232e46;
+  --bg-identifier-under-caret-write: #232e46;
   --fg-inlay: #868a91;
   --bg-inlay: #393b40;
-  --wave-error: #fa6675;
-  --wave-warning: #f2c55c;
-  --editor-error-decoration: underline wavy #fa6675;
-  --editor-warning-decoration: underline wavy #f2c55c;
+  --wave-error: #ff5647;
+  --wave-warning: #f5d86a;
+  --editor-error-decoration: underline wavy #ff5647;
+  --editor-warning-decoration: underline wavy #f5d86a;
   --editor-warning-background: transparent;
-  --bg-breakpoint-line: #40252b;
+  --bg-breakpoint-line: #4a2421;
   --fg-completion-match: #538af9;
   --bg-editor-inline: #212326;
   --bg-editor-banner: #233558;
@@ -457,7 +462,7 @@ html {
   --bg-selected-strong: #bdd3ff;
   --bg-current-line: #f5f8fe;
   --bg-debug-line: #d4e2ff;
-  --bg-breakpoint-line: #faeae6;
+  --bg-breakpoint-line: #ffeae8;
   --bg-backdrop: #e9eaee;
   --bg-input: #ffffff;
 
@@ -513,25 +518,25 @@ html {
   --diff-deleted-stripe: #c8c8c8;
   --diff-conflict-stripe: #ffc8bd;
 
-  /* syntax (Light scheme + Default / Python defaults) */
-  --syn-keyword: #0033b3;
-  --syn-string: #067d17;
-  --syn-type: #000000;
-  --syn-function: #00627a;
-  --syn-function-call: #080808;
-  --syn-comment: #8c8c8c;
+  /* syntax (Rider Light scheme; Python, PHP and Markdown keep PyCharm's / PhpStorm's) */
+  --syn-keyword: #0f54d6;
+  --syn-string: #8c6c41;
+  --syn-type: #6b2fba;
+  --syn-function: #00855f;
+  --syn-function-call: #00855f;
+  --syn-comment: #248700;
   --syn-comment-style: italic;
-  --syn-doc-comment: #8c8c8c;
+  --syn-doc-comment: #248700;
   --syn-docstring: #067d17;
-  --syn-annotation: #9e880d;
-  --syn-decorator: #9e880d;
-  --syn-number: #1750eb;
-  --syn-punct: #080808;
-  --syn-variable: #080808;
+  --syn-annotation: #6b2fba;
+  --syn-decorator: #6b2fba;
+  --syn-number: #ab2f6b;
+  --syn-punct: #383838;
+  --syn-variable: #383838;
   --syn-global: var(--syn-variable);
-  --syn-param: #080808;
-  --syn-property: #871094;
-  --syn-constant: #871094;
+  --syn-param: #383838;
+  --syn-property: #0093a1;
+  --syn-constant: #0093a1;
   --syn-python-local-variable: var(--syn-variable);
   --syn-python-global-variable: var(--syn-global);
   --syn-python-instance-attribute: var(--syn-variable);
@@ -539,26 +544,26 @@ html {
   --syn-python-constant: var(--syn-constant);
   --syn-python-property: var(--syn-property);
   --syn-python-type-parameter: var(--syn-type);
-  --syn-python-builtin: var(--syn-builtin);
+  --syn-python-builtin: #000080;
   --syn-python-predefined-definition: var(--syn-predefined);
   --syn-python-predefined-usage: var(--syn-predefined);
   --syn-python-fstring: var(--syn-string);
   --syn-python-bytes: var(--syn-string);
-  --syn-php-variable: var(--syn-property);
-  --syn-php-function-call: var(--syn-function);
-  --syn-builtin: #000080;
+  --syn-php-variable: #871094;
+  --syn-php-function-call: #00627a;
+  --syn-builtin: #000000;
   --syn-self: #94558d;
   --syn-keyword-arg: #660099;
   --syn-predefined: #b200b2;
-  --syn-escape: #0037a6;
+  --syn-escape: #941290;
   --syn-regexp: #264eff;
-  --syn-tag: #0033b3;
-  --syn-attribute: #174ad4;
-  --syn-todo: #008dde;
+  --syn-tag: #6b2fba;
+  --syn-attribute: #248700;
+  --syn-todo: #0093a1;
   --syn-link: #006dcc;
   --syn-markup-heading: #871094;
   --syn-markup-code: #067d17;
-  --syn-invalid: #f50000;
+  --syn-invalid: #d91400;
   --syn-inline-value: #8c8c8c;
   --syn-rainbow-1: #9b3b6a;
   --syn-rainbow-2: #114d77;
@@ -568,38 +573,43 @@ html {
   --syn-bracket-1: #0431fa;
   --syn-bracket-2: #319331;
   --syn-bracket-3: #7b3814;
+  --syn-namespace: var(--syn-type);
+  --syn-struct: #300073;
+  --syn-event: #ab2f6b;
+  --syn-doc-comment-tag: #8bc775;
+  --syn-static-italic: normal;
 
   /* editor */
-  --fg-editor: #080808;
+  --fg-editor: #202020;
   --caret: #000000;
-  --fg-line-number: #aeb3c2;
-  --fg-line-number-current: #767a8a;
+  --fg-line-number: #888888;
+  --fg-line-number-current: #888888;
   --border-gutter: #ebecf0;
-  --border-indent-guide: #ebecf0;
-  --border-indent-guide-active: #aeb3c2;
-  --border-right-margin: #ebecf0;
-  --bg-editor-selection: #a6d2ff;
+  --border-indent-guide: #d8d8d8;
+  --border-indent-guide-active: #a0a0a0;
+  --border-right-margin: #d8d8d8;
+  --bg-editor-selection: #b8d9ff;
   --bg-editor-selection-inactive: #c9e3ff;
   --bg-text-search-result: #fcd47e;
   --bg-text-search-result-current: #f2bf57;
-  --bg-matched-brace: #93d9d9;
+  --bg-matched-brace: #ffe8fe;
   --matched-brace-weight: inherit;
   --bg-matched-tag: #c9ecec;
-  --bg-fold-placeholder: #e9f5e6;
-  --fg-fold-placeholder: #414d41;
+  --bg-fold-placeholder: #fbfbfb;
+  --fg-fold-placeholder: #949494;
   --fg-fold-marker: #8b8e94;
-  --fg-whitespace: #b5b7bd;
-  --fg-unused: #8c8c8c;
-  --bg-identifier-under-caret: #edebfc;
-  --bg-identifier-under-caret-write: #fce8f4;
+  --fg-whitespace: #d0d0d0;
+  --fg-unused: #949494;
+  --bg-identifier-under-caret: #dae4f7;
+  --bg-identifier-under-caret-write: #dae4f7;
   --fg-inlay: #73767c;
   --bg-inlay: #00000012;
-  --wave-error: #f50000;
-  --wave-warning: #f2bf57;
-  --editor-error-decoration: underline wavy #f50000;
-  --editor-warning-decoration: none;
-  --editor-warning-background: #fcf4d4;
-  --bg-breakpoint-line: #faeae6;
+  --wave-error: #d91400;
+  --wave-warning: #826a00;
+  --editor-error-decoration: underline wavy #d91400;
+  --editor-warning-decoration: underline wavy #826a00;
+  --editor-warning-background: transparent;
+  --bg-breakpoint-line: #ffeae8;
   --fg-completion-match: #2f5eb9;
   --bg-editor-inline: #f7f8f9;
   --bg-editor-banner: #f7f8ff;
@@ -841,6 +851,11 @@ html {
   --syn-bracket-1: #ffd700;
   --syn-bracket-2: #ee90ee;
   --syn-bracket-3: #87cefa;
+  --syn-namespace: var(--fg-editor);
+  --syn-struct: var(--syn-type);
+  --syn-event: var(--syn-property);
+  --syn-doc-comment-tag: var(--syn-doc-comment);
+  --syn-static-italic: italic;
 
   --fg-editor: #e3e4e8;
   --caret: #ffffff;
@@ -978,6 +993,18 @@ html {
   --bg-counter: #b6b8be;
   --fg-counter: #000000;
   --bg-progress-track: #55585f;
+}
+
+/*
+ * Plugin themes keep the built-in base's value for every token they leave out. The Rider-only
+ * kinds follow the theme's own type, property and comment colours instead, so a theme written
+ * before they existed still looks consistent; a theme that sets them wins (its sheet comes later).
+ */
+:root[data-plugin-theme]:not([data-plugin-theme=""]) {
+  --syn-namespace: var(--fg-editor);
+  --syn-struct: var(--syn-type);
+  --syn-event: var(--syn-property);
+  --syn-doc-comment-tag: var(--syn-doc-comment);
 }
 
 /* Solarized and Atom One adaptations. Exact upstream palettes and MIT notices:
@@ -1197,6 +1224,11 @@ html {
   --syn-bracket-1: var(--palette-yellow);
   --syn-bracket-2: var(--palette-magenta);
   --syn-bracket-3: var(--palette-blue);
+  --syn-namespace: var(--fg-editor);
+  --syn-struct: var(--syn-type);
+  --syn-event: var(--syn-property);
+  --syn-doc-comment-tag: var(--syn-doc-comment);
+  --syn-static-italic: italic;
   --ansi-black: var(--palette-ansi-black);
   --ansi-bright-black: var(--palette-ansi-bright-black);
   --ansi-red: var(--palette-ansi-red);
