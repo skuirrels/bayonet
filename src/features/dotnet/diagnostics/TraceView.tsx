@@ -27,6 +27,7 @@ import {
   displayFrame,
   formatMs,
   formatShare,
+  gcSummary,
   initialCallPath,
   methodTable,
   ROOT_CALLER,
@@ -121,8 +122,8 @@ export function TraceTab() {
       {!trace ? (
         <EmptyState title={tx`No CPU trace`}>
           <T>
-            Sample the process's stacks (dotnet-trace) to see where its threads spend their time. Your own methods open
-            in the editor, which then shows how long each one took.
+            Sample the process's stacks to see where its threads spend their time. Your own methods open in the editor,
+            which then shows how long each method and line took.
           </T>
         </EmptyState>
       ) : (
@@ -144,6 +145,7 @@ function TraceBody({ trace, view, query }: { trace: TraceProfile; view: TraceVie
   );
   const located = useMemo(() => new Set(trace.sources.map((s) => `${s.path}:${s.line}`)).size, [trace]);
   const category = useCallback((name: string) => frameCategory(name, user), [user]);
+  const gc = useMemo(() => gcSummary(trace), [trace]);
   return (
     <>
       <div className={styles.figures}>
@@ -152,6 +154,13 @@ function TraceBody({ trace, view, query }: { trace: TraceProfile; view: TraceVie
         <Figure label={tx`Thread time`} value={formatMs(trace.root.totalMs)} />
         <Figure label={tx`In your code`} value={formatShare(own / total)} />
         <Figure label={tx`Methods in source`} value={String(located)} />
+        {gc && (
+          <>
+            <Figure label={tx`Collections`} value={gc.count.toLocaleString()} />
+            <Figure label={tx`GC pauses`} value={formatMs(gc.pauseMs)} delta={formatShare(gc.pauseShare)} />
+            <Figure label={tx`Longest pause`} value={formatMs(gc.longestPauseMs)} />
+          </>
+        )}
         <FlameLegend />
       </div>
       <Tabs

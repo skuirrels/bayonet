@@ -35,7 +35,7 @@ import {
   type TriggerRule,
 } from "./model";
 import { setTraceHeat } from "./heat";
-import { heatByFile } from "./trace";
+import { heatByFile, lineHeatByFile } from "./trace";
 
 export type DiagTab = "live" | "threads" | "memory" | "dumps" | "trace" | "triggers" | "files" | "tools";
 /** How the CPU Trace tab shows the trace. */
@@ -157,7 +157,7 @@ export const selectTraceMethod = (traceMethod: string | null) => set({ traceMeth
 /** Shows `trace` in the CPU Trace tab and its times in the editors. */
 export function showTrace(trace: TraceProfile) {
   set({ trace, traceMethod: null });
-  setTraceHeat(trace.path, heatByFile(trace));
+  setTraceHeat(trace.path, heatByFile(trace), lineHeatByFile(trace));
 }
 
 /** Shows the CPU Trace tab with the callers and callees of `frame` (from an editor lens). */

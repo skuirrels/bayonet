@@ -15,6 +15,7 @@ use ide_dotnet::diagnostics::{
     self as diag, DiagTool, DiagToolStatus, DumpAnalysis, DumpType, FlameNode, FrameSource, HeapReport, MetricSample,
     ThreadStack, TraceProfile,
 };
+use ide_dotnet::helper::Helper;
 use ide_dotnet::trace_source::{self, MemberKind};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -275,7 +276,30 @@ pub async fn diag_symbols(host: &Host, request: RequestId, dump: PathBuf) -> Ide
     result
 }
 
-/// Samples CPU stacks of `pid` for `seconds` (`dotnet-trace`) and merges them into a flame graph.
+/// Why the .NET diagnostics helper could not be built or started, once it failed: traces
+/// then use `dotnet-trace` for the rest of the session rather than retrying the build.
+static HELPER_FAILED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The .NET diagnostics helper, built on first use. `None` where it cannot be built or
+/// started (no SDK, no NuGet access), with the reason logged.
+async fn helper(host: &Host, token: &ide_core::CancellationToken) -> IdeResult<Option<Helper>> {
+    if HELPER_FAILED.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+        return Ok(None);
+    }
+    match Helper::open(&host.local_data_dir.join("tools"), token).await {
+        Ok(h) => Ok(Some(h)),
+        Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled => Err(e),
+        Err(e) => {
+            tracing::warn!("the .NET diagnostics helper is unavailable, using dotnet-trace: {}", e.message);
+            *HELPER_FAILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.message);
+            Ok(None)
+        }
+    }
+}
+
+/// Samples CPU stacks of `pid` for `seconds` and merges them into a flame graph. The .NET
+/// diagnostics helper records it, with source lines and GCs; `dotnet-trace` where the
+/// helper is unavailable.
 pub async fn diag_trace(
     host: &Host,
     window: &str,
@@ -284,10 +308,27 @@ pub async fn diag_trace(
     seconds: u32,
 ) -> IdeResult<TraceProfile> {
     let dir = diagnostics_dir(host, window)?;
-    let exe = tool(DiagTool::Trace).await?;
     let base = artifact_path(&dir, pid, "nettrace");
-    let token = host.begin_request(request);
     let seconds = seconds.clamp(1, 3600);
+    let token = host.begin_request(request);
+    let recorded = async {
+        let Some(helper) = helper(host, &token).await? else { return Ok(None) };
+        helper.collect(pid, seconds, &base, &token).await?;
+        let analysis = helper.analyze(&base, &token).await?;
+        Ok::<_, IdeError>(Some(analysis))
+    }
+    .await;
+    if let Some(analysis) = recorded.inspect_err(|_| host.end_request(request))? {
+        host.end_request(request);
+        return with_sources(host, window, diag::helper_profile(&analysis, &base, MIN_FLAME_FRACTION)).await;
+    }
+    let exe = match tool(DiagTool::Trace).await {
+        Ok(exe) => exe,
+        Err(e) => {
+            host.end_request(request);
+            return Err(e);
+        }
+    };
     let duration = format!("00:{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
     let args = [
         s("collect"),
@@ -307,15 +348,30 @@ pub async fn diag_trace(
     diag_trace_read(host, window, speedscope).await
 }
 
-/// Reads a Speedscope trace into a flame graph, with the source of the frames that
-/// come from the project's C# code.
+/// Reads a trace (a Speedscope file, or a `.nettrace` through the .NET diagnostics
+/// helper) into a flame graph, with the source of the frames that come from the
+/// project's C# code.
 pub async fn diag_trace_read(host: &Host, window: &str, path: PathBuf) -> IdeResult<TraceProfile> {
-    let project = host.project(window).ok();
+    if path.extension().is_some_and(|e| e == "nettrace") {
+        let token = ide_core::CancellationToken::new();
+        let Some(helper) = helper(host, &token).await? else {
+            let reason = HELPER_FAILED.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();
+            return Err(IdeError::unavailable(format!(
+                "reading a .nettrace needs the .NET diagnostics helper: {reason}"
+            )));
+        };
+        let analysis = helper.analyze(&path, &token).await?;
+        return with_sources(host, window, diag::helper_profile(&analysis, &path, MIN_FLAME_FRACTION)).await;
+    }
+    let trace =
+        host.blocking(move || diag::flame_graph(&std::fs::read_to_string(&path)?, &path, MIN_FLAME_FRACTION)).await?;
+    with_sources(host, window, trace).await
+}
+
+async fn with_sources(host: &Host, window: &str, mut trace: TraceProfile) -> IdeResult<TraceProfile> {
+    let Ok(project) = host.project(window) else { return Ok(trace) };
     host.blocking(move || {
-        let mut trace = diag::flame_graph(&std::fs::read_to_string(&path)?, &path, MIN_FLAME_FRACTION)?;
-        if let Some(project) = project {
-            trace.sources = resolve_trace_sources(&project, &trace.root);
-        }
+        trace.sources = resolve_trace_sources(&project, &trace.root);
         Ok(trace)
     })
     .await
@@ -428,6 +484,12 @@ fn artifact_kind(path: &Path) -> Option<ArtifactKind> {
     } else if name.ends_with(".gcdump") {
         ArtifactKind::Gcdump
     } else if name.ends_with(".speedscope.json") {
+        ArtifactKind::Trace
+    } else if let Some(base) = name.strip_suffix(".nettrace") {
+        // dotnet-trace keeps the raw trace next to its Speedscope file, which is listed instead.
+        if path.with_file_name(format!("{base}.speedscope.json")).exists() {
+            return None;
+        }
         ArtifactKind::Trace
     } else if name.ends_with(".counters.csv") {
         ArtifactKind::Counters
@@ -702,8 +764,14 @@ mod tests {
         assert_eq!(artifact_kind(Path::new("/d/1-2.dmp")), Some(ArtifactKind::Dump));
         assert_eq!(artifact_kind(Path::new("/d/1-2.speedscope.json")), Some(ArtifactKind::Trace));
         assert_eq!(artifact_kind(Path::new("/d/1-2.counters.csv")), Some(ArtifactKind::Counters));
-        assert_eq!(artifact_kind(Path::new("/d/1-2.nettrace")), None);
         assert_eq!(artifact_kind(Path::new("/d/dotnet-monitor.http")), None);
+        // A helper trace is listed; dotnet-trace's raw trace is not, its Speedscope file is.
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("1-2.nettrace");
+        std::fs::write(&helper, b"").unwrap();
+        assert_eq!(artifact_kind(&helper), Some(ArtifactKind::Trace));
+        std::fs::write(dir.path().join("1-2.speedscope.json"), b"{}").unwrap();
+        assert_eq!(artifact_kind(&helper), None);
     }
 
     /// Frame names as `dotnet-trace` writes them, against the tree-sitter outline of the code.

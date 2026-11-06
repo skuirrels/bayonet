@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import type { FlameNode, TraceProfile } from "@/bindings";
-import { buildHeat } from "./heatGutter";
+import { buildHeat, lineTimeText } from "./heatGutter";
 import {
   butterfly,
   displayFrame,
   formatMs,
   formatShare,
+  gcSummary,
   heatByFile,
+  lineHeatByFile,
   heatLevel,
   initialCallPath,
   methodTable,
@@ -123,6 +125,8 @@ describe("editor heat", () => {
     durationMs: 1000,
     threads: 2,
     root,
+    lines: [],
+    collections: [],
     sources: [
       { frame: "A!N.Program.Main()", path: "/src/Program.cs", line: 4, col: 23, startLine: 4, endLine: 9 },
       { frame: "A!N.Program.Fib(int32)", path: "/src/Program.cs", line: 11, col: 15, startLine: 11, endLine: 11 },
@@ -161,7 +165,7 @@ describe("editor heat", () => {
     const doc = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
     const state = EditorState.create({ doc });
     const revealed: string[] = [];
-    const h = buildHeat(state, heatByFile(trace)["/src/Program.cs"]!, (f) => revealed.push(f));
+    const h = buildHeat(state, heatByFile(trace)["/src/Program.cs"]!, [], (f) => revealed.push(f));
     expect(h.lenses.map((l) => [state.doc.lineAt(l.pos).number, l.title])).toEqual([
       [5, "70 % · 70 ms · self 5 ms"],
       [12, "55 % · 55 ms · self 55 ms"],
@@ -174,5 +178,67 @@ describe("editor heat", () => {
     expect(lines).toEqual([5, 6, 7, 8, 9, 10, 12]);
     h.lenses[1]!.run!(null as never, null as never);
     expect(revealed).toEqual(["A!N.Program.Fib(int32)"]);
+  });
+
+  const withLines: TraceProfile = {
+    ...trace,
+    lines: [
+      { path: "/src/Program.cs", line: 6, selfMs: 2, totalMs: 60 },
+      { path: "/src/Program.cs", line: 11, selfMs: 55, totalMs: 55 },
+      // Under 0.5 % of thread time: not marked.
+      { path: "/src/Program.cs", line: 7, selfMs: 0.2, totalMs: 0.2 },
+    ],
+  };
+
+  it("marks hot source lines with their own bar and time when the trace has lines", () => {
+    const lines = lineHeatByFile(withLines)["/src/Program.cs"]!;
+    expect(lines.map((l) => [l.line, l.level])).toEqual([
+      [6, 5],
+      [11, 5],
+    ]);
+    expect(lines.map(lineTimeText)).toEqual(["60 ms · self 2 ms", "55 ms"]);
+    const doc = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+    const state = EditorState.create({ doc });
+    const h = buildHeat(state, heatByFile(trace)["/src/Program.cs"]!, lines, () => {});
+    // Bars on the hot lines only, not over whole methods; lenses stay.
+    const marked: number[] = [];
+    h.markers.between(0, state.doc.length, (from) => {
+      marked.push(state.doc.lineAt(from).number);
+    });
+    expect(marked).toEqual([7, 12]);
+    expect(h.lenses).toHaveLength(2);
+    const at: number[] = [];
+    h.times.between(0, state.doc.length, (from) => {
+      at.push(from);
+    });
+    expect(at).toEqual([state.doc.line(7).to, state.doc.line(12).to]);
+  });
+
+  it("sums up garbage collections", () => {
+    expect(gcSummary(trace)).toBeNull();
+    const g = gcSummary({
+      ...trace,
+      collections: [
+        {
+          startMs: 1,
+          pauseMs: 4,
+          generation: 0,
+          reason: "AllocSmall",
+          kind: "NonConcurrentGC",
+          heapBeforeMb: 8,
+          heapAfterMb: 1,
+        },
+        {
+          startMs: 9,
+          pauseMs: 16,
+          generation: 2,
+          reason: "Induced",
+          kind: "BackgroundGC",
+          heapBeforeMb: 9,
+          heapAfterMb: 2,
+        },
+      ],
+    })!;
+    expect([g.count, g.byGeneration, g.pauseMs, g.pauseShare, g.longestPauseMs]).toEqual([2, [1, 0, 1], 20, 0.02, 16]);
   });
 });

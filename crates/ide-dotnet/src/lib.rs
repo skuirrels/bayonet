@@ -10,6 +10,7 @@ pub mod binlog;
 pub mod diagnostics;
 pub mod ef;
 pub mod generators;
+pub mod helper;
 pub mod msbuild;
 pub mod nuget;
 mod project;

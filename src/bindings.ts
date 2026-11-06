@@ -4319,6 +4319,19 @@ export type FunctionBreakpoint = {
 	enabled: boolean,
 };
 
+export type GcCollection = {
+	/**  Since the start of the trace. */
+	startMs: number | null,
+	pauseMs: number | null,
+	generation: number,
+	/**  Why it ran, as the runtime names it (`AllocSmall`, `Induced`, `LowMemory`). */
+	reason: string,
+	/**  `NonConcurrentGC`, `BackgroundGC` or `ForegroundGC`. */
+	kind: string,
+	heapBeforeMb: number | null,
+	heapAfterMb: number | null,
+};
+
 export type GeneralSettings = {
 	reopenLastProject?: boolean,
 	confirmExit?: boolean,
@@ -8369,6 +8382,15 @@ export type ToolStatus =
 /**  The executable chosen in settings. */
 "custom" | "missing";
 
+/**  Time on one source line: `self_ms` while the line itself ran, `total_ms` with what it called. */
+export type TraceLine = {
+	path: IpcPath,
+	/**  0-based. */
+	line: number,
+	selfMs: number | null,
+	totalMs: number | null,
+};
+
 export type TraceProfile = {
 	path: IpcPath,
 	durationMs: number,
@@ -8377,6 +8399,13 @@ export type TraceProfile = {
 	root: FlameNode,
 	/**  Where the frames of the solution's own code are declared (filled in by the host). */
 	sources: FrameSource[],
+	/**
+	 *  Time per source line, where the trace's PDBs give lines (traces the .NET
+	 *  diagnostics helper read; Speedscope files carry none).
+	 */
+	lines: TraceLine[],
+	/**  Garbage collections during the trace, oldest first (helper traces only). */
+	collections: GcCollection[],
 };
 
 export type TransferError = {
