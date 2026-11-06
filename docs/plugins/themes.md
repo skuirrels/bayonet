@@ -63,7 +63,10 @@ manifest fields are described in [`plugins/README.md`](../../plugins/README.md).
   Islands Dark or Islands Light, and every token the theme leaves out keeps
   that base's value. Icons also use the light or dark set that matches the
   kind. A partial theme still looks consistent, but listing every token keeps
-  it stable when the IDE's own palette changes.
+  it stable when the IDE's own palette changes. The C# kinds Rider colours on
+  their own (`--syn-struct`, `--syn-namespace`, `--syn-event`,
+  `--syn-doc-comment-tag`) are the exception: left out, they follow the
+  theme's type, plain text, property and doc comment colours.
 - Values are plain CSS values: hex (`#rgb`, `#rrggbb`, `#rrggbbaa`), `rgb()`,
   `hsl()`, `color-mix()`, `var(--other-token)`, or for the few non-colour
   tokens a keyword (`italic`, `normal`, `none`) or shadow list. `url()`,
@@ -219,6 +222,8 @@ The full table is `UI_KEYS` in [`src/features/plugins/intellijTheme.ts`](../../s
 | `--syn-comment` (+ `--syn-comment-style`), `--syn-doc-comment` | `DEFAULT_LINE_COMMENT` (+ `FONT_TYPE`), `DEFAULT_DOC_COMMENT` |
 | `--syn-function`, `--syn-function-call` | `DEFAULT_FUNCTION_DECLARATION`, `DEFAULT_FUNCTION_CALL` |
 | `--syn-type`, `--syn-constant`, `--syn-property` | `DEFAULT_CLASS_NAME`, `DEFAULT_CONSTANT`, `DEFAULT_INSTANCE_FIELD` |
+| `--syn-struct`, `--syn-namespace`, `--syn-event` | `ReSharper.STRUCT_IDENTIFIER` (also `ENUM_`, `DELEGATE_`), `ReSharper.NAMESPACE_IDENTIFIER`, `ReSharper.EVENT_IDENTIFIER` |
+| `--syn-doc-comment-tag` | `DEFAULT_DOC_COMMENT_TAG` |
 | `--syn-variable`, `--syn-param`, `--syn-builtin` | `DEFAULT_LOCAL_VARIABLE`, `DEFAULT_PARAMETER`, `DEFAULT_PREDEFINED_SYMBOL` |
 | `--syn-annotation`, `--syn-decorator` | `DEFAULT_METADATA` |
 | `--syn-punct`, `--syn-escape` | `DEFAULT_OPERATION_SIGN`, `DEFAULT_VALID_STRING_ESCAPE` |
@@ -324,7 +329,7 @@ a token.
 
 <!-- BEGIN GENERATED TOKEN REFERENCE: pnpm gen:theme-docs -->
 
-242 themeable tokens: 121 in the UI theme file, 121 in the editor colour scheme file.
+247 themeable tokens: 121 in the UI theme file, 126 in the editor colour scheme file.
 
 ### Surfaces (UI theme)
 
@@ -416,24 +421,24 @@ a token.
 
 | Token | Islands Dark | Islands Light |
 |---|---|---|
-| `--syn-keyword` | `#cf8e6d` | `#0033b3` |
-| `--syn-string` | `#6aab73` | `#067d17` |
-| `--syn-type` | `#bcbec4` | `#000000` |
-| `--syn-function` | `#56a8f5` | `#00627a` |
-| `--syn-function-call` | `#bcbec4` | `#080808` |
-| `--syn-comment` | `#7a7e85` | `#8c8c8c` |
-| `--syn-comment-style` | `normal` | `italic` |
-| `--syn-doc-comment` | `#5f826b` | `#8c8c8c` |
+| `--syn-keyword` | `#6c95eb` | `#0f54d6` |
+| `--syn-string` | `#c9a26d` | `#8c6c41` |
+| `--syn-type` | `#c191ff` | `#6b2fba` |
+| `--syn-function` | `#39cc9b` | `#00855f` |
+| `--syn-function-call` | `#39cc9b` | `#00855f` |
+| `--syn-comment` | `#85c46c` | `#248700` |
+| `--syn-comment-style` | `italic` | `italic` |
+| `--syn-doc-comment` | `#85c46c` | `#248700` |
 | `--syn-docstring` | `#5f826b` | `#067d17` |
-| `--syn-annotation` | `#b3ae60` | `#9e880d` |
-| `--syn-decorator` | `#b3ae60` | `#9e880d` |
-| `--syn-number` | `#2aacb8` | `#1750eb` |
-| `--syn-punct` | `#bcbec4` | `#080808` |
-| `--syn-variable` | `#bcbec4` | `#080808` |
+| `--syn-annotation` | `#c191ff` | `#6b2fba` |
+| `--syn-decorator` | `#c191ff` | `#6b2fba` |
+| `--syn-number` | `#ed94c0` | `#ab2f6b` |
+| `--syn-punct` | `#bdbdbd` | `#383838` |
+| `--syn-variable` | `#bdbdbd` | `#383838` |
 | `--syn-global` | `var(--syn-variable)` | `var(--syn-variable)` |
-| `--syn-param` | `#bcbec4` | `#080808` |
-| `--syn-property` | `#c77dbb` | `#871094` |
-| `--syn-constant` | `#c77dbb` | `#871094` |
+| `--syn-param` | `#bdbdbd` | `#383838` |
+| `--syn-property` | `#66c3cc` | `#0093a1` |
+| `--syn-constant` | `#66c3cc` | `#0093a1` |
 | `--syn-python-local-variable` | `var(--syn-variable)` | `var(--syn-variable)` |
 | `--syn-python-global-variable` | `var(--syn-global)` | `var(--syn-global)` |
 | `--syn-python-instance-attribute` | `var(--syn-variable)` | `var(--syn-variable)` |
@@ -441,26 +446,26 @@ a token.
 | `--syn-python-constant` | `var(--syn-constant)` | `var(--syn-constant)` |
 | `--syn-python-property` | `var(--syn-property)` | `var(--syn-property)` |
 | `--syn-python-type-parameter` | `var(--syn-type)` | `var(--syn-type)` |
-| `--syn-python-builtin` | `var(--syn-builtin)` | `var(--syn-builtin)` |
+| `--syn-python-builtin` | `#8888c6` | `#000080` |
 | `--syn-python-predefined-definition` | `var(--syn-predefined)` | `var(--syn-predefined)` |
 | `--syn-python-predefined-usage` | `var(--syn-predefined)` | `var(--syn-predefined)` |
 | `--syn-python-fstring` | `#a5c261` | `var(--syn-string)` |
 | `--syn-python-bytes` | `#a5c261` | `var(--syn-string)` |
-| `--syn-php-variable` | `var(--syn-property)` | `var(--syn-property)` |
-| `--syn-php-function-call` | `var(--syn-function)` | `var(--syn-function)` |
-| `--syn-builtin` | `#8888c6` | `#000080` |
+| `--syn-php-variable` | `#c77dbb` | `#871094` |
+| `--syn-php-function-call` | `#56a8f5` | `#00627a` |
+| `--syn-builtin` | `#f0f0f0` | `#000000` |
 | `--syn-self` | `#94558d` | `#94558d` |
 | `--syn-keyword-arg` | `#aa4926` | `#660099` |
 | `--syn-predefined` | `#b200b2` | `#b200b2` |
-| `--syn-escape` | `#cf8e6d` | `#0037a6` |
+| `--syn-escape` | `#d688d4` | `#941290` |
 | `--syn-regexp` | `#42c3d4` | `#264eff` |
-| `--syn-tag` | `#d5b778` | `#0033b3` |
-| `--syn-attribute` | `#bcbec4` | `#174ad4` |
-| `--syn-todo` | `#8bb33d` | `#008dde` |
+| `--syn-tag` | `#c191ff` | `#6b2fba` |
+| `--syn-attribute` | `#85c46c` | `#248700` |
+| `--syn-todo` | `#66c3cc` | `#0093a1` |
 | `--syn-link` | `#548af7` | `#006dcc` |
 | `--syn-markup-heading` | `#cf8e6d` | `#871094` |
 | `--syn-markup-code` | `#6aab73` | `#067d17` |
-| `--syn-invalid` | `#f75464` | `#f50000` |
+| `--syn-invalid` | `#ff5647` | `#d91400` |
 | `--syn-inline-value` | `#868a91` | `#8c8c8c` |
 | `--syn-rainbow-1` | `#6fafbd` | `#9b3b6a` |
 | `--syn-rainbow-2` | `#d79b6e` | `#114d77` |
@@ -470,41 +475,46 @@ a token.
 | `--syn-bracket-1` | `#e8c25b` | `#0431fa` |
 | `--syn-bracket-2` | `#d78bd6` | `#319331` |
 | `--syn-bracket-3` | `#4ea7f0` | `#7b3814` |
+| `--syn-namespace` | `var(--syn-type)` | `var(--syn-type)` |
+| `--syn-struct` | `#e1bfff` | `#300073` |
+| `--syn-event` | `#ed94c0` | `#ab2f6b` |
+| `--syn-doc-comment-tag` | `#487d34` | `#8bc775` |
+| `--syn-static-italic` | `normal` | `normal` |
 
 ### Editor (editor scheme)
 
 | Token | Islands Dark | Islands Light |
 |---|---|---|
-| `--fg-editor` | `#bcbec4` | `#080808` |
-| `--caret` | `#ced0d6` | `#000000` |
-| `--fg-line-number` | `#4b5059` | `#aeb3c2` |
-| `--fg-line-number-current` | `#a1a3ab` | `#767a8a` |
+| `--fg-editor` | `#d0d0d0` | `#202020` |
+| `--caret` | `#f0f0f0` | `#000000` |
+| `--fg-line-number` | `#808080` | `#888888` |
+| `--fg-line-number-current` | `#808080` | `#888888` |
 | `--border-gutter` | `#26282c` | `#ebecf0` |
-| `--border-indent-guide` | `#323438` | `#ebecf0` |
-| `--border-indent-guide-active` | `#4e5157` | `#aeb3c2` |
-| `--border-right-margin` | `#323438` | `#ebecf0` |
-| `--bg-editor-selection` | `#214283` | `#a6d2ff` |
+| `--border-indent-guide` | `#404040` | `#d8d8d8` |
+| `--border-indent-guide-active` | `#666666` | `#a0a0a0` |
+| `--border-right-margin` | `#404040` | `#d8d8d8` |
+| `--bg-editor-selection` | `#08335e` | `#b8d9ff` |
 | `--bg-editor-selection-inactive` | `#1d3460` | `#c9e3ff` |
 | `--bg-text-search-result` | `#114957` | `#fcd47e` |
 | `--bg-text-search-result-current` | `#165e70` | `#f2bf57` |
-| `--bg-matched-brace` | `#43454a` | `#93d9d9` |
-| `--matched-brace-weight` | `var(--fw-code-bold)` | `inherit` |
+| `--bg-matched-brace` | `#422240` | `#ffe8fe` |
+| `--matched-brace-weight` | `inherit` | `inherit` |
 | `--bg-matched-tag` | `#3f4045` | `#c9ecec` |
-| `--bg-fold-placeholder` | `#393b40` | `#e9f5e6` |
-| `--fg-fold-placeholder` | `#868991` | `#414d41` |
+| `--bg-fold-placeholder` | `#303030` | `#fbfbfb` |
+| `--fg-fold-placeholder` | `#787878` | `#949494` |
 | `--fg-fold-marker` | `#6f737a` | `#8b8e94` |
-| `--fg-whitespace` | `#6f737a` | `#b5b7bd` |
-| `--fg-unused` | `#6f737a` | `#8c8c8c` |
-| `--bg-identifier-under-caret` | `#373b39` | `#edebfc` |
-| `--bg-identifier-under-caret-write` | `#402f33` | `#fce8f4` |
+| `--fg-whitespace` | `#686868` | `#d0d0d0` |
+| `--fg-unused` | `#787878` | `#949494` |
+| `--bg-identifier-under-caret` | `#232e46` | `#dae4f7` |
+| `--bg-identifier-under-caret-write` | `#232e46` | `#dae4f7` |
 | `--fg-inlay` | `#868a91` | `#73767c` |
 | `--bg-inlay` | `#393b40` | `#00000012` |
-| `--wave-error` | `#fa6675` | `#f50000` |
-| `--wave-warning` | `#f2c55c` | `#f2bf57` |
-| `--editor-error-decoration` | `underline wavy #fa6675` | `underline wavy #f50000` |
-| `--editor-warning-decoration` | `underline wavy #f2c55c` | `none` |
-| `--editor-warning-background` | `transparent` | `#fcf4d4` |
-| `--bg-breakpoint-line` | `#40252b` | `#faeae6` |
+| `--wave-error` | `#ff5647` | `#d91400` |
+| `--wave-warning` | `#f5d86a` | `#826a00` |
+| `--editor-error-decoration` | `underline wavy #ff5647` | `underline wavy #d91400` |
+| `--editor-warning-decoration` | `underline wavy #f5d86a` | `underline wavy #826a00` |
+| `--editor-warning-background` | `transparent` | `transparent` |
+| `--bg-breakpoint-line` | `#4a2421` | `#ffeae8` |
 | `--fg-completion-match` | `#538af9` | `#2f5eb9` |
 | `--bg-editor-inline` | `#212326` | `#f7f8f9` |
 | `--bg-editor-banner` | `#233558` | `#f7f8ff` |

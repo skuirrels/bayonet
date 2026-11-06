@@ -264,4 +264,26 @@ describe(".icls schemes", () => {
       useProject.setState({ settings: previous });
     }
   });
+
+  it("imports Rider's identifier kinds and exports struct colours under every kind", () => {
+    const xml = `<scheme name="R" version="142" parent_scheme="Darcula"><colors /><attributes>
+      <option name="ReSharper.ENUM_IDENTIFIER"><value><option name="FOREGROUND" value="E1BFFF" /></value></option>
+      <option name="ReSharper.EVENT_IDENTIFIER"><value><option name="FOREGROUND" value="ED94C0" /></value></option>
+      <option name="ReSharper.NAMESPACE_IDENTIFIER"><value><option name="FOREGROUND" value="C191FF" /></value></option>
+      <option name="DEFAULT_DOC_COMMENT_TAG"><value><option name="FOREGROUND" value="487D34" /></value></option>
+    </attributes></scheme>`;
+    const { scheme } = parseIcls(xml);
+    expect(scheme.attributes.structName?.foreground).toBe("#e1bfff");
+    expect(scheme.attributes.event?.foreground).toBe("#ed94c0");
+    expect(scheme.attributes.namespace?.foreground).toBe("#c191ff");
+    expect(scheme.attributes.docCommentTag?.foreground).toBe("#487d34");
+    const imported = importScheme({}, scheme);
+    const out = exportIcls(imported.id, imported.customs);
+    for (const key of ["STRUCT", "ENUM", "DELEGATE"])
+      expect(out).toMatch(
+        new RegExp(
+          `name="ReSharper\\.${key}_IDENTIFIER"><value><option name="FOREGROUND" value="[eE]1[bB][fF][fF][fF]"`,
+        ),
+      );
+  });
 });
