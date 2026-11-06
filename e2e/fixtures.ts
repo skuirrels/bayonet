@@ -14,6 +14,12 @@ export const test = base.extend<{ workbench: Page }>({
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto("/");
+    // The specs press IDEA's shortcuts; this port defaults to the Visual Studio keymap.
+    await page.evaluate(async () => {
+      const keymapModule = "/src/platform/keymap.ts";
+      const { applyKeymapSettings } = await import(/* @vite-ignore */ keymapModule);
+      applyKeymapSettings("intellij-macos", {});
+    });
     await expect(page.getByRole("tree", { name: "Project" })).toBeVisible();
     await expect(page.getByRole("treeitem", { name: /acme-api/ })).toBeVisible();
     await provide(page);

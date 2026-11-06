@@ -46,9 +46,14 @@
   border-bottom: 1px solid var(--border);
   flex: none;
   min-width: 0;
+  overflow: hidden;
 }
+.header > * {
+  flex: none;
+}
+/* Shrinks ahead of the meters. */
 .title {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 0;
   font-weight: 600;
   color: var(--fg-strong);
@@ -152,7 +157,10 @@
 .stream:focus {
   outline: none;
 }
-/* Skip off-screen output layout; editable messages must repaint immediately when focus/content changes. */
+/*
+ * Skip off-screen output layout; editable messages must repaint immediately when focus/content changes.
+ * Thinking and tool output sit in a <div>: on <details> itself WebKit wouldn't expand them.
+ */
 .stream > :not(.message):not(details) {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 80px;
@@ -293,11 +301,41 @@
   opacity: 0;
 }
 .markdown :global(pre:hover) .codeCopy,
+.markdown :global([data-mermaid]:hover) .codeCopy,
 .codeCopy:focus-visible {
   opacity: 1;
 }
 .codeCopy:hover {
   background: var(--bg-hover);
+}
+/* Mermaid diagrams: the source stays until the diagram is drawn (and next to an
+   error), and the Copy button lives on the block — the drawn diagram hides the
+   code block that would otherwise carry it. */
+.markdown :global([data-mermaid]) {
+  position: relative;
+  margin: 0 0 8px;
+}
+.markdown :global([data-mermaid] > pre) {
+  margin: 0;
+}
+.markdown :global([data-mermaid-state="ok"] > pre) {
+  display: none;
+}
+.markdown :global(.mermaid-output) {
+  overflow: hidden;
+  text-align: center;
+}
+.markdown :global([data-mermaid-state="error"] > .mermaid-output) {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-small);
+  background: var(--bg-elev);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  text-align: left;
+  white-space: pre-wrap;
 }
 .fileLink {
   color: var(--link);
@@ -466,9 +504,20 @@
   min-width: 0;
   color: var(--fg-secondary);
 }
+/* Title, state and answers on one line when they fit; a long title takes its own line and
+   the state and answers go below it, in line with it. */
+.permissionBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2px 6px;
+}
 /* Up to three lines; the full text is its tooltip. */
 .permissionTitle {
   display: -webkit-box;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -477,7 +526,7 @@
   overflow-wrap: anywhere;
 }
 .permissionLine > svg,
-.permissionLine > .muted {
+.permissionBody > .muted {
   flex: none;
 }
 .permissionAnswers {
@@ -517,6 +566,31 @@
   padding: 6px 12px 12px;
 }
 
+.background {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.backgroundTask {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--radius-row);
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+}
+.backgroundText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .queue {
   display: flex;
   flex-direction: column;
@@ -539,11 +613,17 @@
   white-space: nowrap;
 }
 
+/* Meters that don't fit wrap onto a hidden second row instead of being cut in half. */
 .meters {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 22px;
+  overflow: hidden;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  align-content: flex-start;
+  gap: 0 10px;
   color: var(--fg-subtle);
   font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
@@ -552,6 +632,7 @@
 .meter {
   display: inline-flex;
   align-items: center;
+  height: 22px;
   gap: 5px;
 }
 .usageBar {

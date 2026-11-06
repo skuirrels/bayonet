@@ -1,6 +1,6 @@
 # Bayonet: specification for a Rider-class .NET IDE
 
-Status: draft 1, 2026-10-31
+Status: draft 1, 2026-10-31; progress per requirement and platform updated 2026-11-06 (sections 5 and 6)
 Reference product: JetBrains Rider 2026.2.4 (build 262.11879.110), installed at `~/Applications/Rider.app`
 Port source: OpenIDEA at `/Users/tyomidi/Source/openidea` (v0.1.29, commit `4796265`, Apache 2.0, Rust core + Tauri + React/CodeMirror 6)
 
@@ -33,43 +33,43 @@ O = observed in the install, I = inferred, U = unknown.
 
 ### 2.1 Process architecture (Q1)
 
-| ID  | Type | Finding                                                                                                                                                                                                                                  | Evidence                                                                                                                           |
-| --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| R1  | O    | The UI is an IntelliJ Platform (JVM) app running on a bundled JetBrains Runtime, Java 25 minimum.                                                                                                                                        | `Contents/Resources/product-info.json` (`minRequiredJavaVersion: 25`, `jbr/`)                                                      |
-| R2  | O    | The language engine is a separate .NET process, the "ReSharper Host", shipped with its own .NET 10.0.9 runtime per platform.                                                                                                             | `lib/ReSharperHost/` (898 entries), `lib/ReSharperHost/macos-arm64/dotnet/`                                                        |
-| R3  | O    | Frontend and backend talk over JetBrains' Rd protocol.                                                                                                                                                                                   | `JetBrains.RdFramework.dll`, `JetBrains.Platform.RdProtocol.dll`, `JetBrains.Rider.DotNetIpc.Protocol.dll`                         |
-| R4  | I    | The backend owns the .NET semantic model (PSI), solution model, MSBuild evaluation, NuGet, inspections, refactorings, unit testing and debugging. The JVM frontend owns editor, UI, VCS, database, web tooling and the plugin ecosystem. | Assembly families below, plugin folders                                                                                            |
-| R5  | O    | Separate worker processes exist for the debugger, process enumeration, MSBuild and test running.                                                                                                                                         | `macos-arm64/JetBrains.Debugger.Worker`, `JetBrains.ProcessEnumerator.Worker`, `JetBrains.Platform.MsBuildHost.dll`, `TestRunner/` |
-| R6  | O    | Rider also hosts Roslyn in the backend, alongside its own C# engine.                                                                                                                                                                     | `JetBrains.Rider.Roslyn.Host.dll`, `Microsoft.CodeAnalysis.*`                                                                      |
-| R7  | O    | 140 frontend plugin folders, 481 entries in `lib/`. Install size 6.3 GB.                                                                                                                                                                 | `Contents/plugins`, `du`                                                                                                           |
+| ID | Type | Finding | Evidence |
+| --- | --- | --- | --- | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| R1 | O | The UI is an IntelliJ Platform (JVM) app running on a bundled JetBrains Runtime, Java 25 minimum. | `Contents/Resources/product-info.json` (`minRequiredJavaVersion: 25`, `jbr/`) |
+| R2 | O | The language engine is a separate .NET process, the "ReSharper Host", shipped with its own .NET 10.0.9 runtime per platform. | `lib/ReSharperHost/` (898 entries), `lib/ReSharperHost/macos-arm64/dotnet/` |
+| R3 | O | Frontend and backend talk over JetBrains' Rd protocol. | `JetBrains.RdFramework.dll`, `JetBrains.Platform.RdProtocol.dll`, `JetBrains.Rider.DotNetIpc.Protocol.dll` |
+| R4 | I | The backend owns the .NET semantic model (PSI), solution model, MSBuild evaluation, NuGet, inspections, refactorings, unit testing and debugging. The JVM frontend owns editor, UI, VCS, database, web tooling and the plugin ecosystem. | Assembly families below, plugin folders |
+| R5 | O | Separate worker processes exist for the debugger, process enumeration, MSBuild and test running. | `macos-arm64/JetBrains.Debugger.Worker`, `JetBrains.ProcessEnumerator.Worker`, `JetBrains.Platform.MsBuildHost.dll`, `TestRunner/` |
+| R6 | O | Rider also hosts Roslyn in the backend, alongside its own C# engine. | `JetBrains.Rider.Roslyn.Host.dll`, `Microsoft.CodeAnalysis.*` |
+| R7 | O | 140 frontend plugin folders, 481 entries in `lib/`. Install size 6.3 GB. | `Contents/plugins`, `du` |
 
 ### 2.2 Feature areas (Q2)
 
 Derived from backend assembly families (names only) and frontend plugin folders.
 
-| ID  | Area                                                                                                                              | Rider evidence (names)                                                                                                                                                      |
-| --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F1  | Languages: C#, VB.NET, F#, XAML, Razor/Blazor (cshtml), ASP.NET WebForms, RESX, MSBuild, Protobuf, RegExp, XML, IL, C++           | `ReSharper.Psi.{CSharp,VB,Xaml,Web,Resx,BuildScripts,Protobuf,RegExp,IL,Asm,Xml}`, `rider-plugins-fsharp`, `rider-plugins-razor`, `rider-cpp`                               |
-| F2  | Solution and project model: sln, slnx, slnf, csproj, fsproj, vbproj, sqlproj, shproj, props/targets                               | `Info.plist` document types, `Platform.ProjectModel*`, `Microsoft.VisualStudio.SolutionPersistence`                                                                         |
-| F3  | Build: MSBuild host, binary log, build events, solution builder                                                                   | `Platform.MsBuildHost`, `Platform.MsBuildEventLogger`, `Platform.BuildEngine`, `Features.SolBuilderDuo`                                                                     |
-| F4  | NuGet: browse, install, restore, private feed auth, Package Manager Console                                                       | `Platform.ProjectModel.NuGet`, `NuGet.*`, `rider-plugins-privateFeedAuth`, `rider-pmc`                                                                                      |
-| F5  | Code analysis ("daemon"): on-the-fly inspections, solution-wide analysis, spell checking                                          | `ReSharper.Daemon.*`, `ReSharper.SolutionAnalysis`, `Features.ReSpeller`                                                                                                    |
-| F6  | Quick-fixes, context actions                                                                                                      | `ReSharper.Intentions.*`                                                                                                                                                    |
-| F7  | Refactorings: rename, move, extract, change signature, in-place                                                                   | `ReSharper.Refactorings.*`, `InplaceRefactorings`, `NewRefactorings`                                                                                                        |
-| F8  | Navigation and search: go to symbol/type/file, find usages, structural search                                                     | `Features.Navigation`, `Features.StructuralSearch`, `Lucene.Net`                                                                                                            |
-| F9  | Completion, parameter info, live templates, postfix templates                                                                     | `Features.Intellisense`, `ReSharper.LiveTemplates`                                                                                                                          |
-| F10 | Decompiled and external sources: navigate into compiled assemblies, Source Link                                                   | `ReSharper.ExternalSources*`, `ICSharpCode.Decompiler`                                                                                                                      |
-| F11 | Unit testing: xUnit, NUnit, MSTest, VSTest, coverage                                                                              | `ReSharper.UnitTest*`, `TestRunner/Adapters`, `Microsoft.TestPlatform.*`, `dotCover`                                                                                        |
-| F12 | Debugger: .NET (CoreCLR, Mono, Unity), expression evaluation, LINQ visualiser, parallel stacks, data grid                         | `Debugger.Host`, `Debugger.CorApi`, `Mono.Debugging.*`, `Microsoft.CodeAnalysis.*ExpressionEvaluator*`, `debuggerLinq`, `cidr-parallelStacks`, `rider-plugins-debuggerGrid` |
-| F13 | Profiling: performance and memory, dynamic program analysis                                                                       | `dotTrace.dotMemory`, `dpa`, `tools/profiler`                                                                                                                               |
-| F14 | Hot reload / watch                                                                                                                | `rider-plugins-dotnetwatch`                                                                                                                                                 |
-| F15 | Designers: XAML previewer, WinForms designer                                                                                      | `Features.Xaml.Previewer.Host`, `Features.WinForms.Designer.*`, `rider-plugins-xaml-preview`                                                                                |
-| F16 | Framework and engine integrations: Entity Framework, .NET Aspire, Unity, Godot, Unreal, MAUI/Xamarin                              | `rider-efcore`, `aspire-plugin`, `rider-unity`, `rider-godot`, `UnrealLink`                                                                                                 |
-| F17 | Web front end: JS/TS, React, Angular, Vue, CSS, HTTP client                                                                       | `javascript-plugin`, `react-plugin`, `angular-plugin`, `vuejs-plugin`, `restClient`                                                                                         |
-| F18 | Platform: Git/GitHub/GitLab/Azure DevOps/Perforce, terminal, database tools, Docker/Kubernetes, remote development, settings sync | `vcs-*`, `terminal`, `DatabaseTools`, `clouds-*`, `remote-dev-server`, `settingsSync`                                                                                       |
-| F19 | Keymaps: Visual Studio, VS 2022, VS Code, ReSharper, Visual Assist                                                                | `keymap-*`                                                                                                                                                                  |
-| F20 | AI: completion ranking, full-line completion, AI assistant services, MCP server, ACP                                              | `completionMlRanking`, `fullLine`, `ReSharper.Feature.Services.AI`, `mcpserver`, `platform-acp-plugin`                                                                      |
-| F21 | i18n: resource localisation analysis                                                                                              | `ReSharper.I18n.Services.*`                                                                                                                                                 |
+| ID | Area | Rider evidence (names) |
+| --- | --- | --- | --- | --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 | Languages: C#, VB.NET, F#, XAML, Razor/Blazor (cshtml), ASP.NET WebForms, RESX, MSBuild, Protobuf, RegExp, XML, IL, C++ | `ReSharper.Psi.{CSharp,VB,Xaml,Web,Resx,BuildScripts,Protobuf,RegExp,IL,Asm,Xml}`, `rider-plugins-fsharp`, `rider-plugins-razor`, `rider-cpp` |
+| F2 | Solution and project model: sln, slnx, slnf, csproj, fsproj, vbproj, sqlproj, shproj, props/targets | `Info.plist` document types, `Platform.ProjectModel*`, `Microsoft.VisualStudio.SolutionPersistence` |
+| F3 | Build: MSBuild host, binary log, build events, solution builder | `Platform.MsBuildHost`, `Platform.MsBuildEventLogger`, `Platform.BuildEngine`, `Features.SolBuilderDuo` |
+| F4 | NuGet: browse, install, restore, private feed auth, Package Manager Console | `Platform.ProjectModel.NuGet`, `NuGet.*`, `rider-plugins-privateFeedAuth`, `rider-pmc` |
+| F5 | Code analysis ("daemon"): on-the-fly inspections, solution-wide analysis, spell checking | `ReSharper.Daemon.*`, `ReSharper.SolutionAnalysis`, `Features.ReSpeller` |
+| F6 | Quick-fixes, context actions | `ReSharper.Intentions.*` |
+| F7 | Refactorings: rename, move, extract, change signature, in-place | `ReSharper.Refactorings.*`, `InplaceRefactorings`, `NewRefactorings` |
+| F8 | Navigation and search: go to symbol/type/file, find usages, structural search | `Features.Navigation`, `Features.StructuralSearch`, `Lucene.Net` |
+| F9 | Completion, parameter info, live templates, postfix templates | `Features.Intellisense`, `ReSharper.LiveTemplates` |
+| F10 | Decompiled and external sources: navigate into compiled assemblies, Source Link | `ReSharper.ExternalSources*`, `ICSharpCode.Decompiler` |
+| F11 | Unit testing: xUnit, NUnit, MSTest, VSTest, coverage | `ReSharper.UnitTest*`, `TestRunner/Adapters`, `Microsoft.TestPlatform.*`, `dotCover` |
+| F12 | Debugger: .NET (CoreCLR, Mono, Unity), expression evaluation, LINQ visualiser, parallel stacks, data grid | `Debugger.Host`, `Debugger.CorApi`, `Mono.Debugging.*`, `Microsoft.CodeAnalysis.*ExpressionEvaluator*`, `debuggerLinq`, `cidr-parallelStacks`, `rider-plugins-debuggerGrid` |
+| F13 | Profiling: performance and memory, dynamic program analysis | `dotTrace.dotMemory`, `dpa`, `tools/profiler` |
+| F14 | Hot reload / watch | `rider-plugins-dotnetwatch` |
+| F15 | Designers: XAML previewer, WinForms designer | `Features.Xaml.Previewer.Host`, `Features.WinForms.Designer.*`, `rider-plugins-xaml-preview` |
+| F16 | Framework and engine integrations: Entity Framework, .NET Aspire, Unity, Godot, Unreal, MAUI/Xamarin | `rider-efcore`, `aspire-plugin`, `rider-unity`, `rider-godot`, `UnrealLink` |
+| F17 | Web front end: JS/TS, React, Angular, Vue, CSS, HTTP client | `javascript-plugin`, `react-plugin`, `angular-plugin`, `vuejs-plugin`, `restClient` |
+| F18 | Platform: Git/GitHub/GitLab/Azure DevOps/Perforce, terminal, database tools, Docker/Kubernetes, remote development, settings sync | `vcs-*`, `terminal`, `DatabaseTools`, `clouds-*`, `remote-dev-server`, `settingsSync` |
+| F19 | Keymaps: Visual Studio, VS 2022, VS Code, ReSharper, Visual Assist | `keymap-*` |
+| F20 | AI: completion ranking, full-line completion, AI assistant services, MCP server, ACP | `completionMlRanking`, `fullLine`, `ReSharper.Feature.Services.AI`, `mcpserver`, `platform-acp-plugin` |
+| F21 | i18n: resource localisation analysis | `ReSharper.I18n.Services.*` |
 
 ### 2.3 Open-source components Rider itself bundles (Q3)
 
@@ -125,18 +125,18 @@ Design rules:
 
 ### 4.1 Findings ledger: OpenIDEA
 
-| ID   | Type | Finding                                                                                                                                                                                                                               | Evidence                                                                                                              |
-| ---- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| OI1  | O    | Code insight comes from LSP first, with tree-sitter as the fallback. There is no PSI. The index covers only files and symbols.                                                                                                        | `crates/ide-lsp`, `crates/ide-syntax/src/lib.rs`, `crates/ide-index`                                                  |
-| OI2  | O    | Each language is a single TOML file declaring grammar, LSP servers and debugger. C# already uses csharp-ls and netcoredbg; F# uses fsautocomplete.                                                                                    | `languages/csharp.toml`, `languages/fsharp.toml`                                                                      |
-| OI3  | O    | XML already claims csproj, props, targets, nuspec, xaml, axaml and resx through lemminx. VB, Razor, a dedicated MSBuild language and sln are missing.                                                                                 | `languages/xml.toml`                                                                                                  |
-| OI4  | O    | netcoredbg installs and resolves, but it is hidden from the run form because it has no verified launch template.                                                                                                                      | `src/features/run/ConfigForm.tsx:47`, `crates/ide-dap/src/adapter.rs`                                                 |
-| OI5  | O    | There is no .NET entry in `SdkKind` or `BuildSystem`, no .NET run detection and no .NET fixture.                                                                                                                                      | `crates/ide-sdk/src/lib.rs:33`, `crates/ide-build/src/compile/mod.rs:34`, `crates/ide-run/src/detect.rs`, `fixtures/` |
-| OI6  | O    | The Java integration (jdtls extensions, java-debug, hot swap) is the most complete template for a JVM-grade language. The Go workflow commit `ac360b6` (57 files, about 2.6k lines) lists everything a new language workflow touches. | `crates/ide-lsp/src/jdtls.rs`, `src/features/debugger/java.ts`, `git show ac360b6`                                    |
-| OI7  | O    | The database client already supports SQL Server through tiberius.                                                                                                                                                                     | `crates/ide-db`                                                                                                       |
-| OI8  | O    | The WASM plugin ABI is narrow (commands, notifications, file read, text insert, register language or theme). It cannot host .NET tooling.                                                                                             | `wit/plugin.wit`                                                                                                      |
-| OI9  | O    | About 870 Tauri commands. Bindings are generated with specta into `src/bindings.ts`, and CI fails if they are out of date.                                                                                                            | `src-tauri/src/commands/`, `pnpm gen:bindings`                                                                        |
-| OI10 | O    | `NOTICE` credits IntelliJ Platform code and icons (Apache 2.0). OpenIDEA drew its own language icons rather than using JetBrains' proprietary ones. `deny.toml` allows only permissive licences and MPL-2.0.                          | `NOTICE`, `THIRD_PARTY_LICENSES.md`, `deny.toml`                                                                      |
+| ID | Type | Finding | Evidence |
+| ---- | --- | --- | --- | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| OI1 | O | Code insight comes from LSP first, with tree-sitter as the fallback. There is no PSI. The index covers only files and symbols. | `crates/ide-lsp`, `crates/ide-syntax/src/lib.rs`, `crates/ide-index` |
+| OI2 | O | Each language is a single TOML file declaring grammar, LSP servers and debugger. C# already uses csharp-ls and netcoredbg; F# uses fsautocomplete. | `languages/csharp.toml`, `languages/fsharp.toml` |
+| OI3 | O | XML already claims csproj, props, targets, nuspec, xaml, axaml and resx through lemminx. VB, Razor, a dedicated MSBuild language and sln are missing. | `languages/xml.toml` |
+| OI4 | O | netcoredbg installs and resolves, but it is hidden from the run form because it has no verified launch template. | `src/features/run/ConfigForm.tsx:47`, `crates/ide-dap/src/adapter.rs` |
+| OI5 | O | There is no .NET entry in `SdkKind` or `BuildSystem`, no .NET run detection and no .NET fixture. | `crates/ide-sdk/src/lib.rs:33`, `crates/ide-build/src/compile/mod.rs:34`, `crates/ide-run/src/detect.rs`, `fixtures/` |
+| OI6 | O | The Java integration (jdtls extensions, java-debug, hot swap) is the most complete template for a JVM-grade language. The Go workflow commit `ac360b6` (57 files, about 2.6k lines) lists everything a new language workflow touches. | `crates/ide-lsp/src/jdtls.rs`, `src/features/debugger/java.ts`, `git show ac360b6` |
+| OI7 | O | The database client already supports SQL Server through tiberius. | `crates/ide-db` |
+| OI8 | O | The WASM plugin ABI is narrow (commands, notifications, file read, text insert, register language or theme). It cannot host .NET tooling. | `wit/plugin.wit` |
+| OI9 | O | About 870 Tauri commands. Bindings are generated with specta into `src/bindings.ts`, and CI fails if they are out of date. | `src-tauri/src/commands/`, `pnpm gen:bindings` |
+| OI10 | O | `NOTICE` credits IntelliJ Platform code and icons (Apache 2.0). OpenIDEA drew its own language icons rather than using JetBrains' proprietary ones. `deny.toml` allows only permissive licences and MPL-2.0. | `NOTICE`, `THIRD_PARTY_LICENSES.md`, `deny.toml` |
 
 U1 is resolved: OpenIDEA has no PSI, so semantic depth depends entirely on the language server. Roslyn LSP is therefore the decisive component, and K1 stands as the main parity risk.
 
@@ -182,121 +182,157 @@ U1 is resolved: OpenIDEA has no PSI, so semantic depth depends entirely on the l
 
 Each requirement has an ID, a priority (P0 = MVP, P1 = parity for daily use, P2 = later) and an acceptance test.
 
+Bayonet must run on macOS, Windows and Linux (NFR-5), so each requirement is tracked per platform. Status is as of 2026-11-06, taken from `docs/porting.md` and the code:
+
+- **Status**: Done (the requirement is built), Partial (part of it is missing; the notes under the table say what), Not done, or Out of scope.
+- **macOS, Windows, Linux**: Yes (built and tested on that platform), Untested (the code has that platform's paths but has not been run there), No (does not work there).
+- Everything marked Yes was checked on macOS arm64 only. The CI matrix in `.github/workflows/ci.yml` covers `macos-latest`, `ubuntu-22.04` and `windows-latest`. Since 2026-11-06 it runs on every push to `master` and `dotnet-port` and on pull requests to `master`. The first such run is 42310553128.
+
 ### 5.1 Solution and project model
 
-| ID    | Pri | Requirement                                                                                                                                                                | Acceptance                                                                                                      |
-| ----- | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| SLN-1 | P0  | Open a folder, `.sln`, `.slnx` or `.slnf`; show Solution Explorer with solution folders, projects, dependencies (packages, project refs, frameworks, analysers) and files. | Opening `fixtures/dotnet/MultiProject.slnx` shows every project and its dependencies within 3 s on a warm cache |
-| SLN-2 | P0  | Evaluate projects with MSBuild through the user's installed SDK (respect `global.json`), in an out-of-process build host.                                                  | Changing `global.json` to another installed SDK re-evaluates with that SDK                                      |
-| SLN-3 | P0  | Multi-targeting: a target-framework switcher per editor, analysis per TFM.                                                                                                 | `#if NET10_0` regions grey out correctly when switching TFM                                                     |
-| SLN-4 | P1  | Add, remove, rename projects and files, edit project references; write back via SolutionPersistence and MSBuild project APIs, preserving formatting.                       | Round-trip of a hand-formatted csproj changes only the edited lines                                             |
-| SLN-5 | P1  | `Directory.Build.props/targets`, `Directory.Packages.props` (central package management) understood and navigable.                                                         | Go to definition on a CPM package version lands in `Directory.Packages.props`                                   |
-| SLN-6 | P1  | Convert sln to slnx.                                                                                                                                                       | Produces a slnx accepted by `dotnet build`                                                                      |
-| SLN-7 | P1  | Project templates via `dotnet new` (list, parameters, create).                                                                                                             | New Project dialog lists installed templates, including custom ones                                             |
+| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                                                                                                | Acceptance                                                                                                      |
+| ----- | --- | ------- | ----- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| SLN-1 | P0  | Partial | Yes   | Untested | Untested | Open a folder, `.sln`, `.slnx` or `.slnf`; show Solution Explorer with solution folders, projects, dependencies (packages, project refs, frameworks, analysers) and files. | Opening `fixtures/dotnet/MultiProject.slnx` shows every project and its dependencies within 3 s on a warm cache |
+| SLN-2 | P0  | Done    | Yes   | Untested | Untested | Evaluate projects with MSBuild through the user's installed SDK (respect `global.json`), in an out-of-process build host.                                                  | Changing `global.json` to another installed SDK re-evaluates with that SDK                                      |
+| SLN-3 | P0  | Done    | Yes   | Untested | Untested | Multi-targeting: a target-framework switcher per editor, analysis per TFM.                                                                                                 | `#if NET10_0` regions grey out correctly when switching TFM                                                     |
+| SLN-4 | P1  | Done    | Yes   | Untested | Untested | Add, remove, rename projects and files, edit project references; write back via SolutionPersistence and MSBuild project APIs, preserving formatting.                       | Round-trip of a hand-formatted csproj changes only the edited lines                                             |
+| SLN-5 | P1  | Done    | Yes   | Untested | Untested | `Directory.Build.props/targets`, `Directory.Packages.props` (central package management) understood and navigable.                                                         | Go to definition on a CPM package version lands in `Directory.Packages.props`                                   |
+| SLN-6 | P1  | Done    | Yes   | Untested | Untested | Convert sln to slnx.                                                                                                                                                       | Produces a slnx accepted by `dotnet build`                                                                      |
+| SLN-7 | P1  | Done    | Yes   | Untested | Untested | Project templates via `dotnet new` (list, parameters, create).                                                                                                             | New Project dialog lists installed templates, including custom ones                                             |
+
+- SLN-1: Dependencies lists only analysers (and their generated files). Packages, project references and frameworks are not listed yet.
+- SLN-5: properties set in SDK targets or imported files are not followed yet.
 
 ### 5.2 Build and run
 
-| ID    | Pri | Requirement                                                                                                                                | Acceptance                                                         |
-| ----- | --- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| BLD-1 | P0  | Build, rebuild, clean solution or project; streaming output; errors in a Problems view linked to source.                                   | Introduced compile error appears in Problems and editor            |
-| BLD-2 | P0  | Run configurations auto-generated from `launchSettings.json` and executable projects; environment variables, arguments, working directory. | Each launch profile appears as a run configuration                 |
-| BLD-3 | P1  | Build progress per project, cancel build, binary log capture and viewer.                                                                   | Cancel stops MSBuild within 2 s                                    |
-| BLD-4 | P1  | `dotnet watch` / Hot Reload run mode.                                                                                                      | Editing a method body in a running web app applies without restart |
-| BLD-5 | P1  | .NET Aspire AppHost run: dashboard link, resource list, per-resource logs.                                                                 | Running an AppHost lists its resources                             |
-| BLD-6 | P2  | Publish profiles (folder, container).                                                                                                      | `dotnet publish` with a selected profile                           |
+| ID    | Pri | Status | macOS | Windows  | Linux    | Requirement                                                                                                                                | Acceptance                                                         |
+| ----- | --- | ------ | ----- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| BLD-1 | P0  | Done   | Yes   | Untested | Untested | Build, rebuild, clean solution or project; streaming output; errors in a Problems view linked to source.                                   | Introduced compile error appears in Problems and editor            |
+| BLD-2 | P0  | Done   | Yes   | Untested | Untested | Run configurations auto-generated from `launchSettings.json` and executable projects; environment variables, arguments, working directory. | Each launch profile appears as a run configuration                 |
+| BLD-3 | P1  | Done   | Yes   | Untested | Untested | Build progress per project, cancel build, binary log capture and viewer.                                                                   | Cancel stops MSBuild within 2 s                                    |
+| BLD-4 | P1  | Done   | Yes   | Untested | Untested | `dotnet watch` / Hot Reload run mode.                                                                                                      | Editing a method body in a running web app applies without restart |
+| BLD-5 | P1  | Done   | Yes   | Untested | Untested | .NET Aspire AppHost run: dashboard link, resource list, per-resource logs.                                                                 | Running an AppHost lists its resources                             |
+| BLD-6 | P2  | Done   | Yes   | Untested | Untested | Publish profiles (folder, container).                                                                                                      | `dotnet publish` with a selected profile                           |
+
+- BLD-3: the 2-second cancel test (`dotnet_build_cancels_within_two_seconds`) runs on Unix only. Windows cancels through `taskkill /T /F`, which has not been timed.
 
 ### 5.3 Code insight (C# first, then VB, F#)
 
-| ID    | Pri | Requirement                                                                                                                     | Acceptance                                                                                 |
-| ----- | --- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| CI-1  | P0  | Semantic highlighting, diagnostics (compiler + analysers + `.editorconfig` severities) live as you type.                        | Diagnostic for an unused variable appears under 300 ms after a keystroke on a 2k-line file |
-| CI-2  | P0  | Completion: symbols, members, keywords, unimported types with auto-using, override/partial completion, snippets.                | Typing `JsonSer` offers `JsonSerializer` and adds `using System.Text.Json;`                |
-| CI-3  | P0  | Go to definition, implementation, base, type definition; find usages grouped by kind; highlight usages.                         | Find usages on an interface method lists implementations and calls separately              |
-| CI-4  | P0  | Quick-fixes and context actions from Roslyn code fixes and refactoring providers (Alt+Enter).                                   | Alt+Enter on a missing using adds it                                                       |
-| CI-5  | P0  | Rename (symbols, files, namespaces), with preview.                                                                              | Renaming a class also renames its file when names match                                    |
-| CI-6  | P1  | Refactorings: extract method/variable/interface, inline, change signature, move type to file, introduce parameter, safe delete. | Each refactoring has a fixture test                                                        |
-| CI-7  | P1  | Solution-wide analysis: error count across solution, background, incremental.                                                   | Errors in unopened files appear in the Problems view                                       |
-| CI-8  | P1  | Code cleanup and reformat on save using `.editorconfig` and Roslyn formatter.                                                   | Reformat matches `dotnet format` output                                                    |
-| CI-9  | P1  | Inlay hints (parameter names, types), CodeLens-style usage and test markers, gutter icons for overrides and implementations.    | Hints toggle in settings                                                                   |
-| CI-10 | P1  | Navigate into referenced assemblies: Source Link first, then decompiled source via ICSharpCode.Decompiler, with IL view.        | Go to definition on `List<T>.Add` opens source or decompiled code                          |
-| CI-11 | P1  | Go to everything (Shift Shift) across types, symbols, files, actions; go to file member.                                        | Results under 100 ms on a 5k-file solution                                                 |
-| CI-12 | P2  | Structural search and replace for C#.                                                                                           | Pattern `$x$ == null` finds all null comparisons                                           |
-| CI-13 | P2  | Type hierarchy, call hierarchy, file structure, project dependency diagram.                                                     | Call hierarchy shows incoming calls                                                        |
-| CI-14 | P1  | F# via FsAutoComplete (MIT, LSP).                                                                                               | Diagnostics and completion in an fsproj                                                    |
-| CI-15 | P2  | Razor/Blazor via the Razor language server (MIT).                                                                               | Completion of components in `.razor`                                                       |
-| CI-16 | P2  | XAML (WPF, Avalonia, MAUI) completion and navigation; Avalonia previewer.                                                       | Binding path completion                                                                    |
-| CI-17 | P1  | Source generators: show generated files, navigate into them.                                                                    | Generated files appear under Dependencies > Analysers                                      |
-| CI-18 | P1  | MSBuild files: completion of properties, items, targets; go to imported target.                                                 | Go to definition on `<Target Name="Build">` reference                                      |
+| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                                                     | Acceptance                                                                                 |
+| ----- | --- | ------- | ----- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| CI-1  | P0  | Done    | Yes   | Untested | Untested | Semantic highlighting, diagnostics (compiler + analysers + `.editorconfig` severities) live as you type.                        | Diagnostic for an unused variable appears under 300 ms after a keystroke on a 2k-line file |
+| CI-2  | P0  | Done    | Yes   | Untested | Untested | Completion: symbols, members, keywords, unimported types with auto-using, override/partial completion, snippets.                | Typing `JsonSer` offers `JsonSerializer` and adds `using System.Text.Json;`                |
+| CI-3  | P0  | Done    | Yes   | Untested | Untested | Go to definition, implementation, base, type definition; find usages grouped by kind; highlight usages.                         | Find usages on an interface method lists implementations and calls separately              |
+| CI-4  | P0  | Done    | Yes   | Untested | Untested | Quick-fixes and context actions from Roslyn code fixes and refactoring providers (Alt+Enter).                                   | Alt+Enter on a missing using adds it                                                       |
+| CI-5  | P0  | Partial | Yes   | Untested | Untested | Rename (symbols, files, namespaces), with preview.                                                                              | Renaming a class also renames its file when names match                                    |
+| CI-6  | P1  | Done    | Yes   | Untested | Untested | Refactorings: extract method/variable/interface, inline, change signature, move type to file, introduce parameter, safe delete. | Each refactoring has a fixture test                                                        |
+| CI-7  | P1  | Done    | Yes   | Untested | Untested | Solution-wide analysis: error count across solution, background, incremental.                                                   | Errors in unopened files appear in the Problems view                                       |
+| CI-8  | P1  | Done    | Yes   | Untested | Untested | Code cleanup and reformat on save using `.editorconfig` and Roslyn formatter.                                                   | Reformat matches `dotnet format` output                                                    |
+| CI-9  | P1  | Done    | Yes   | Untested | Untested | Inlay hints (parameter names, types), CodeLens-style usage and test markers, gutter icons for overrides and implementations.    | Hints toggle in settings                                                                   |
+| CI-10 | P1  | Partial | Yes   | Untested | Untested | Navigate into referenced assemblies: Source Link first, then decompiled source via ICSharpCode.Decompiler, with IL view.        | Go to definition on `List<T>.Add` opens source or decompiled code                          |
+| CI-11 | P1  | Done    | Yes   | Untested | Untested | Go to everything (Shift Shift) across types, symbols, files, actions; go to file member.                                        | Results under 100 ms on a 5k-file solution                                                 |
+| CI-12 | P2  | Done    | Yes   | Untested | Untested | Structural search and replace for C#.                                                                                           | Pattern `$x$ == null` finds all null comparisons                                           |
+| CI-13 | P2  | Done    | Yes   | Untested | Untested | Type hierarchy, call hierarchy, file structure, project dependency diagram.                                                     | Call hierarchy shows incoming calls                                                        |
+| CI-14 | P1  | Done    | Yes   | Untested | Untested | F# via FsAutoComplete (MIT, LSP).                                                                                               | Diagnostics and completion in an fsproj                                                    |
+| CI-15 | P2  | Done    | Yes   | Untested | Untested | Razor/Blazor via the Razor language server (MIT).                                                                               | Completion of components in `.razor`                                                       |
+| CI-16 | P2  | Partial | Yes   | Untested | Untested | XAML (WPF, Avalonia, MAUI) completion and navigation; Avalonia previewer.                                                       | Binding path completion                                                                    |
+| CI-17 | P1  | Done    | Yes   | Untested | Untested | Source generators: show generated files, navigate into them.                                                                    | Generated files appear under Dependencies > Analysers                                      |
+| CI-18 | P1  | Done    | Yes   | Untested | Untested | MSBuild files: completion of properties, items, targets; go to imported target.                                                 | Go to definition on `<Target Name="Build">` reference                                      |
+
+- CI-5: Rename (with preview) works for symbols and namespaces, but nothing renames a class's file to match. Roslyn's rename edit has no file operation, and the IDE does not add one.
+- CI-8: whether Roslyn offers `source.organizeImports` and `source.fixAll` for cleanup on save has not been checked.
+- CI-10: Source Link and decompiled sources work. There is no IL view.
+- CI-16: binding paths, navigation and the Avalonia previewer work. Element and attribute completion goes no further than LemMinX's XML completion. WPF and MAUI have no previewer.
 
 ### 5.4 Unit testing
 
-| ID    | Pri | Requirement                                                                                                                              | Acceptance                                                  |
-| ----- | --- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| TST-1 | P0  | Discover tests (xUnit v2/v3, NUnit, MSTest) via VSTest and Microsoft.Testing.Platform; Unit Tests tool window with tree, filter, status. | Fixture solution with all three frameworks shows every test |
-| TST-2 | P0  | Run and debug single test, class, project, session; gutter run icons; output and stack traces linked to source.                          | Clicking a gutter icon runs only that test                  |
-| TST-3 | P1  | Continuous testing (rerun affected tests on build).                                                                                      | Editing a method reruns its tests                           |
-| TST-4 | P1  | Code coverage via coverlet or Microsoft.CodeCoverage, with editor highlighting.                                                          | Covered lines highlighted green                             |
-| TST-5 | P2  | Data-driven test cases shown as children (Theory, TestCase).                                                                             | Each InlineData row is a node                               |
+| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                                                              | Acceptance                                                  |
+| ----- | --- | ------- | ----- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| TST-1 | P0  | Partial | Yes   | Untested | Untested | Discover tests (xUnit v2/v3, NUnit, MSTest) via VSTest and Microsoft.Testing.Platform; Unit Tests tool window with tree, filter, status. | Fixture solution with all three frameworks shows every test |
+| TST-2 | P0  | Done    | Yes   | Untested | Untested | Run and debug single test, class, project, session; gutter run icons; output and stack traces linked to source.                          | Clicking a gutter icon runs only that test                  |
+| TST-3 | P1  | Done    | Yes   | Untested | Untested | Continuous testing (rerun affected tests on build).                                                                                      | Editing a method reruns its tests                           |
+| TST-4 | P1  | Done    | Yes   | Untested | Untested | Code coverage via coverlet or Microsoft.CodeCoverage, with editor highlighting.                                                          | Covered lines highlighted green                             |
+| TST-5 | P2  | Done    | Yes   | Untested | Untested | Data-driven test cases shown as children (Theory, TestCase).                                                                             | Each InlineData row is a node                               |
+
+- TST-1: only Microsoft.Testing.Platform test projects are supported. VSTest-only projects show a notice and get no tests, and so no coverage (TST-4).
 
 ### 5.5 Debugger
 
-| ID    | Pri | Requirement                                                                                                                                                                        | Acceptance                                                |
-| ----- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| DBG-1 | P0  | Launch and attach debugging of CoreCLR apps through netcoredbg over DAP: breakpoints (line, conditional, hit count, logpoints), step, pause, threads, call stack, locals, watches. | Debugging a console app stops at a conditional breakpoint |
-| DBG-2 | P0  | Exception breakpoints (thrown/unhandled, by type).                                                                                                                                 | Break on `InvalidOperationException` when thrown          |
-| DBG-3 | P1  | Evaluate expressions and immediate window, including method calls and LINQ.                                                                                                        | `list.Where(x => x > 2).Count()` evaluates                |
-| DBG-4 | P1  | Attach to process picker (local .NET processes via diagnostics IPC).                                                                                                               | Lists running dotnet processes with names                 |
-| DBG-5 | P1  | Debug unit tests and Aspire resources.                                                                                                                                             | Breakpoint in a test hits                                 |
-| DBG-6 | P2  | Parallel stacks, data tips, collection visualisers, set next statement.                                                                                                            | Visual parallel stacks for a multi-threaded app           |
-| DBG-7 | P2  | Unity and Mono via the soft debugger.                                                                                                                                              | Attach to a Unity editor                                  |
-| DBG-8 | P2  | Remote and container debugging (netcoredbg over SSH/Docker exec).                                                                                                                  | Debug an app in a container                               |
+| ID    | Pri | Status       | macOS | Windows  | Linux    | Requirement                                                                                                                                                                        | Acceptance                                                |
+| ----- | --- | ------------ | ----- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| DBG-1 | P0  | Done         | Yes   | Untested | Untested | Launch and attach debugging of CoreCLR apps through netcoredbg over DAP: breakpoints (line, conditional, hit count, logpoints), step, pause, threads, call stack, locals, watches. | Debugging a console app stops at a conditional breakpoint |
+| DBG-2 | P0  | Done         | Yes   | Untested | Untested | Exception breakpoints (thrown/unhandled, by type).                                                                                                                                 | Break on `InvalidOperationException` when thrown          |
+| DBG-3 | P1  | Partial      | Yes   | Untested | Untested | Evaluate expressions and immediate window, including method calls and LINQ.                                                                                                        | `list.Where(x => x > 2).Count()` evaluates                |
+| DBG-4 | P1  | Done         | Yes   | Untested | Untested | Attach to process picker (local .NET processes via diagnostics IPC).                                                                                                               | Lists running dotnet processes with names                 |
+| DBG-5 | P1  | Done         | Yes   | Untested | Untested | Debug unit tests and Aspire resources.                                                                                                                                             | Breakpoint in a test hits                                 |
+| DBG-6 | P2  | Partial      | Yes   | Untested | Untested | Parallel stacks, data tips, collection visualisers, set next statement.                                                                                                            | Visual parallel stacks for a multi-threaded app           |
+| DBG-7 | P2  | Out of scope | No    | No       | No       | Unity and Mono via the soft debugger.                                                                                                                                              | Attach to a Unity editor                                  |
+| DBG-8 | P2  | Partial      | Yes   | Untested | Untested | Remote and container debugging (netcoredbg over SSH/Docker exec).                                                                                                                  | Debug an app in a container                               |
 
 Known gap: netcoredbg does not support Hot Reload and its expression evaluator is weaker than Rider's. Track [Samsung/netcoredbg](https://github.com/Samsung/netcoredbg); consider contributing a Roslyn-based evaluator.
 
+- Platforms: the IDE installs netcoredbg from Samsung's releases, which have builds for macOS arm64, Windows x64 and Linux x64 and arm64 only. Debugging (DBG-1 to DBG-6, DBG-8) therefore does not work on Intel Macs or Windows on Arm until another build is found or made.
+- DBG-3: netcoredbg calls instance methods but not static ones, so LINQ extension methods such as `Where` do not evaluate. The acceptance expression has not been tried.
+- DBG-6: Parallel Stacks and collection visualisers work (a `Dictionary` shows nothing yet). Set Next Statement is built but netcoredbg 3.2 does not support it, so it is not offered for .NET. Data tips are not done.
+- DBG-7: needs a Mono soft-debugger adapter; out of scope for now.
+- DBG-8: container debugging works. SSH works through a launch configuration's `pipeTransport` only, with no UI, and netcoredbg must already be on the remote machine.
+
 ### 5.6 NuGet
 
-| ID    | Pri | Requirement                                                                                                         | Acceptance                                                        |
-| ----- | --- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| NUG-1 | P0  | Restore on open and on change; show restore errors.                                                                 | Missing package triggers restore                                  |
-| NUG-2 | P1  | NuGet tool window: search feeds, install, update, remove, per project or solution; respects `nuget.config` and CPM. | Updating a CPM package edits `Directory.Packages.props`           |
-| NUG-3 | P1  | Authenticated feeds via the user's credential providers (Azure Artifacts).                                          | Private feed lists packages                                       |
-| NUG-4 | P2  | Vulnerable and deprecated package warnings.                                                                         | `dotnet list package --vulnerable` results surface as diagnostics |
+| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                                         | Acceptance                                                        |
+| ----- | --- | ------- | ----- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| NUG-1 | P0  | Partial | Yes   | Untested | Untested | Restore on open and on change; show restore errors.                                                                 | Missing package triggers restore                                  |
+| NUG-2 | P1  | Done    | Yes   | Untested | Untested | NuGet tool window: search feeds, install, update, remove, per project or solution; respects `nuget.config` and CPM. | Updating a CPM package edits `Directory.Packages.props`           |
+| NUG-3 | P1  | Done    | Yes   | Untested | Untested | Authenticated feeds via the user's credential providers (Azure Artifacts).                                          | Private feed lists packages                                       |
+| NUG-4 | P2  | Done    | Yes   | Untested | Untested | Vulnerable and deprecated package warnings.                                                                         | `dotnet list package --vulnerable` results surface as diagnostics |
+
+- NUG-1: packages are restored as part of every build, test run and package change, but not when a solution is opened or a project file changes. Roslyn's `workspace/_roslyn_projectNeedsRestore` request is not handled, and restore errors do not show on their own.
 
 ### 5.7 Profiling and diagnostics (P2)
 
-| ID    | Pri | Requirement                                                                                | Acceptance                          |
-| ----- | --- | ------------------------------------------------------------------------------------------ | ----------------------------------- |
-| PRF-1 | P2  | Live counters (CPU, GC, allocations) via EventPipe for a running app.                      | Counters chart updates every second |
-| PRF-2 | P2  | CPU sampling traces (`dotnet-trace`) with flame graph and call tree, navigating to source. | Hot method opens in editor          |
-| PRF-3 | P2  | Memory dumps (`dotnet-gcdump`) with type and retention view.                               | Largest types listed                |
+| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                | Acceptance                          |
+| ----- | --- | ------- | ----- | -------- | -------- | ------------------------------------------------------------------------------------------ | ----------------------------------- |
+| PRF-1 | P2  | Done    | Yes   | Untested | Untested | Live counters (CPU, GC, allocations) via EventPipe for a running app.                      | Counters chart updates every second |
+| PRF-2 | P2  | Done    | Yes   | Untested | Untested | CPU sampling traces (`dotnet-trace`) with flame graph and call tree, navigating to source. | Hot method opens in editor          |
+| PRF-3 | P2  | Partial | Yes   | Untested | Untested | Memory dumps (`dotnet-gcdump`) with type and retention view.                               | Largest types listed                |
+
+- PRF-3: memory snapshots list types by size and compare two snapshots. There is no retention (what keeps an object alive) view. `docs/perf-tuning-plan.md` proposes the next profiling work.
 
 ### 5.8 Platform features (mostly inherited)
 
 Git and hosting integrations, terminal, database client (including SQL Server), HTTP client, Docker, SSH and remote development, settings and keymaps are ported from OpenIDEA (section 4). .NET-specific additions:
 
-| ID    | Pri | Requirement                                                                               |
-| ----- | --- | ----------------------------------------------------------------------------------------- |
-| PLT-1 | P0  | Visual Studio keymap as an alternative to the IntelliJ keymap.                            |
-| PLT-2 | P1  | EF Core: migrations add/update/remove, DbContext scaffolding via `dotnet ef`.             |
-| PLT-3 | P1  | `.http` files compatible with Visual Studio's format (variables, `http-client.env.json`). |
-| PLT-4 | P2  | User secrets editor (`dotnet user-secrets`).                                              |
-| PLT-5 | P2  | Docker: run and debug with the SDK container support (`PublishContainer`).                |
+| ID    | Pri | Status | macOS | Windows  | Linux    | Requirement                                                                               |
+| ----- | --- | ------ | ----- | -------- | -------- | ----------------------------------------------------------------------------------------- |
+| PLT-1 | P0  | Done   | Yes   | Untested | Untested | Visual Studio keymap as an alternative to the IntelliJ keymap.                            |
+| PLT-2 | P1  | Done   | Yes   | Untested | Untested | EF Core: migrations add/update/remove, DbContext scaffolding via `dotnet ef`.             |
+| PLT-3 | P1  | Done   | Yes   | Untested | Untested | `.http` files compatible with Visual Studio's format (variables, `http-client.env.json`). |
+| PLT-4 | P2  | Done   | Yes   | Untested | Untested | User secrets editor (`dotnet user-secrets`).                                              |
+| PLT-5 | P2  | Done   | Yes   | Untested | Untested | Docker: run and debug with the SDK container support (`PublishContainer`).                |
 
 ## 6. Non-functional requirements
 
-| ID    | Requirement                                                                                                                                                                                        |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| NFR-1 | Open a 100-project solution to "ready" (all projects evaluated, diagnostics for open files) in under 15 s warm, measured with OpenIDEA's `perf/compare` harness against Rider on the same machine. |
-| NFR-2 | Memory for that solution under 1.5 GB total across all processes (Rider baseline to be measured).                                                                                                  |
-| NFR-3 | Typing latency under 16 ms at p99; completion popup under 150 ms at p95.                                                                                                                           |
-| NFR-4 | The .NET host can crash or be restarted without losing editor state; the UI shows a degraded mode banner.                                                                                          |
-| NFR-5 | macOS (arm64, x64), Windows (x64, arm64), Linux (x64, arm64).                                                                                                                                      |
-| NFR-6 | No telemetry by default.                                                                                                                                                                           |
-| NFR-7 | All bundled components carry licences compatible with Apache 2.0 redistribution; `THIRD_PARTY_LICENSES.md` updated per release.                                                                    |
+| ID    | Status   | macOS   | Windows  | Linux    | Requirement                                                                                                                                                                                        |
+| ----- | -------- | ------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NFR-1 | Done     | Yes     | Untested | Untested | Open a 100-project solution to "ready" (all projects evaluated, diagnostics for open files) in under 15 s warm, measured with OpenIDEA's `perf/compare` harness against Rider on the same machine. |
+| NFR-2 | Done     | Yes     | Untested | Untested | Memory for that solution under 1.5 GB total across all processes (Rider baseline to be measured).                                                                                                  |
+| NFR-3 | Partial  | Yes     | Untested | Untested | Typing latency under 16 ms at p99; completion popup under 150 ms at p95.                                                                                                                           |
+| NFR-4 | Done     | Yes     | Untested | Untested | The .NET host can crash or be restarted without losing editor state; the UI shows a degraded mode banner.                                                                                          |
+| NFR-5 | Not done | Partial | Untested | Untested | Bayonet runs on macOS (arm64, x64), Windows (x64, arm64) and Linux (x64, arm64), and every requirement in section 5 works on each, except where a note says why it cannot.                         |
+| NFR-6 | Done     | Yes     | Untested | Untested | No telemetry by default.                                                                                                                                                                           |
+| NFR-7 | Done     | Yes     | Untested | Untested | All bundled components carry licences compatible with Apache 2.0 redistribution; `THIRD_PARTY_LICENSES.md` updated per release.                                                                    |
+
+- NFR-1, NFR-2: measured on an M-series Mac only (Bayonet 10.1 s to ready and 791 MB, against Rider's 3712 MB).
+- NFR-3: the perf harness reports p95, not p99. Typing p95 is 16.7 ms, at the 60 Hz frame, so the 16 ms p99 target is not shown to pass. The completion popup's p95 is 59 to 67 ms, well under 150 ms.
+- NFR-5, what is missing for each platform:
+  - **All:** the Windows and Linux jobs in the CI matrix have not passed yet. The first run (2026-11-06) was still in progress when this was written.
+  - **macOS:** only arm64 has been run. The release kit builds an Intel `.dmg`, but no one has launched it. netcoredbg has no Intel build, so there is no debugging there (section 5.5).
+  - **Windows:** the release kit builds x64 installers. Nothing has been launched or driven on Windows. There is no arm64 installer, and netcoredbg has no arm64 build.
+  - **Linux:** the release kit builds x64 AppImage, `.deb` and `.rpm` packages in WSL. Nothing has been launched or driven on Linux. There are no arm64 packages. Remote development still downloads OpenIDEA's `openidea-server`, because no Bayonet server is published (it needs a musl build).
 
 ## 7. Delivery phases
 
-Each phase ends with its acceptance tests passing in CI on the `fixtures/dotnet/` solution.
+Each phase ends with its acceptance tests passing in CI on the `fixtures/dotnet/` solution, on macOS, Windows and Linux. A requirement counts as done on a platform only once it has been run there (section 5's platform columns).
 
 | Phase                   | Goal                                                                 | Requirements                                    | Main work (section 4.3)                                                                                                  |
 | ----------------------- | -------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -311,13 +347,13 @@ Phase 1 is the go/no-go point. If Roslyn LSP inside OpenIDEA's LSP layer cannot 
 
 ## 8. Risks and open questions
 
-| ID  | Risk or question                                                                                                            | Mitigation                                                                                                                             |
-| --- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| K1  | Roslyn LSP covers far fewer refactorings and inspections than ReSharper. Parity on code analysis is the largest gap.        | Accept Roslyn plus community analysers (Roslynator, MIT) as the baseline; add IDE-specific refactorings in the host over time.         |
-| K2  | netcoredbg lags Rider's debugger (evaluation, Hot Reload, mixed mode).                                                      | Ship netcoredbg for P0; evaluate building a debugger on `ClrMD` and ICorDebug later.                                                   |
-| K3  | Microsoft's vsdbg and C# Dev Kit are licensed only for Microsoft products and must not be bundled or launched.              | Use only MIT/Apache components listed in 2.3 and section 4.                                                                            |
-| K4  | Roslyn's language server is not published as a stable library API.                                                          | Pin versions, keep a thin fork, upstream extension points.                                                                             |
-| K5  | Trademarks: "Rider", "ReSharper", "IntelliJ" must not appear in product naming or UI.                                       | Product name Bayonet (working title); review before release.                                                                           |
-| K6  | Upstream drift: OpenIDEA is moving fast (424 commits, several a day). A long-lived port diverges.                           | Merge `upstream` at least weekly; keep .NET work in new files and crates where possible; avoid renaming shared modules.                |
-| K7  | Two semantic models disagree: the sidecar's MSBuild evaluation and Roslyn LSP's BuildHost may see different project states. | Treat Roslyn LSP as the source of truth for compilation; the sidecar only for structure and edits; reload both on project file change. |
-| U2  | Unknown: whether Roslyn LSP's Razor cohosting works outside VS Code.                                                        | Spike in phase 4 before committing to CI-15.                                                                                           |
+| ID | Risk or question | Mitigation |
+| --- | --- | --- | --- | --- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| K1 | Roslyn LSP covers far fewer refactorings and inspections than ReSharper. Parity on code analysis is the largest gap. | Accept Roslyn plus community analysers (Roslynator, MIT) as the baseline; add IDE-specific refactorings in the host over time. |
+| K2 | netcoredbg lags Rider's debugger (evaluation, Hot Reload, mixed mode). | Ship netcoredbg for P0; evaluate building a debugger on `ClrMD` and ICorDebug later. |
+| K3 | Microsoft's vsdbg and C# Dev Kit are licensed only for Microsoft products and must not be bundled or launched. | Use only MIT/Apache components listed in 2.3 and section 4. |
+| K4 | Roslyn's language server is not published as a stable library API. | Pin versions, keep a thin fork, upstream extension points. |
+| K5 | Trademarks: "Rider", "ReSharper", "IntelliJ" must not appear in product naming or UI. | Product name Bayonet (working title); review before release. |
+| K6 | Upstream drift: OpenIDEA is moving fast (424 commits, several a day). A long-lived port diverges. | Merge `upstream` at least weekly; keep .NET work in new files and crates where possible; avoid renaming shared modules. |
+| K7 | Two semantic models disagree: the sidecar's MSBuild evaluation and Roslyn LSP's BuildHost may see different project states. | Treat Roslyn LSP as the source of truth for compilation; the sidecar only for structure and edits; reload both on project file change. |
+| U2 | Unknown: whether Roslyn LSP's Razor cohosting works outside VS Code. | Spike in phase 4 before committing to CI-15. |

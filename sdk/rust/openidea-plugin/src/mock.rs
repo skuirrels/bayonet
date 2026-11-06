@@ -8,7 +8,7 @@
 use crate::host::Invocation;
 use crate::types::*;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -56,15 +56,22 @@ struct State {
     other_projects: Vec<String>,
     files: BTreeMap<String, String>,
     editor: Option<Editor>,
+    selected_paths: Vec<String>,
     notifications: Vec<Notification>,
     logs: Vec<(LogLevel, String)>,
     status: BTreeMap<String, StatusItem>,
+    context: BTreeMap<String, ContextValue>,
     storage: BTreeMap<String, String>,
     subscriptions: BTreeSet<EventKind>,
     tasks: Vec<MockTask>,
     vcs: Option<RepositoryStatus>,
+    remotes: Vec<(String, String)>,
     fetches: u32,
     fetch_error: Option<Error>,
+    clipboard: Option<String>,
+    opened_urls: Vec<String>,
+    answers: VecDeque<Option<Vec<String>>>,
+    revealed_views: Vec<String>,
     diagnostics: BTreeMap<String, Vec<Diagnostic>>,
     secrets: BTreeMap<String, String>,
     net: Option<NetHandler>,
@@ -74,6 +81,7 @@ struct State {
     refreshed: Vec<String>,
     view_messages: Vec<(String, String)>,
     terminals: Vec<MockTerminal>,
+    locations: Vec<(String, u32, u32)>,
     settings: BTreeMap<String, String>,
 }
 
@@ -95,8 +103,17 @@ pub struct MockHost {
 }
 
 /// Every capability a plugin can hold, except `process:`/`net:`/`fs.read:`.
-const ALL: &[&str] =
-    &["project.read", "editor.read", "editor.write", "vcs.read", "vcs.write", "storage", "events", "events.input"];
+const ALL: &[&str] = &[
+    "project.read",
+    "editor.read",
+    "editor.write",
+    "vcs.read",
+    "vcs.write",
+    "storage",
+    "events",
+    "events.input",
+    "clipboard",
+];
 
 impl MockHost {
     /// Installs a mock granting the usual capabilities, with project `/project`.
@@ -129,6 +146,11 @@ impl MockHost {
     /// A project file `read_file` can return (project-relative or absolute path).
     pub fn add_file(&self, path: &str, text: &str) {
         self.state.borrow_mut().files.insert(path.to_owned(), text.to_owned());
+    }
+
+    /// Sets the paths invocations report as selected.
+    pub fn select_paths(&self, paths: &[&str]) {
+        self.state.borrow_mut().selected_paths = paths.iter().map(|p| (*p).to_owned()).collect();
     }
 
     /// Focuses an editor on `text` with selections `(line, col, line, col)`.
@@ -172,6 +194,10 @@ impl MockHost {
         self.state.borrow().status.clone()
     }
 
+    pub fn context_keys(&self) -> BTreeMap<String, ContextValue> {
+        self.state.borrow().context.clone()
+    }
+
     pub fn storage(&self) -> BTreeMap<String, String> {
         self.state.borrow().storage.clone()
     }
@@ -196,6 +222,34 @@ impl MockHost {
         self.state.borrow_mut().vcs = status;
     }
 
+    /// Remotes `vcs-remotes` returns for every project.
+    pub fn set_vcs_remotes(&self, remotes: &[(&str, &str)]) {
+        self.state.borrow_mut().remotes = remotes.iter().map(|&(n, u)| (n.to_owned(), u.to_owned())).collect();
+    }
+
+    /// Last text copied with [`crate::host::copy_to_clipboard`].
+    pub fn clipboard(&self) -> Option<String> {
+        self.state.borrow().clipboard.clone()
+    }
+
+    /// URLs opened with [`crate::host::open_url`], in order.
+    pub fn opened_urls(&self) -> Vec<String> {
+        self.state.borrow().opened_urls.clone()
+    }
+
+    /// The answer the next [`crate::host::pick`], [`crate::host::input`] or
+    /// [`crate::host::confirm`] gets: the chosen keys, the text (one element),
+    /// anything for OK, or `None` for dismissed. Unscripted prompts are dismissed.
+    pub fn answer_next_prompt(&self, answer: Option<&[&str]>) {
+        let answer = answer.map(|a| a.iter().map(|&s| s.to_owned()).collect());
+        self.state.borrow_mut().answers.push_back(answer);
+    }
+
+    /// Views brought forward with [`crate::host::reveal_view`], in order.
+    pub fn revealed_views(&self) -> Vec<String> {
+        self.state.borrow().revealed_views.clone()
+    }
+
     /// Makes `vcs-fetch` fail.
     pub fn fail_fetch(&self, error: Option<Error>) {
         self.state.borrow_mut().fetch_error = error;
@@ -218,6 +272,10 @@ impl MockHost {
     /// `(view, message)` the plugin posted to its views' frames.
     pub fn view_messages(&self) -> Vec<(String, String)> {
         self.state.borrow().view_messages.clone()
+    }
+
+    pub fn opened_locations(&self) -> Vec<(String, u32, u32)> {
+        self.state.borrow().locations.clone()
     }
 
     /// Terminals the plugin opened.
@@ -345,6 +403,64 @@ pub mod current {
         with(|s| s.status.remove(id));
     }
 
+    pub fn set_context(key: &str, value: ContextValue) -> Result<(), Error> {
+        with(|s| s.context.insert(key.to_owned(), value));
+        Ok(())
+    }
+
+    pub fn remove_context(key: &str) {
+        with(|s| s.context.remove(key));
+    }
+
+    pub fn copy_to_clipboard(text: &str) -> Result<(), Error> {
+        with(|s| {
+            require(s, "clipboard")?;
+            s.clipboard = Some(text.to_owned());
+            Ok(())
+        })
+    }
+
+    pub fn open_url(url: &str) -> Result<(), Error> {
+        let trimmed = url.trim();
+        if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+            return Err(Error::Invalid(format!("{url:?}: expected an http:// or https:// URL")));
+        }
+        with(|s| {
+            s.opened_urls.push(trimmed.to_owned());
+            Ok(())
+        })
+    }
+
+    pub fn pick(title: &str, items: &[PickItem]) -> Result<Option<String>, Error> {
+        let keys = pick_many(title, items)?;
+        match keys {
+            Some(keys) if keys.len() > 1 => Err(Error::Invalid("more than one item chosen".into())),
+            keys => Ok(keys.and_then(|keys| keys.into_iter().next())),
+        }
+    }
+
+    pub fn pick_many(_title: &str, items: &[PickItem]) -> Result<Option<Vec<String>>, Error> {
+        let answer = with(|s| s.answers.pop_front().flatten());
+        let Some(keys) = answer else { return Ok(None) };
+        if let Some(unknown) = keys.iter().find(|k| !items.iter().any(|i| &i.key == *k)) {
+            return Err(Error::Invalid(format!("{unknown:?} is not one of the items")));
+        }
+        Ok(Some(keys))
+    }
+
+    pub fn input(_prompt: &str, _value: Option<&str>) -> Result<Option<String>, Error> {
+        Ok(with(|s| s.answers.pop_front().flatten()).and_then(|a| a.into_iter().next()))
+    }
+
+    pub fn confirm(_title: &str, _body: &str) -> Result<bool, Error> {
+        Ok(with(|s| s.answers.pop_front().flatten()).is_some())
+    }
+
+    pub fn reveal_view(view: &str) -> Result<(), Error> {
+        with(|s| s.revealed_views.push(view.to_owned()));
+        Ok(())
+    }
+
     pub fn storage_get(key: &str) -> Result<Option<String>, Error> {
         with(|s| {
             require(s, "storage")?;
@@ -422,6 +538,10 @@ pub mod current {
         })
     }
 
+    pub fn invocation_selected_paths(_: InvocationRef<'_>) -> Vec<String> {
+        with(|s| s.selected_paths.clone())
+    }
+
     pub fn editor_path(_: &EditorRes) -> String {
         editor(|_, e| e.path.clone())
     }
@@ -488,6 +608,13 @@ pub mod current {
             }
             s.fetches += 1;
             Ok(())
+        })
+    }
+
+    pub fn vcs_remotes(_: &ProjectRes) -> Result<Vec<(String, String)>, Error> {
+        with(|s| {
+            require(s, "vcs.read")?;
+            Ok(s.remotes.clone())
         })
     }
 
@@ -595,6 +722,14 @@ pub mod current {
         })
     }
 
+    pub fn open_location(path: &str, line: u32, column: u32) -> Result<(), Error> {
+        with(|s| {
+            require(s, "project.read")?;
+            s.locations.push((path.into(), line, column));
+            Ok(())
+        })
+    }
+
     pub fn setting(key: &str) -> Option<String> {
         with(|s| s.settings.get(key).cloned())
     }
@@ -652,6 +787,14 @@ mod tests {
     use crate::host;
 
     #[test]
+    fn invocations_carry_selected_paths() {
+        let host = MockHost::install();
+        assert!(host.invocation().selected_paths().is_empty());
+        host.select_paths(&["/p/a", "/p/b"]);
+        assert_eq!(host.invocation().selected_paths(), ["/p/a", "/p/b"]);
+    }
+
+    #[test]
     fn records_and_enforces() {
         let mock = MockHost::install();
         mock.add_file("src/a.txt", "hello");
@@ -667,6 +810,36 @@ mod tests {
         assert_eq!(host::storage::keys("").unwrap(), ["k"]);
         host::set_status_item("s", &StatusItem { text: "x".into(), tooltip: None, command: None });
         assert_eq!(mock.status_items()["s"].text, "x");
+        host::set_context("a", 1.0).unwrap();
+        host::set_context("b", "x").unwrap();
+        assert_eq!(mock.context_keys()["a"], ContextValue::Number(1.0));
+        assert_eq!(mock.context_keys()["b"], ContextValue::Text("x".into()));
+        host::remove_context("a");
+        host::remove_context("b");
+        assert!(mock.context_keys().is_empty());
+        mock.set_vcs_remotes(&[("origin", "git@github.com:o/r.git")]);
+        assert_eq!(project.vcs_remotes().unwrap(), [("origin".into(), "git@github.com:o/r.git".into())]);
+        host::copy_to_clipboard("copied").unwrap();
+        assert_eq!(mock.clipboard().as_deref(), Some("copied"));
+        host::open_url("https://example.com/a").unwrap();
+        assert_eq!(mock.opened_urls(), ["https://example.com/a"]);
+        assert!(matches!(host::open_url("file:///etc/passwd"), Err(Error::Invalid(_))));
+        let items = [PickItem::new("a", "A"), PickItem::new("b", "B").description("second")];
+        assert_eq!(host::pick("Pick", &items).unwrap(), None);
+        mock.answer_next_prompt(Some(&["b"]));
+        assert_eq!(host::pick("Pick", &items).unwrap().as_deref(), Some("b"));
+        mock.answer_next_prompt(Some(&["a", "b"]));
+        assert_eq!(host::pick_many("Pick", &items).unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
+        mock.answer_next_prompt(Some(&["zzz"]));
+        assert!(matches!(host::pick_many("Pick", &items), Err(Error::Invalid(_))));
+        mock.answer_next_prompt(Some(&["x.txt"]));
+        assert_eq!(host::input("Name", Some("a.txt")).unwrap().as_deref(), Some("x.txt"));
+        mock.answer_next_prompt(Some(&[]));
+        assert!(host::confirm("Sure?", "Really").unwrap());
+        mock.answer_next_prompt(None);
+        assert!(!host::confirm("Sure?", "Really").unwrap());
+        host::reveal_view("panel").unwrap();
+        assert_eq!(mock.revealed_views(), ["panel"]);
         {
             let task = host::begin_task("Work", true);
             task.report(1, Some(2), None);
@@ -696,6 +869,8 @@ mod tests {
         assert_eq!(editor.apply_edits(1, &[]), Err(Error::Denied("editor.write".into())));
         assert_eq!(host::storage::get("k"), Err(Error::Denied("storage".into())));
         assert_eq!(host::subscribe(EventKind::ActionPerformed), Err(Error::Denied("events.input".into())));
+        assert_eq!(mock.invocation().project().unwrap().vcs_remotes(), Err(Error::Denied("vcs.read".into())));
+        assert_eq!(host::copy_to_clipboard("x"), Err(Error::Denied("clipboard".into())));
     }
 
     #[test]

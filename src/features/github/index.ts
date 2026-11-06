@@ -17,6 +17,7 @@ import {
   maybeEditorService,
   registerCloneSource,
   registerEditorKind,
+  registerGitLogChecks,
   registerOverlay,
   registerToolWindow,
 } from "@/workbench/contributions";
@@ -144,8 +145,9 @@ function actions(): Action[] {
       id: "github.changeRepository",
       title: "Change Repository or Account…",
       category: "GitHub",
-      when: CONNECTED,
-      run: () => changeRepository(),
+      when: WHEN,
+      // Not connected yet: the tool window offers the repository selector, or explains how to log in.
+      run: () => (useGhRepository.getState().connection ? changeRepository() : void showPullRequests()),
     },
     {
       // pull.request.select.action
@@ -317,6 +319,7 @@ export function activate(): () => void {
       order: 10,
       component: lazyComponent(() => import("./clone/GitHubCloneSource").then((m) => m.GitHubCloneSource)),
     }),
+    registerGitLogChecks(lazyComponent(() => import("./LogCommitChecks").then((m) => m.LogCommitChecks))),
     registerToolWindow({
       id: WINDOW,
       title: "Pull Requests",

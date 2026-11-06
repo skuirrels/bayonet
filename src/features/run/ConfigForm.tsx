@@ -50,7 +50,7 @@ import styles from "./Run.module.css";
 
 /**
  * Debug adapters with a real launch template (`debugger/launch.ts`, `debugger/java.ts`),
- * verified against small programs. Others (dart, php-debug, …) only got
+ * verified against small programs. Others (dart, …) only got
  * generic launch arguments and are left out until they have one; a configuration that
  * already names one keeps it.
  */
@@ -63,6 +63,7 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string }> = [
   { id: "delve", label: "Delve (Go)" },
   { id: "codelldb", label: "CodeLLDB (Rust, C, C++)" },
   { id: "lldb-dap", label: "lldb-dap (C, C++, Swift)" },
+  { id: "php-debug", label: "php-debug (PHP)" },
 ];
 
 /** Options "Modify options" adds to the form: value fields (shown once added) and flags (chips). */
@@ -330,9 +331,13 @@ export function ConfigForm({ config, all, type, errors, template, onChange, modi
       label: txTemplate(`${config.debugAdapter} (no launch template)`),
     });
 
+  // .NET projects run in containers through Run in Container, not Docker run targets.
+  const dotnet = config.kind === "dotnet" || config.kind === "dotnet-test";
   const targetOptions: SelectOption[] = [
     { value: "", label: "Local machine" },
-    ...runTargets.map((t) => ({ value: t.id, label: t.name.trim() || t.id })),
+    ...runTargets
+      .filter((t) => !dotnet || (t.kind ?? "ssh") === "ssh")
+      .map((t) => ({ value: t.id, label: t.name.trim() || t.id })),
   ];
   if (config.target && !runTargets.some((t) => t.id === config.target))
     targetOptions.push({ value: config.target, label: txTemplate(`${config.target} (missing)`) });

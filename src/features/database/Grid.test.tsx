@@ -2,6 +2,8 @@ import { installKeyboardDispatcher, useKeymap } from "@/platform/keymap";
 import { registerActions } from "@/platform/actions";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
+import { DataView } from "./DataView";
 import { Grid } from "./Grid";
 import { CELL_PREVIEW_LIMIT, cellPreview } from "./cellPreview";
 import { exportData } from "./export";
@@ -50,6 +52,73 @@ describe("database grid", () => {
     fireEvent.keyDown(screen.getByRole("grid"), { key: "c", code: "KeyC", ctrlKey: true });
     expect(writeText).toHaveBeenCalledWith("one\ttwo\nthree\tfour");
     expect(globalCopy).not.toHaveBeenCalled();
+  });
+  it("copies the selection in the extractor's format for plain ⌘C", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const data = [
+      ["1", "Shanghai"],
+      ["2", "Bei'jing"],
+      ["3", null],
+    ];
+    render(
+      <Grid
+        columns={[
+          { name: "id", type: "INTEGER" },
+          { name: "city", type: "TEXT" },
+        ]}
+        rowCount={3}
+        value={(r, c) => data[r]![c]!}
+        copyFormat="onerow"
+      />,
+    );
+    const cells = screen.getAllByRole("gridcell");
+    // A column of three cells: the values on one line.
+    fireEvent.mouseDown(cells[0]!, { button: 0 });
+    fireEvent.mouseEnter(cells[4]!);
+    fireEvent.mouseUp(window);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "c", ctrlKey: true });
+    expect(writeText).toHaveBeenCalledWith("1, 2, 3");
+    // Text values are single-quoted with `'` doubled; nulls are NULL.
+    writeText.mockClear();
+    fireEvent.mouseDown(cells[1]!, { button: 0 });
+    fireEvent.mouseEnter(cells[5]!);
+    fireEvent.mouseUp(window);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "c", ctrlKey: true });
+    expect(writeText).toHaveBeenCalledWith("'Shanghai', 'Bei''jing', NULL");
+    // Several columns join in reading order, all on one line.
+    writeText.mockClear();
+    fireEvent.mouseDown(cells[0]!, { button: 0 });
+    fireEvent.mouseEnter(cells[3]!);
+    fireEvent.mouseUp(window);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "c", ctrlKey: true });
+    expect(writeText).toHaveBeenCalledWith("1, 'Shanghai', 2, 'Bei''jing'");
+  });
+  it("copies a selection as CSV with ⌘C when the extractor is csv", () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(
+      <Grid
+        columns={[
+          { name: "a", type: "text" },
+          { name: "b", type: "text" },
+        ]}
+        rowCount={2}
+        value={(r, c) =>
+          [
+            ["one", "two"],
+            ["three", "four"],
+          ][r]![c]!
+        }
+        copyFormat="csv"
+      />,
+    );
+    const cells = screen.getAllByRole("gridcell");
+    fireEvent.mouseDown(cells[0]!, { button: 0 });
+    fireEvent.mouseEnter(cells[3]!);
+    fireEvent.mouseUp(window);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "c", ctrlKey: true });
+    expect(writeText).toHaveBeenCalledWith("one,two\r\nthree,four");
   });
   it("pastes a rectangle as pending edits and skips deleted rows", () => {
     const onEdit = vi.fn();
@@ -173,5 +242,62 @@ describe("multi-line database cells", () => {
     expect(editor.tagName).toBe("TEXTAREA");
     expect(editor.value).toBe("one two");
     expect(onEdit).not.toHaveBeenCalled();
+  });
+});
+describe("result grid search", () => {
+  const columns = [
+    { name: "city", type: "text" },
+    { name: "n", type: "int" },
+  ];
+  const data = [
+    ["Shanghai", "1"],
+    ["Beijing", "2"],
+    ["Shenzhen", "3"],
+    ["Hangzhou", "4"],
+  ];
+  const value = (r: number, c: number) => data[r]?.[c] ?? null;
+
+  it("opens the search bar on Ctrl+F and highlights the matches of the page", () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <DataView
+          columns={columns}
+          rowCount={4}
+          value={value}
+          panel={null}
+          onPanelChange={() => {}}
+          searchOpen={open}
+          onSearchOpenChange={setOpen}
+        />
+      );
+    }
+    render(<Harness />);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "f", ctrlKey: true });
+    const input = screen.getByRole("textbox", { name: "Search in results" });
+    fireEvent.change(input, { target: { value: "sh" } });
+    const marked = () =>
+      screen
+        .getAllByRole("gridcell")
+        .filter((c) => /cellMatch/.test(c.className))
+        .map((c) => c.textContent);
+    expect(marked()).toEqual(["Shanghai", "Shenzhen"]);
+    expect(screen.getByText("1/2")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("2/2")).toBeTruthy();
+
+    // Match Case: "sh" no longer matches "Sh…".
+    fireEvent.click(screen.getByRole("button", { name: /Match Case/ }));
+    expect(marked()).toEqual([]);
+    expect(screen.getByText("0 results")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Match Case/ }));
+
+    // Filter rows keeps only the rows with a match.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Filter rows" }));
+    expect(screen.getAllByRole("row").length - 1).toBe(2);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("search")).toBeNull();
+    expect(screen.getAllByRole("row").length - 1).toBe(4);
   });
 });

@@ -1,4 +1,4 @@
-package openidea:plugin@1.0.0;
+package openidea:plugin@1.3.0;
 
 /// Declarative views: tool windows declared
 /// under `[[contributes.views]]` and custom editors under
@@ -127,12 +127,19 @@ interface views {
     /// The view (or every custom editor of that id) shows outdated content:
     /// the IDE renders it again.
     refresh: func(view: string);
+    /// Brings one of the plugin's own views to the front in the window the
+    /// current command or event came from; `invalid` outside one.
+    reveal: func(view: string) -> result<_, error>;
     /// Sends a message to the script of a view's `html` body.
     post-message: func(view: string, message: string) -> result<_, error>;
     /// Opens a terminal tab in the window the call came from, running
     /// `program` (pinned by a `process:<program>` grant) with `args` in the
     /// project root: long-running output (logs) and interactive sessions.
     open-terminal: func(title: string, program: string, args: list<string>) -> result<_, error>;
+    /// Opens `path` (project-relative or absolute, inside the project) in an
+    /// editor of the window the call came from, the caret at `line` and
+    /// `column` (0-based; UTF-16 column): a view's links to code.
+    open-location: func(path: string, line: u32, column: u32) -> result<_, error>;
 }
 
 /// The plugin's own settings (`[contributes.settings]`), as the user set them

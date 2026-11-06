@@ -648,6 +648,9 @@ export function installKeyboardDispatcher(
     e.stopPropagation();
   };
 
+  /** macOS force click: no system Look Up popover over IDE text; the editor navigates instead. */
+  const onForceWillBegin = (e: Event) => e.preventDefault();
+
   const onBlur = () => {
     reset();
     resetTap();
@@ -658,6 +661,7 @@ export function installKeyboardDispatcher(
   target.addEventListener("mousedown", onMouseDown, true);
   target.addEventListener("mouseup", onMouseRelease, true);
   target.addEventListener("auxclick", onMouseRelease, true);
+  target.addEventListener("webkitmouseforcewillbegin", onForceWillBegin, true);
   target.addEventListener("blur", onBlur);
   return () => {
     target.removeEventListener("keydown", onKeyDown, true);
@@ -665,6 +669,7 @@ export function installKeyboardDispatcher(
     target.removeEventListener("mousedown", onMouseDown, true);
     target.removeEventListener("mouseup", onMouseRelease, true);
     target.removeEventListener("auxclick", onMouseRelease, true);
+    target.removeEventListener("webkitmouseforcewillbegin", onForceWillBegin, true);
     target.removeEventListener("blur", onBlur);
   };
 }

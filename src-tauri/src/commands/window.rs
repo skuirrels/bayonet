@@ -52,17 +52,17 @@ pub async fn window_open_file_in_new_window(
     windows::open_file_in_new_window(&app, project, file)
 }
 
-/// [`window_open_project`] for folder `path` on the host of SSH configuration
-/// `ssh_config` (Remote Development); a new window connects itself.
+/// [`window_open_project`] for folder `path` of `target` (an SSH host or a WSL distribution;
+/// Remote Development); a new window connects itself.
 #[tauri::command]
 #[specta::specta]
 pub async fn window_open_remote(
     app: AppHandle,
-    ssh_config: String,
+    target: crate::remote_dev::RemoteTarget,
     path: String,
     new_window: bool,
 ) -> IdeResult<OpenOutcome> {
-    windows::open_remote_window(&app, &ssh_config, &path, new_window)
+    windows::open_remote_window(&app, &target, &path, new_window)
 }
 
 /// Opens an empty (welcome) window; returns its label.
@@ -125,6 +125,21 @@ pub fn window_cycle(app: AppHandle, window: WebviewWindow, forward: bool) {
 #[specta::specta]
 pub fn window_toggle_fullscreen(window: WebviewWindow) -> IdeResult<bool> {
     crate::window_groups::toggle_fullscreen(&window)
+}
+
+/// Flash (`true`) or stop flashing (`false`) this window's taskbar button, like IDEA when a
+/// breakpoint is hit while the window is in the background (macOS bounces the dock icon,
+/// Linux sets the urgency hint). A focused window is never flashed: the user is already
+/// looking at it, and re-flashing it would steal attention for nothing.
+#[tauri::command]
+#[specta::specta]
+pub fn window_flash_taskbar(window: WebviewWindow, flash: bool) -> IdeResult<()> {
+    if flash && window.is_focused().unwrap_or(false) {
+        return Ok(());
+    }
+    window
+        .request_user_attention(flash.then_some(tauri::UserAttentionType::Critical))
+        .map_err(|e| IdeError::internal(e.to_string()))
 }
 
 /// Height of the web title bar in native logical pixels (CSS height × IDE zoom).
@@ -214,7 +229,9 @@ pub fn app_cancel_quit(app: AppHandle, windows: State<'_, WindowsState>) {
     });
 }
 
-/// Sets the menu's labels / shortcut text (on locale or keymap change) and rebuilds it.
+/// Sets the menu's labels / shortcut text and rebuilds it when they changed.
+/// Focusing another project window re-pushes the same shared menu; an identical
+/// config must not call `set_menu`, which redraws the macOS menu bar.
 #[tauri::command]
 #[specta::specta]
 pub fn menu_configure(
@@ -223,8 +240,9 @@ pub fn menu_configure(
     state: State<'_, AppState>,
     config: MenuConfig,
 ) {
-    *menu_state.config.lock() = config;
-    menu::install(&app, &menu_state, &state.recent.list());
+    if menu::store_config(&menu_state, config) {
+        menu::install(&app, &menu_state, &state.recent.list());
+    }
 }
 
 /// Rebuilds the menu (e.g. after the recent-projects list changed).
@@ -330,15 +348,33 @@ fn update_endpoint_env() -> Option<String> {
 /// tauri.conf.json, or the `OPENIDEA_UPDATE_ENDPOINT` environment variable. Empty by
 /// default, and "Check for Updates…" is hidden then.
 pub fn updates_configured<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
-    let in_config = app
-        .config()
+    !config_endpoints(app).is_empty() || update_endpoint_env().is_some()
+}
+
+fn config_endpoints<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    app.config()
         .plugins
         .0
         .get("updater")
         .and_then(|u| u.get("endpoints"))
         .and_then(|e| e.as_array())
-        .is_some_and(|e| !e.is_empty());
-    in_config || update_endpoint_env().is_some()
+        .map(|e| e.iter().filter_map(|u| u.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// The release site publishes each platform on its own (scripts/release-kit): a feed that has a
+/// newer version but no build for this platform yet is no update, not a failure.
+fn no_build_for_this_platform(e: &tauri_plugin_updater::Error) -> bool {
+    matches!(e, tauri_plugin_updater::Error::TargetNotFound(_) | tauri_plugin_updater::Error::TargetsNotFound(_))
+}
+
+/// The available update, if any.
+async fn check(updater: &tauri_plugin_updater::Updater) -> IdeResult<Option<tauri_plugin_updater::Update>> {
+    match updater.check().await {
+        Ok(update) => Ok(update),
+        Err(e) if no_build_for_this_platform(&e) => Ok(None),
+        Err(e) => Err(IdeError::unavailable(e.to_string())),
+    }
 }
 
 fn updater(app: &AppHandle) -> IdeResult<Option<tauri_plugin_updater::Updater>> {
@@ -346,14 +382,22 @@ fn updater(app: &AppHandle) -> IdeResult<Option<tauri_plugin_updater::Updater>> 
     if !updates_configured(app) {
         return Ok(None);
     }
-    let env = update_endpoint_env();
+    let endpoints = match update_endpoint_env() {
+        Some(url) => vec![url],
+        None => config_endpoints(app),
+    };
+    let endpoints = endpoints
+        .iter()
+        .map(|u| u.parse().map_err(|e| IdeError::invalid(format!("update endpoint {u}: {e}"))))
+        .collect::<IdeResult<Vec<_>>>()?;
     let proxy = ide_core::proxy_settings::proxy();
-    let mut builder = app.updater_builder().configure_client(move |b| ide_http::client::with_proxy(b, &proxy));
-    if let Some(url) = env {
-        let url = url.parse().map_err(|e| IdeError::invalid(format!("OPENIDEA_UPDATE_ENDPOINT: {e}")))?;
-        builder = builder.endpoints(vec![url]).map_err(|e| IdeError::invalid(e.to_string()))?;
-    }
-    builder.build().map(Some).map_err(|e| IdeError::unavailable(e.to_string()))
+    app.updater_builder()
+        .configure_client(move |b| ide_http::client::with_proxy(b, &proxy))
+        .endpoints(endpoints)
+        .map_err(|e| IdeError::invalid(e.to_string()))?
+        .build()
+        .map(Some)
+        .map_err(|e| IdeError::unavailable(e.to_string()))
 }
 
 #[tauri::command]
@@ -362,7 +406,7 @@ pub async fn app_check_update(app: AppHandle) -> IdeResult<UpdateCheck> {
     let Some(updater) = updater(&app)? else {
         return Ok(UpdateCheck { enabled: false, update: None });
     };
-    let update = updater.check().await.map_err(|e| IdeError::unavailable(e.to_string()))?;
+    let update = check(&updater).await?;
     Ok(UpdateCheck {
         enabled: true,
         update: update.map(|u| UpdateInfo {
@@ -461,7 +505,7 @@ pub async fn app_install_update(
     let result = async {
         let updater = updater(&app)?.ok_or_else(|| IdeError::unavailable("updates are not configured"))?;
         let update = tokio::select! {
-            r = updater.check() => r.map_err(|e| IdeError::unavailable(e.to_string()))?,
+            r = check(&updater) => r?,
             _ = token.cancelled() => return Err(IdeError::cancelled()),
         }
         .ok_or_else(|| IdeError::not_found("no update available"))?;
@@ -520,6 +564,14 @@ mod tests {
         assert_eq!(downloading(t.chunk(256 * 1024, None)), Some(((256 * 1024 + 1034) as f64, None)));
         // A zero length is treated as unknown, not divided by.
         assert!(ProgressThrottle::default().chunk(1, Some(0)).is_some());
+    }
+
+    #[test]
+    fn a_feed_without_this_platform_is_no_update() {
+        use tauri_plugin_updater::Error;
+        assert!(no_build_for_this_platform(&Error::TargetNotFound("darwin-aarch64".into())));
+        assert!(no_build_for_this_platform(&Error::TargetsNotFound(vec!["darwin-aarch64-app".into()])));
+        assert!(!no_build_for_this_platform(&Error::ReleaseNotFound));
     }
 
     #[test]

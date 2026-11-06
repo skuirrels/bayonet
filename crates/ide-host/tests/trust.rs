@@ -249,6 +249,7 @@ async fn malicious_project_stays_editable_then_starts_in_place_after_trust() {
             ide_core::RequestId(472),
             false,
             vec![],
+            None,
             ops::Channel::new(|_| {}),
         )
     };
@@ -346,6 +347,29 @@ fn trusted_locations_use_canonical_directory_boundaries() {
     let alias = root.parent().unwrap().join("escape/project");
     assert!(!trust.trusted(&alias).unwrap());
     assert_eq!(trust.status(&alias).unwrap().root.as_ref(), dunce::canonicalize(&other).unwrap());
+}
+
+#[test]
+fn add_location_trusts_every_project_under_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let location = tmp.path().join("projects");
+    let inside = location.join("nested/deep/app");
+    let outside = tmp.path().join("projects-other/app");
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let file = tmp.path().join("not-a-dir");
+    std::fs::write(&file, "x").unwrap();
+    let trust = TrustStore::load(&tmp.path().join("config"), &tmp.path().join("data"));
+    trust.add_location(&location).unwrap();
+    assert!(trust.trusted(&inside).unwrap());
+    assert!(!trust.trusted(&outside).unwrap());
+    assert_eq!(trust.decisions().unwrap().locations.len(), 1);
+    trust.add_location(&location).unwrap();
+    assert_eq!(trust.decisions().unwrap().locations.len(), 1, "re-adding is a no-op");
+    assert!(trust.add_location(&file).is_err(), "a file is not a location");
+    assert!(trust.add_location(&tmp.path().join("missing")).is_err(), "a missing path is not a location");
+    let reloaded = TrustStore::load(&tmp.path().join("config"), &tmp.path().join("data"));
+    assert!(reloaded.trusted(&inside).unwrap());
 }
 
 #[cfg(unix)]

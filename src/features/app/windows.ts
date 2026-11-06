@@ -53,7 +53,10 @@ async function openHere(path: string): Promise<boolean> {
   if (!isRemoteWindow() && useProject.getState().project?.root === path) return true;
   if (!(await confirmLeaveProject())) return false;
   try {
-    await openProject(path);
+    // A folder of a WSL distro runs there, not as a network folder.
+    const wsl = await commands.wslResolve(path).catch(() => null);
+    if (wsl) await connectRemote(wsl.target, wsl.path);
+    else await openProject(path);
     return true;
   } catch (e) {
     maybeEditorService()?.cancelClose?.();
@@ -209,7 +212,7 @@ async function pickFiles(title: string): Promise<string[]> {
   return picked === null ? [] : Array.isArray(picked) ? picked : [picked];
 }
 
-/** Takes this window's pending launch (if any) and opens its project and files. */
+/** Takes this window's pending launch (if any) and opens its project, files or diff pair. */
 export async function consumeLaunch(): Promise<void> {
   if (!isTauri()) return;
   const launch = await commands.windowTakeLaunch().catch(() => null);
@@ -218,9 +221,10 @@ export async function consumeLaunch(): Promise<void> {
   if (launch?.project) {
     if (await openHere(launch.project)) await openInEditor(files, positions);
   } else if (files.length) await openFilesHere(files, positions);
+  else if (launch?.diff) await openCliDiff(launch.diff);
   else if (launch?.remote) {
-    const { sshConfig, path } = launch.remote;
-    await connectRemote(sshConfig, path).catch((e) =>
+    const { target, path } = launch.remote;
+    await connectRemote(target, path).catch((e) =>
       notifications().notify({
         level: "error",
         title: t("app.window.openFailed", { name: basename(path) }),
@@ -229,6 +233,20 @@ export async function consumeLaunch(): Promise<void> {
       }),
     );
   }
+}
+
+/**
+ * `openidea diff a.txt b.txt`: the two files side by side in the diff viewer (both editable).
+ * Without a project or LightEdit session the right file opens one first, like a launched file does.
+ */
+async function openCliDiff(diff: { left: string; right: string }): Promise<void> {
+  const s = useProject.getState();
+  if (!s.project && !s.lightEdit) await openLightEdit(diff.right).catch(() => {});
+  const [{ openDiff }, { compareFilesData }] = await Promise.all([
+    import("@/features/vcs/diffInput"),
+    import("@/features/vcs/compareData"),
+  ]);
+  await openDiff(compareFilesData(diff.left, diff.right));
 }
 
 /** Closes the project tabs on `side` of the `arg` tab (default: the current one), keeping that tab. */

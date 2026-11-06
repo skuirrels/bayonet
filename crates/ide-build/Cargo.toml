@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 ide-dotnet.workspace = true
+blake3.workspace = true
 dunce.workspace = true
 ide-core.workspace = true
 zip.workspace = true

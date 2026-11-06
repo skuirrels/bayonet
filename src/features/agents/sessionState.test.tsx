@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { registerActions } from "@/platform/actions";
 import { useProject } from "@/platform/project";
+import { EditorShownProvider } from "@/workbench/contributions";
 import type { AgentChange, AgentEntry, AgentTask } from "@/bindings";
 import { AgentsView } from "./AgentsView";
 import { SessionEditor } from "./SessionEditor";
@@ -14,14 +15,16 @@ const backend = vi.hoisted(() => ({
   entries: new Map<string, AgentEntry[]>(),
   changes: [] as AgentChange[],
   answers: [] as Array<[string, number, string | null]>,
+  fetched: [] as string[],
 }));
 vi.mock("@/platform/ipc", async (original) => ({
   ...(await original<typeof import("@/platform/ipc")>()),
   commands: {
-    agentEntries: async (id: string, sub: string | null) => ({
-      status: "ok",
-      data: backend.entries.get(sub ? `${id}/${sub}` : id) ?? [],
-    }),
+    agentEntries: async (id: string, sub: string | null) => {
+      const key = sub ? `${id}/${sub}` : id;
+      backend.fetched.push(key);
+      return { status: "ok", data: backend.entries.get(key) ?? [] };
+    },
     agentChanges: async () => ({ status: "ok", data: backend.changes }),
     vcsBranchInfo: async () => ({ status: "ok", data: { head: "main" } }),
     agentRespond: async (task: string, permission: number, option: string | null) => {
@@ -177,6 +180,43 @@ describe("a pending permission request in the conversation", () => {
 });
 
 describe("session state across tasks and hosts", () => {
+  it("leaves a task unread while its kept-alive tab is hidden, and reads it once shown", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    useAgents.setState({ unread: new Set(["A"]) });
+    const session = (shown: boolean) => (
+      <EditorShownProvider value={shown}>
+        <SessionEditor input={input("A")} />
+      </EditorShownProvider>
+    );
+    const { rerender } = render(session(false));
+    expect(useAgents.getState().unread.has("A")).toBe(true);
+    rerender(session(true));
+    expect(useAgents.getState().unread.has("A")).toBe(false);
+  });
+
+  it("fetches a conversation once and shows it again from the store when its tab reopens", async () => {
+    const entries = new Map(useAgents.getState().entries);
+    entries.delete("A");
+    useAgents.setState({ entries });
+    backend.fetched = [];
+    const first = render(<SessionEditor input={input("A")} />);
+    expect(await screen.findByText("Answer A")).toBeInTheDocument();
+    first.unmount();
+    render(<SessionEditor input={input("A")} />);
+    expect(screen.getByText("Answer A")).toBeInTheDocument();
+    await act(async () => {});
+    expect(backend.fetched).toEqual(["A"]);
+  });
+
+  it("opens a long conversation at its end and renders the earlier entries after it", async () => {
+    const entries = Array.from({ length: 150 }, (_, i): AgentEntry => ({ type: "agent", text: `Reply ${i}` }));
+    useAgents.setState({ entries: new Map(useAgents.getState().entries).set("A", entries) });
+    render(<SessionEditor input={input("A")} />);
+    expect(screen.getByText("Reply 149")).toBeInTheDocument();
+    expect(await screen.findByText("Reply 0")).toBeInTheDocument();
+    expect(stream().children).toHaveLength(150);
+  });
+
   it("returns to the task conversation when the docked task changes after opening a subagent", async () => {
     const dispose = registerActions(taskActions);
     try {

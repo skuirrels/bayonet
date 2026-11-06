@@ -46,3 +46,6 @@ pycharm-screenshots/
 
 # .NET fixture solutions are test data
 !fixtures/dotnet/*.sln
+
+# Installers built by scripts/release-kit (release/<version>/)
+/release

@@ -6,7 +6,7 @@
  */
 
 import { FontPicker } from "../components/FontPicker";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import { shortcutLabel } from "@/platform/keymap";
 import { usePlatform } from "@/platform/platformInfo";
@@ -33,7 +33,8 @@ import { HTTP_PROXY_PAGE } from "./httpProxy";
 import styles from "./Behavior.module.css";
 import { LOCALES, SUPPORTED_LOCALES, tx, useT } from "@/platform/i18n";
 import { BUILTIN_THEMES, useContributedIconThemes } from "@/platform/themes";
-import { originDetail, themeSelectOptions, useThemeChoices } from "@/workbench/theme";
+import { currentThemeChoice, originDetail, previewTheme, themeSelectOptions, useThemeChoices } from "@/workbench/theme";
+import { themePreview } from "@/workbench/quickSwitch";
 
 const BUILTIN_THEME_LABELS = BUILTIN_THEMES.map((t) => t.label);
 
@@ -62,12 +63,28 @@ function ThemeRow() {
   const matched = useLabelMatch("Sync with OS");
   const choices = useThemeChoices();
   const shown: ConcreteTheme = theme === "system" ? "light" : theme;
+  // The theme under the pointer shows as in Quick Switch; the one picked here shows until Apply or Cancel.
+  const picker = useMemo(() => themePreview(), []);
+  const previewed = useRef(false);
+  useEffect(
+    () => () => {
+      if (previewed.current) previewTheme(null);
+    },
+    [],
+  );
+  const preview = (id: ConcreteTheme | null) => {
+    previewed.current = true;
+    if (id !== null) return picker.preview(id);
+    picker.restore();
+    if (shown !== currentThemeChoice()) previewTheme(shown);
+  };
   return (
     <Row label="Theme">
       <Select<ConcreteTheme>
         value={shown}
         options={themeSelectOptions(choices, shown)}
         onChange={setTheme}
+        onPreview={preview}
         aria-label="Theme"
         disabled={sync}
       />
@@ -219,16 +236,20 @@ function CustomFontRow() {
   const [size, setSize] = useSetting<number>("appearance.uiFontSize");
   const id = useId();
   const matched = useLabelMatch("Use custom font");
+  // Labels share one column (IDEA Appearance): the UI font, fallback and Size
+  // controls all start at the same x instead of drifting with flex wrapping.
   return (
-    <div className={clsx(styles.fontRow, styles.customFontRow, matched && styles.matched)}>
-      <span className={styles.fontOption}>
+    <div className={clsx(styles.customFontRow, matched && styles.matched)}>
+      <span className={styles.fontCheck}>
         <Checkbox checked={on} onChange={setOn} label={<SearchLabel text="Use custom font:" />} />
+      </span>
+      <span className={styles.fontControl}>
         <FontPicker label="UI font" disabled={!on} value={family} onChange={setFamily} />
       </span>
-      <span className={styles.fontOption}>
-        <label className={clsx(!on && styles.disabled)} htmlFor={`${id}-fallback`}>
-          <SearchLabel text="Fallback font:" />
-        </label>
+      <label className={clsx(styles.fontLabel, !on && styles.disabled)} htmlFor={`${id}-fallback`}>
+        <SearchLabel text="Fallback font:" />
+      </label>
+      <span className={styles.fontControl}>
         <FontPicker
           id={`${id}-fallback`}
           label="UI fallback font"
@@ -238,10 +259,10 @@ function CustomFontRow() {
           allowEmpty
         />
       </span>
-      <span className={styles.fontOption}>
-        <label className={clsx(!on && styles.disabled)} htmlFor={`${id}-size`}>
-          <SearchLabel text="Size:" />
-        </label>
+      <label className={clsx(styles.fontLabel, !on && styles.disabled)} htmlFor={`${id}-size`}>
+        <SearchLabel text="Size:" />
+      </label>
+      <span className={styles.fontControl}>
         {on ? (
           <NumberInput
             id={`${id}-size`}
@@ -315,6 +336,11 @@ function UiOptionsGrid() {
             k="appearance.dndWithAltOnly"
             label="Drag-and-drop with Alt pressed only"
             hint="Applies to editor tabs and tool window buttons"
+          />
+          <BoundToggle
+            k="appearance.smallTreeIndents"
+            label="Use smaller indents in trees"
+            hint="Project, Structure, Commit and other tool window trees indent less per level"
           />
           <BoundToggle k="appearance.menuIcons" label="Display icons in menu items" />
         </>
@@ -618,6 +644,8 @@ export const BEHAVIOR_PAGES: PageSpec[] = [
               "Use project colors in main toolbar",
               "Drag-and-drop with Alt pressed only",
               "Display icons in menu items",
+              "Use smaller indents in trees",
+              "tree indent",
             ],
             component: UiOptionsGrid,
           },

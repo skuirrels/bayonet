@@ -6,11 +6,13 @@ const projectCurrent = vi.fn();
 const windowOpenProject = vi.fn();
 const windowOpenFiles = vi.fn();
 const windowTakeLaunch = vi.fn();
+const wslResolve = vi.fn();
 const cancelClose = vi.fn();
 const notify = vi.fn();
 vi.mock("@/platform/remote", async (original) => ({
   ...(await original<typeof import("@/platform/remote")>()),
   isRemoteWindow: vi.fn(() => false),
+  connectRemote: vi.fn(async () => {}),
 }));
 // The backend answers with the global settings, here: whatever the test set up.
 const lightEditOpen = vi.fn(async (_path: string) => ({ status: "ok", data: useProject.getState().settings ?? {} }));
@@ -34,6 +36,7 @@ vi.mock("@/platform/ipc", async (orig) => {
       windowOpenProject: (...a: unknown[]) => windowOpenProject(...a),
       windowOpenFiles: (...a: unknown[]) => windowOpenFiles(...a),
       windowTakeLaunch: () => windowTakeLaunch(),
+      wslResolve: (p: string) => wslResolve(p),
       lightEditOpen: (p: string) => lightEditOpen(p),
       fsReadDir: (p: string) => fsReadDir(p),
     },
@@ -43,6 +46,8 @@ vi.mock("@/platform/project", async (orig) => {
   const real = await orig<typeof import("@/platform/project")>();
   return { ...real, openProject: (p: string) => openProject(p) };
 });
+const diffs: unknown[] = [];
+vi.mock("@/features/vcs/diffInput", () => ({ openDiff: (data: unknown) => void diffs.push(data) }));
 
 const {
   openProjectInWindow,
@@ -55,7 +60,7 @@ const {
 } = await import("../windows");
 const { useProject } = await import("@/platform/project");
 const { provideEditorService, provideNotificationService } = await import("@/workbench/contributions");
-const { isRemoteWindow } = await import("@/platform/remote");
+const { isRemoteWindow, connectRemote } = await import("@/platform/remote");
 const { IpcError } = await import("@/platform/ipc");
 provideNotificationService({ notify });
 
@@ -77,12 +82,15 @@ const ok = (data: unknown) => ({ status: "ok", data });
 const projectState = (root: string) => ({ project: { root, name: root, trusted: true, isGit: false, settings: {} } });
 
 beforeEach(() => {
-  for (const f of [windowOpenProject, windowOpenFiles, windowTakeLaunch]) f.mockReset();
+  for (const f of [windowOpenProject, windowOpenFiles, windowTakeLaunch, wslResolve]) f.mockReset();
+  wslResolve.mockResolvedValue(null);
+  vi.mocked(connectRemote).mockClear();
   for (const f of [lightEditOpen, fsReadDir, openProject]) f.mockClear();
   cancelClose.mockClear();
   notify.mockClear();
   vi.mocked(isRemoteWindow).mockReturnValue(false);
   opened.length = 0;
+  diffs.length = 0;
   activePath = null;
   useProject.setState({ project: null, lightEdit: false, settings: null } as never);
 });
@@ -93,6 +101,18 @@ describe("openProjectInWindow", () => {
     await openProjectInWindow("/p/a", false);
     expect(windowOpenProject).toHaveBeenCalledWith("/p/a", false, []);
     expect(openProject).toHaveBeenCalledWith("/p/a");
+  });
+
+  it("connects to the distribution when the folder is on the WSL share", async () => {
+    const [distro, linuxPath] = ["Debian", "/srv/app"];
+    const share = `\\\\wsl.localhost\\${distro}${linuxPath.replaceAll("/", "\\")}`;
+    const target = { kind: "wsl", distro };
+    wslResolve.mockResolvedValue({ target, path: linuxPath });
+    windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
+    await openProjectInWindow(share, false);
+    expect(wslResolve).toHaveBeenCalledWith(share);
+    expect(connectRemote).toHaveBeenCalledWith(target, linuxPath);
+    expect(openProject).not.toHaveBeenCalled();
   });
 
   it("asks for a new window when this one already has a project", async () => {
@@ -284,6 +304,33 @@ describe("launch", () => {
     });
     await consumeLaunch();
     expect(opened).toEqual(["/x/notes/a.txt @119:7", "/x/notes/b.txt (focus)"]);
+  });
+
+  it("opens the CLI diff pair in LightEdit without a project (openidea diff a b)", async () => {
+    windowTakeLaunch.mockResolvedValueOnce({ project: null, files: [], diff: { left: "/x/a.txt", right: "/x/b.txt" } });
+    await consumeLaunch();
+    expect(lightEditOpen).toHaveBeenCalledWith("/x/b.txt");
+    expect(diffs).toEqual([
+      {
+        path: "/x/b.txt",
+        left: { type: "file", path: "/x/a.txt", label: "/x/a.txt" },
+        right: { type: "worktree", label: "/x/b.txt" },
+      },
+    ]);
+  });
+
+  it("opens the CLI diff pair in the open project without LightEdit", async () => {
+    useProject.setState(projectState("/p") as never);
+    windowTakeLaunch.mockResolvedValueOnce({ project: null, files: [], diff: { left: "/p/a.txt", right: "/p/b.txt" } });
+    await consumeLaunch();
+    expect(lightEditOpen).not.toHaveBeenCalled();
+    expect(diffs).toEqual([
+      {
+        path: "/p/b.txt",
+        left: { type: "file", path: "/p/a.txt", label: "a.txt" },
+        right: { type: "worktree", label: "b.txt" },
+      },
+    ]);
   });
 });
 

@@ -611,14 +611,17 @@ export function Tree<T>(props: TreeProps<T>) {
           )}
           {virtualizer.getVirtualItems().map((v) => {
             const row = rows[v.index]!;
-            const pad = 4 + row.depth * indent;
-            const style = { transform: `translateY(${v.start}px)`, height: v.size, paddingLeft: pad };
+            // Settings › Appearance › "Use smaller indents in trees" sets `--tree-indent`
+            // on the root; reading it here applies the setting to every tree at once,
+            // instantly, and keeps chevrons and level alignment consistent with it.
+            const pad = (extra = 0) => `calc(${4 + extra}px + ${row.depth} * var(--tree-indent, ${indent}px))`;
+            const style = { transform: `translateY(${v.start}px)`, height: v.size, paddingLeft: pad() };
             if (row.loading) {
               return (
                 <div
                   key={v.key}
                   className={clsx(styles.row, styles.loading)}
-                  style={{ ...style, paddingLeft: pad + 20 }}
+                  style={{ ...style, paddingLeft: pad(20) }}
                   role="presentation"
                 >
                   <Spinner size={12} /> <T>Loading…</T>
@@ -626,6 +629,10 @@ export function Tree<T>(props: TreeProps<T>) {
               );
             }
             const isSelected = selected.has(row.key);
+            const prevRow = rows[v.index - 1];
+            const nextRow = rows[v.index + 1];
+            const joinPrev = isSelected && !!prevRow && !prevRow.loading && selected.has(prevRow.key);
+            const joinNext = isSelected && !!nextRow && !nextRow.loading && selected.has(nextRow.key);
             const isLead = v.index === leadIndex;
             const matches = matchMap.get(row.key) ?? null;
             const state: TreeRowState = {
@@ -655,6 +662,8 @@ export function Tree<T>(props: TreeProps<T>) {
                   props.horizontalScroll && styles.wideRow,
                   rowClassName?.(row.node),
                   isSelected && styles.selected,
+                  joinPrev && styles.joinPrev,
+                  joinNext && styles.joinNext,
                   isLead && styles.lead,
                   reordering.drop?.key === row.key && styles[reordering.drop.position],
                 )}

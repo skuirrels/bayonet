@@ -3,16 +3,21 @@
 //! sandbox goes through [`HostApi`], implemented by the host; the imports
 //! themselves are in `wit_host`.
 
-use crate::types::{CodeAction, CompletionItem, InlineSuggestion, LineMarker, Location, ProviderDocument};
 use crate::types::{
-    EventKind, HostError, HttpRequest, HttpResponse, Invocation, Limits, NotificationLevel, ProcessOutput,
+    CodeAction, CompletionItem, InlineSuggestion, LineMarker, Location, ProviderDocument, SemanticToken,
+};
+use crate::types::{
+    EventKind, HostError, HttpRequest, HttpResponse, Invocation, Limits, NotificationLevel, ProcessOutput, Prompt,
     RepositoryStatus, StatusItem, SyntaxFold, SyntaxSymbol, SyntaxToken, WorkbenchEvent,
 };
 use crate::types::{
     FieldValue, View, ViewBody, ViewButton, ViewEvent, ViewField, ViewListItem, ViewTable, ViewTreeItem, Viewport,
 };
-use crate::wit_host::{bindings, providers_bindings, syntax_bindings, views_bindings};
+use crate::wit_host::{
+    bindings, indexing_bindings, providers_bindings, semantic_bindings, syntax_bindings, views_bindings,
+};
 use ide_core::CancellationToken;
+use ide_core::ipc_path::to_ipc;
 use ide_extension::Capability;
 use parking_lot::Mutex;
 use std::path::Path;
@@ -26,13 +31,15 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use bindings::openidea::plugin::events as wit_events;
 use bindings::openidea::plugin::types as wit_types;
+use indexing_bindings::exports::openidea::plugin::document_indexer as wit_index;
 use providers_bindings::exports::openidea::plugin::providers as wit_prov;
+use semantic_bindings::exports::openidea::plugin::semantic_tokens_provider as wit_sem;
 use syntax_bindings::exports::openidea::plugin::syntax_provider as wit_syntax;
 use views_bindings::exports::openidea::plugin::view_provider as wit_view;
 use views_bindings::openidea::plugin::view_types as wit_vt;
 
 /// The API version of the world above, `major.minor` of [`host_api`].
-pub const API_VERSION: &str = "1.0";
+pub const API_VERSION: &str = "1.3";
 const EPOCH_TICK: Duration = Duration::from_millis(10);
 pub(crate) const MAX_TEXT: usize = 1 << 20;
 pub(crate) const MAX_TITLE: usize = 256;
@@ -45,8 +52,40 @@ pub const CANCELLED: &str = "was cancelled";
 /// documents. Capabilities are already checked when these are called.
 pub trait HostApi: Send + Sync {
     fn notify(&self, client: Option<&str>, level: NotificationLevel, title: String, body: String);
+    fn copy_to_clipboard(&self, client: Option<&str>, text: String) -> Result<(), HostError> {
+        let _ = (client, text);
+        Ok(())
+    }
+    fn open_url(&self, client: Option<&str>, url: String) -> Result<(), HostError> {
+        let _ = (client, url);
+        Ok(())
+    }
+    /// Shows `prompt` in `client`'s window and waits for the answer until the
+    /// user gives one or `cancel` fires: the chosen keys (`QuickPick`), the
+    /// text (`Input`, one element) or any value (`Confirm`: OK); `None` when
+    /// dismissed.
+    fn ask(
+        &self,
+        client: Option<&str>,
+        prompt: Prompt,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Vec<String>>, HostError> {
+        let _ = (client, prompt, cancel);
+        Ok(None)
+    }
+    /// Brings the plugin's declared view to the front in `client`'s window.
+    fn reveal_view(&self, client: Option<&str>, view: &str) -> Result<(), HostError> {
+        let _ = (client, view);
+        Ok(())
+    }
     /// Sets (`Some`) or removes the plugin's status bar item `id`.
     fn status_item(&self, id: &str, item: Option<StatusItem>);
+    /// Sets (`Some`, validated JSON text) or removes the plugin's context key,
+    /// for window `client` (every window if `None`).
+    fn set_context(&self, client: Option<&str>, key: &str, value: Option<String>) -> Result<(), HostError> {
+        let _ = (client, key, value);
+        Ok(())
+    }
     /// Roots of the open projects.
     fn projects(&self) -> Vec<std::path::PathBuf>;
     /// Unsaved text of an open editor's file.
@@ -66,6 +105,10 @@ pub trait HostApi: Send + Sync {
     fn storage_set(&self, key: &str, value: Option<String>) -> Result<(), HostError>;
     fn storage_keys(&self, prefix: &str) -> Result<Vec<String>, HostError>;
     fn vcs_status(&self, root: &Path) -> Result<Option<RepositoryStatus>, HostError>;
+    fn vcs_remotes(&self, root: &Path) -> Result<Vec<(String, String)>, HostError> {
+        let _ = root;
+        Ok(Vec::new())
+    }
     fn vcs_fetch(&self, root: &Path, cancel: &CancellationToken) -> Result<(), HostError>;
     /// Subscribes to (or unsubscribes from) a kind of workbench event.
     /// Project files matching `glob` (root-relative), at most `limit`.
@@ -105,6 +148,7 @@ pub trait HostApi: Send + Sync {
         args: Vec<String>,
         cwd: Option<&Path>,
     ) -> Result<(), HostError>;
+    fn open_location(&self, client: Option<&str>, path: &Path, line: u32, column: u32) -> Result<(), HostError>;
     /// A setting of the plugin as JSON (project over global over the schema default).
     fn setting(&self, root: Option<&Path>, key: &str) -> Option<String>;
 }
@@ -198,8 +242,10 @@ impl PluginEngine {
     /// Rejects a component this host can't run, with a message that says what
     /// to do: one importing interfaces outside the plugin API and WASI, or one
     /// built for a plugin API this host doesn't implement (another major, or a
-    /// newer minor). Returns the API version the component was built for
-    /// (`None`: it uses no plugin interface).
+    /// newer minor), or one that doesn't link: an import the host lacks or
+    /// declares with another type (same API version, different WIT), or a
+    /// missing plugin export. Returns the API version the component was built
+    /// for (`None`: it uses no plugin interface).
     pub fn check_component(&self, component: &Component) -> Result<Option<semver::Version>, String> {
         let ty = component.component_type();
         let imports: Vec<String> = ty.imports(&self.engine).map(|(name, _)| name.to_owned()).collect();
@@ -216,8 +262,18 @@ impl PluginEngine {
         if let Some(v) = &built_for {
             check_api(v, &host_api())?;
         }
+        let pre = self.linker.instantiate_pre(component).map_err(|e| link_error(&format!("{e:#}")))?;
+        bindings::PluginIndices::new(&pre).map_err(|e| link_error(&format!("{e:#}")))?;
         Ok(built_for)
     }
+}
+
+/// Explains a component that doesn't link against this host's plugin API.
+fn link_error(detail: &str) -> String {
+    format!(
+        "the component doesn't match the plugin API of this IDE ({API_VERSION}): {detail}. \
+         If it was built for a newer OpenIDEA, update OpenIDEA; otherwise rebuild it with the {API_VERSION} SDK"
+    )
 }
 
 /// Interface names of the plugin API start with this (`openidea:plugin/log@1.0.0`).
@@ -331,6 +387,8 @@ pub struct StoreData {
     pub(crate) granted: Vec<Capability>,
     pub(crate) host: Arc<dyn HostApi>,
     pub(crate) invocation: Invocation,
+    /// The running call is a command or an event, so it may ask the user.
+    pub(crate) interactive: bool,
     /// Tasks begun by the running call and not ended yet.
     pub(crate) open_tasks: Vec<u64>,
     pub(crate) last_report: Option<Instant>,
@@ -458,7 +516,9 @@ struct Exports {
     plugin: bindings::Plugin,
     syntax: Option<wit_syntax::Guest>,
     providers: Option<wit_prov::Guest>,
+    indexer: Option<wit_index::Guest>,
     views: Option<wit_view::Guest>,
+    semantic: Option<wit_sem::Guest>,
 }
 
 /// Most results one syntax call may return (more are dropped).
@@ -510,6 +570,7 @@ impl Runtime {
             granted: setup.granted,
             host: setup.host,
             invocation: Invocation::default(),
+            interactive: false,
             open_tasks: Vec::new(),
             last_report: None,
         };
@@ -529,17 +590,15 @@ impl Runtime {
         arm(&mut store, &setup.limits, setup.limits.timeout).map_err(|e| e.to_string())?;
         let api_hint = |e: wasmtime::Error| {
             let msg = describe_trap(&e, &setup.limits);
-            if msg.contains("openidea:plugin/") {
-                format!("{msg} (the component was built for a different plugin API; this IDE runs API {API_VERSION})")
-            } else {
-                msg
-            }
+            if msg.contains("openidea:plugin/") { link_error(&msg) } else { msg }
         };
         let pre = engine.linker.instantiate_pre(component).map_err(api_hint)?;
         let plugin_indices = bindings::PluginIndices::new(&pre).map_err(api_hint)?;
         let syntax_indices = wit_syntax::GuestIndices::new(&pre).ok();
+        let index_indices = wit_index::GuestIndices::new(&pre).ok();
         let provider_indices = wit_prov::GuestIndices::new(&pre).ok();
         let view_indices = wit_view::GuestIndices::new(&pre).ok();
+        let semantic_indices = wit_sem::GuestIndices::new(&pre).ok();
         let instance = pre.instantiate(&mut store).map_err(api_hint)?;
         let plugin = plugin_indices.load(&mut store, &instance).map_err(api_hint)?;
         let syntax = match syntax_indices {
@@ -550,13 +609,21 @@ impl Runtime {
             Some(indices) => Some(indices.load(&mut store, &instance).map_err(api_hint)?),
             None => None,
         };
+        let indexer = match index_indices {
+            Some(i) => Some(i.load(&mut store, &instance).map_err(api_hint)?),
+            None => None,
+        };
         let views = match view_indices {
+            Some(indices) => Some(indices.load(&mut store, &instance).map_err(api_hint)?),
+            None => None,
+        };
+        let semantic = match semantic_indices {
             Some(indices) => Some(indices.load(&mut store, &instance).map_err(api_hint)?),
             None => None,
         };
         Ok(Self {
             store,
-            exports: Exports { plugin, syntax, providers, views },
+            exports: Exports { plugin, syntax, providers, views, indexer, semantic },
             limits: setup.limits,
             version: setup.version,
         })
@@ -627,6 +694,47 @@ impl Runtime {
             return Err(CallError::missing_export("syntax-provider"));
         }
         self.call(Invocation::default(), timeout, |exports, store| f(exports.syntax.as_ref().expect("checked"), store))
+    }
+
+    pub fn index_document(
+        &mut self,
+        path: &str,
+        text: &str,
+        symbols: &[crate::indexing::IndexSymbol],
+        invocation: Invocation,
+    ) -> Result<crate::indexing::Edges, CallError> {
+        if self.exports.indexer.is_none() {
+            return Err(CallError::missing_export("document-indexer"));
+        }
+        let doc = wit_index::Document {
+            path: path.into(),
+            text: text.into(),
+            symbols: symbols
+                .iter()
+                .map(|s| wit_index::Symbol {
+                    name: s.name.clone(),
+                    kind: s.kind.clone(),
+                    container: s.container.clone(),
+                    range: range_to_wit(s.range),
+                })
+                .collect(),
+        };
+        let edges = self.call(invocation, self.limits.timeout, |e, store| {
+            e.indexer.as_ref().expect("checked").call_index(store, &doc)
+        })?;
+        fn anchor(a: wit_index::Anchor) -> crate::indexing::Anchor {
+            crate::indexing::Anchor { key: a.key, range: range_from_wit(a.range) }
+        }
+        Ok(crate::indexing::Edges {
+            definitions: edges.definitions.into_iter().map(anchor).collect(),
+            references: edges.references.into_iter().map(anchor).collect(),
+            aliases: edges
+                .aliases
+                .into_iter()
+                .map(|a| crate::indexing::Alias { prefix: a.prefix, target: a.target })
+                .collect(),
+            markers: edges.markers.into_iter().map(anchor).collect(),
+        })
     }
 
     /// The component exports `providers`.
@@ -745,6 +853,34 @@ impl Runtime {
             .collect())
     }
 
+    pub fn provide_semantic_tokens(
+        &mut self,
+        doc: &ProviderDocument,
+        timeout: Duration,
+    ) -> Result<Vec<SemanticToken>, CallError> {
+        if self.exports.semantic.is_none() {
+            return Err(CallError::missing_export("semantic-tokens-provider"));
+        }
+        let d = wit_sem::Document {
+            path: to_ipc(&doc.path),
+            language: doc.language.clone(),
+            version: doc.version,
+            text: doc.text.clone(),
+        };
+        let tokens = self.call(Invocation::default(), timeout, |e, store| {
+            e.semantic.as_ref().expect("checked").call_semantic_tokens(store, &d)
+        })?;
+        Ok(tokens
+            .into_iter()
+            .take(MAX_SEMANTIC_TOKENS)
+            .map(|t| SemanticToken {
+                range: range_from_wit(t.range),
+                kind: clip(t.kind, 32),
+                modifiers: t.modifiers.into_iter().take(MAX_TOKEN_MODIFIERS).map(|m| clip(m, 32)).collect(),
+            })
+            .collect())
+    }
+
     pub fn activate(&mut self) -> Result<(), CallError> {
         let data = self.store.data();
         let ctx = wit_types::Context {
@@ -767,6 +903,7 @@ impl Runtime {
     ) -> Result<Option<String>, CallError> {
         let result = self.call(invocation, self.limits.timeout, |e, store| {
             let ctx = store.data_mut().new_invocation()?;
+            store.data_mut().interactive = true;
             let r = e.plugin.openidea_plugin_commands().call_run(
                 &mut *store,
                 id,
@@ -817,6 +954,7 @@ impl Runtime {
         let event = event_to_wit_view(event);
         let result = self.call(invocation, self.limits.timeout, |e, store| {
             let ctx = store.data_mut().new_invocation()?;
+            store.data_mut().interactive = true;
             let views = e.views.as_ref().expect("checked");
             let r = views.call_handle(&mut *store, view, &event, wasmtime::component::Resource::new_borrow(ctx.rep()));
             store.data_mut().drop_invocation(ctx);
@@ -830,6 +968,7 @@ impl Runtime {
         let events: Vec<wit_events::Event> = events.into_iter().take(MAX_BATCH).map(event_to_wit).collect();
         self.call(invocation, self.limits.timeout, |e, store| {
             let ctx = store.data_mut().new_invocation()?;
+            store.data_mut().interactive = true;
             let r = e.plugin.openidea_plugin_event_handler().call_handle(
                 &mut *store,
                 &events,
@@ -866,6 +1005,7 @@ impl Runtime {
         let result = f(&self.exports, &mut self.store);
         let data = self.store.data_mut();
         data.invocation = Invocation::default();
+        data.interactive = false;
         // Tasks don't outlive the call that began them.
         for id in std::mem::take(&mut data.open_tasks) {
             data.host.task_end(id);
@@ -893,6 +1033,8 @@ impl Runtime {
 
 /// Most items one provider call may return (more are dropped).
 const MAX_PROVIDER_ITEMS: usize = 10_000;
+const MAX_SEMANTIC_TOKENS: usize = 1 << 16;
+const MAX_TOKEN_MODIFIERS: usize = 8;
 
 fn pos_to_wit(p: ide_core::Pos) -> wit_types::Position {
     wit_types::Position { line: p.line, character: p.col }
@@ -914,12 +1056,7 @@ fn location_from_wit(l: wit_types::Location) -> Location {
 }
 
 fn doc_to_wit(d: &ProviderDocument) -> wit_prov::Document {
-    wit_prov::Document {
-        path: d.path.to_string_lossy().into_owned(),
-        language: d.language.clone(),
-        version: d.version,
-        text: d.text.clone(),
-    }
+    wit_prov::Document { path: to_ipc(&d.path), language: d.language.clone(), version: d.version, text: d.text.clone() }
 }
 
 /// Resets the budgets for the next call: fuel, deadline, cancellation.
@@ -991,7 +1128,7 @@ fn code_action_to_wit(a: &CodeAction) -> wit_prov::CodeAction {
             .edits
             .iter()
             .map(|(path, edits)| wit_prov::FileEdit {
-                path: path.to_string_lossy().into_owned(),
+                path: to_ipc(path),
                 edits: edits
                     .iter()
                     .map(|e| wit_types::TextEdit { range: range_to_wit(e.range), text: e.new_text.clone() })
@@ -1109,6 +1246,27 @@ fn event_to_wit_view(e: ViewEvent) -> wit_vt::ViewEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn provider_and_resolved_action_paths_match_ipc_events() {
+        for (path, expected) in [
+            (r"C:\project\Example.java", "C:/project/Example.java"),
+            (r"\\?\C:\project\Example.java", "C:/project/Example.java"),
+            (r"\\server\share\Example.java", "//server/share/Example.java"),
+        ] {
+            let doc = ProviderDocument { path: path.into(), ..Default::default() };
+            assert_eq!(doc_to_wit(&doc).path, expected);
+            let action = CodeAction {
+                title: "Fix".into(),
+                kind: None,
+                preferred: false,
+                edits: vec![(path.into(), Vec::new())],
+                data: None,
+            };
+            assert_eq!(code_action_to_wit(&action).edits[0].path, expected);
+        }
+    }
 
     fn ext(kind: &str) -> wit_types::Extension {
         wit_types::Extension { kind: kind.into(), data: "{}".into() }

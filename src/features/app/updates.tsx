@@ -163,7 +163,12 @@ async function runInstall(version: string) {
     await call(commands.appInstallUpdate(request, channel));
   } catch (e) {
     if (isCancelled(e)) {
-      notifications().notify({ level: "info", title: t("app.update.cancelled"), key: UPDATE_KEY });
+      notifications().notify({
+        level: "info",
+        title: t("app.update.cancelled"),
+        key: UPDATE_KEY,
+        actions: [{ label: t("app.update.retry"), run: () => void installUpdate(version) }],
+      });
     } else {
       notifications().notify({
         level: "error",

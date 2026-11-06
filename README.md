@@ -44,4 +44,7 @@ the [official plugins](plugins/official). The plugin API is still a preview.
 [Apache 2.0](LICENSE). See [`NOTICE`](NOTICE) for attribution, including OpenIDEA, and
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) for bundled third-party assets.
 
+Database tool window notes, including Oracle Instant Client setup, are in
+[`docs/databases.md`](docs/databases.md).
+
 <sub>Not affiliated with JetBrains or Microsoft. IntelliJ IDEA and Rider are trademarks of JetBrains s.r.o.</sub>

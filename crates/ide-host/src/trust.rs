@@ -74,6 +74,21 @@ impl TrustStore {
         Ok(())
     }
 
+    pub fn add_location(&self, path: &Path) -> IdeResult<()> {
+        let root = dunce::canonicalize(path)?;
+        if !root.is_dir() {
+            return Err(IdeError::invalid("trusted location must be an existing directory"));
+        }
+        let mut state = self.state.lock();
+        let mut next = state.clone()?;
+        if !next.locations.contains(&root) {
+            next.locations.push(root);
+            persist(&self.file, &next)?;
+            *state = Ok(next);
+        }
+        Ok(())
+    }
+
     pub fn remove_location(&self, path: &Path) -> IdeResult<()> {
         let mut state = self.state.lock();
         let mut next = state.clone()?;
@@ -109,6 +124,9 @@ impl crate::Host {
             if let Some(bridge) = &project.kotlin_bridge {
                 bridge.schedule();
             }
+            if let Some(phpstan) = &project.phpstan {
+                phpstan.interrupt();
+            }
             if !trusted {
                 project.lsp.set_execution_allowed(false);
             }
@@ -118,6 +136,7 @@ impl crate::Host {
                     self.environment.spawn_post_start(cmd, project.root.clone(), project.sink.clone());
                 }
                 project.lsp.set_execution_allowed(true);
+                project.lsp.prewarm_java_configuration();
             } else {
                 self.environment.project_closed();
                 project.agents.shutdown();
@@ -217,6 +236,8 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
             | "lsp_resend_diagnostics"
             | "recent_projects"
             | "remove_recent_project"
+            | "recent_project_groups"
+            | "set_recent_project_groups"
             | "open_project"
             | "close_project"
             | "project_current"
@@ -249,6 +270,8 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
             | "remote_disconnect"
             | "remote_connect"
             | "remote_bootstrap_list"
+            | "wsl_distros"
+            | "wsl_resolve"
             | "remote_list"
             | "remote_open"
             | "remote_of"
@@ -261,6 +284,7 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
             | "agent_commands"
             | "agent_unqueue"
             | "agent_cancel"
+            | "agent_stop_background"
             | "agent_archive"
             | "agent_unarchive"
             | "agent_registry_list"
@@ -312,7 +336,6 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
             | "vcs_log_users"
             | "vcs_log_details"
             | "vcs_log_details_batch"
-            | "vcs_log_index"
             | "vcs_revision_children"
             | "vcs_revision_files"
             | "vcs_open_external_log"
@@ -332,7 +355,9 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
             | "vcs_compare_scope"
             | "vcs_compare_paths"
             | "vcs_diff_revisions"
+            | "vcs_diff_numstat"
             | "vcs_merge_base"
+            | "vcs_has_hook"
             | "vcs_shelves"
             | "vcs_shelf_patch"
             | "vcs_changelists_load"

@@ -17,6 +17,8 @@ struct Script {
     start_debugging: bool,
     ignore_configuration_done: bool,
     source_path: Option<String>,
+    /// Answer `setBreakpoints` only once this many are waiting (a client that waits for each never gets one).
+    hold_set_breakpoints: usize,
 }
 
 struct FakeLauncher {
@@ -49,6 +51,7 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
     let mut r = BufReader::new(r);
     let mut seq = 1000;
     let mut pending_launch: Option<i64> = None;
+    let mut held: Vec<Value> = Vec::new();
     macro_rules! send {
         ($v:expr) => {{
             let mut v: Value = $v;
@@ -102,14 +105,20 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
                 send!(json!({"type": "event", "event": "initialized"}));
             }
             "setBreakpoints" => {
-                let bps: Vec<Value> = msg["arguments"]["breakpoints"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| json!({"id": i + 1, "verified": true, "line": b["line"]}))
-                    .collect();
-                ok!(msg, json!({"breakpoints": bps}));
+                held.push(msg);
+                if held.len() < script.hold_set_breakpoints {
+                    continue;
+                }
+                for msg in std::mem::take(&mut held) {
+                    let bps: Vec<Value> = msg["arguments"]["breakpoints"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| json!({"id": i + 1, "verified": true, "line": b["line"]}))
+                        .collect();
+                    ok!(msg, json!({"breakpoints": bps}));
+                }
             }
             "setExceptionBreakpoints" => ok!(msg, json!({})),
             "setFunctionBreakpoints" | "setDataBreakpoints" => {
@@ -486,6 +495,40 @@ async fn run_in_terminal_spawns_debuggee() {
     assert!(response["body"]["processId"].as_u64().unwrap() > 0);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn run_in_terminal_program_reads_typed_input() {
+    let h = harness(Script {
+        // CodeLLDB's launcher asks to clear the terminal; the console keeps its output.
+        run_in_terminal: Some(vec![
+            "sh".into(),
+            "-c".into(),
+            "[ -t 0 ] && echo 'name?' && read name && echo \"hello $name\"".into(),
+            "--clear-screen".into(),
+        ]),
+        ..Script::default()
+    });
+    let session = h.start(config()).await.unwrap();
+    h.wait_event(|e| matches!(e, DebugEvent::ProgramInput)).await;
+    h.wait_event(|e| matches!(e, DebugEvent::Output { output, .. } if output.contains("name?"))).await;
+    h.manager.send_input(session, "Bob\n").unwrap();
+    h.wait_event(|e| matches!(e, DebugEvent::Output { output, .. } if output.contains("hello Bob"))).await;
+    let output: String = h
+        .events
+        .lock()
+        .iter()
+        .filter_map(|e| match e {
+            IdeEvent::Debug { event: DebugEvent::Output { category, output }, .. } if category == "stdout" => {
+                Some(output.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!output.contains('\r'), "{output:?}");
+    h.manager.stop(session).await.unwrap();
+    assert!(h.manager.send_input(session, "x\n").is_err());
+}
+
 #[test]
 fn launch_arguments_merge_and_defaults() {
     let mut c = config();
@@ -716,6 +759,37 @@ async fn js_debug_launch_gets_port_and_workspace_folder() {
     assert_eq!(launch["type"], "pwa-node");
 }
 
+/// CodeLLDB treats console input as LLDB commands unless told otherwise: Evaluate Expression
+/// and the Debug Console send expressions, so its console evaluates them. A launch
+/// configuration that picks a console mode keeps it.
+#[tokio::test]
+async fn codelldb_console_evaluates_expressions() {
+    let launch_with = |extra: Value| async move {
+        let h = harness(Script::default());
+        let config = LaunchConfig {
+            name: "demo".into(),
+            adapter: "codelldb".into(),
+            request: "launch".into(),
+            program: Some("/p/target/debug/demo".into()),
+            args: vec![],
+            cwd: Some("/p".into()),
+            env: BTreeMap::new(),
+            extra_json: Some(extra.to_string()),
+        };
+        h.start(config).await.unwrap();
+        h.request("launch")["arguments"].clone()
+    };
+    let launch = launch_with(json!({})).await;
+    assert_eq!(launch["_adapterSettings"]["consoleMode"], "evaluate");
+    assert_eq!(launch["sourceLanguages"], json!(["rust"]));
+
+    let launch =
+        launch_with(json!({"_adapterSettings": {"consoleMode": "commands", "showDisassembly": "never"}})).await;
+    assert_eq!(launch["_adapterSettings"], json!({"consoleMode": "commands", "showDisassembly": "never"}));
+    let launch = launch_with(json!({"_adapterSettings": {"showDisassembly": "never"}})).await;
+    assert_eq!(launch["_adapterSettings"], json!({"consoleMode": "evaluate", "showDisassembly": "never"}));
+}
+
 /// An adapter that is already listening (java-debug inside jdtls): the client
 /// connects over TCP to the `debugServer` port instead of spawning anything.
 #[tokio::test]
@@ -894,6 +968,7 @@ async fn force_stepping_suspends_breakpoints_until_the_next_stop() {
     let b = PathBuf::from("/p/b.py");
     h.manager.set_breakpoints(a.clone(), vec![bp(1)]).await.unwrap();
     h.manager.set_breakpoints(b.clone(), vec![bp(3)]).await.unwrap();
+    h.manager.set_breakpoints(PathBuf::from("/p/off.py"), vec![Breakpoint { enabled: false, ..bp(5) }]).await.unwrap();
     h.manager.set_function_breakpoints(vec![function_bp("run", true)]).await.unwrap();
     let id = h.start(config()).await.unwrap();
     h.wait_event(|e| matches!(e, DebugEvent::Stopped { .. })).await;
@@ -922,6 +997,24 @@ async fn force_stepping_suspends_breakpoints_until_the_next_stop() {
     h.manager.run_to(id, 1, a.clone(), 9, true).await.unwrap();
     assert_eq!(sent_for("/p/a.py").last().unwrap(), &json!([{"line": 10}]));
     assert_eq!(sent_for("/p/b.py").last().unwrap(), &json!([]));
+    assert!(sent_for("/p/off.py").is_empty(), "nothing enabled there, nothing to suspend or restore");
+}
+
+#[tokio::test]
+async fn startup_sends_every_file_at_once_and_skips_files_with_nothing_enabled() {
+    let h = harness(Script { hold_set_breakpoints: 2, ..Script::default() });
+    h.manager.set_breakpoints(PathBuf::from("/p/a.py"), vec![bp(1)]).await.unwrap();
+    h.manager.set_breakpoints(PathBuf::from("/p/b.py"), vec![bp(3)]).await.unwrap();
+    let off = PathBuf::from("/p/off.py");
+    h.manager.set_breakpoints(off.clone(), vec![Breakpoint { enabled: false, ..bp(5) }]).await.unwrap();
+    // Waiting for each answer before the next request would stall until the request timeout.
+    tokio::time::timeout(Duration::from_secs(5), h.start(config())).await.expect("requests pipelined").unwrap();
+    let paths: Vec<Value> = requests(&h, "setBreakpoints").into_iter().map(|r| r["source"]["path"].clone()).collect();
+    assert_eq!(paths, [json!("/p/a.py"), json!("/p/b.py")]);
+    assert_eq!(
+        h.manager.breakpoint_states(&off),
+        [BreakpointState { line: 5, verified: false, message: Some("Disabled".into()) }]
+    );
 }
 
 #[tokio::test]
@@ -1148,6 +1241,23 @@ async fn kotlin_official_release_ten_no_delay_runs() {
     }
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn netcoredbg_windows_source_paths_round_trip() {
+    let client = "D:/work/LoginController.cs";
+    let native = r"D:\work\LoginController.cs";
+    let h = harness(Script { source_path: Some(native.into()), ..Script::default() });
+    let path = PathBuf::from(client);
+    h.manager.set_breakpoints(path.clone(), vec![bp(25)]).await.unwrap();
+    let mut cfg = config();
+    cfg.adapter = "netcoredbg".into();
+    let id = h.start(cfg).await.unwrap();
+    assert_eq!(h.request("setBreakpoints")["arguments"]["source"]["path"], native);
+    let frames = h.manager.stack_trace(id, 1).await.unwrap();
+    assert_eq!(frames[0].path.as_deref(), Some(path.as_path()));
+    h.manager.stop(id).await.unwrap();
+}
+
 #[tokio::test]
 async fn java_windows_source_paths_for_launch_and_attach() {
     for request in ["launch", "attach"] {
@@ -1258,4 +1368,43 @@ async fn a_plugin_language_runs_its_debug_adapter_from_the_approved_program() {
     let err = manager.start(godot_launch(&dir), owner).await.unwrap_err();
     assert_eq!(err.kind, ide_core::error::ErrorKind::PermissionDenied, "{}", err.message);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn flutter_projects_are_found_from_the_program_or_the_working_directory() {
+    let root = std::env::temp_dir().join(format!("openidea-flutter-{}", std::process::id()));
+    let app = root.join("app");
+    let tool = root.join("tool");
+    std::fs::create_dir_all(app.join("lib")).unwrap();
+    std::fs::create_dir_all(tool.join("bin")).unwrap();
+    std::fs::write(app.join("pubspec.yaml"), "name: app\ndependencies:\n  flutter:\n    sdk: flutter\n").unwrap();
+    std::fs::write(tool.join("pubspec.yaml"), "name: tool\ndependencies:\n  args: ^2.0.0\n").unwrap();
+    assert!(is_flutter_project(&app, None));
+    assert!(is_flutter_project(&root, Some(&app.join("lib/main.dart"))));
+    assert!(!is_flutter_project(&tool, Some(&tool.join("bin/main.dart"))));
+    assert!(!is_flutter_project(&root, None));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn delve_leftovers_are_removed_without_touching_other_files() {
+    let dir = std::env::temp_dir().join(format!("openidea-delve-bin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["__debug_bin", "__debug_bin.exe", "__debug_bin.exe3323301925"] {
+        std::fs::write(dir.join(name), b"bin").unwrap();
+    }
+    // Lookalikes that are not Delve's own binaries stay: sources, a future
+    // in-progress build, and a directory that happens to share the name.
+    for name in ["__debug_bin.go", "__debug_bin.go.exe", "main.go"] {
+        std::fs::write(dir.join(name), b"keep").unwrap();
+    }
+    std::fs::create_dir(dir.join("__debug_bin.dir")).unwrap();
+    remove_delve_binaries(&dir);
+    for name in ["__debug_bin", "__debug_bin.exe", "__debug_bin.exe3323301925"] {
+        assert!(!dir.join(name).exists(), "{name} should be gone");
+    }
+    for name in ["__debug_bin.go", "__debug_bin.go.exe", "main.go", "__debug_bin.dir"] {
+        assert!(dir.join(name).exists(), "{name} should stay");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

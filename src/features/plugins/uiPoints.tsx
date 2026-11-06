@@ -15,7 +15,7 @@
 import { useMemo } from "react";
 import type { PluginInfo } from "@/bindings";
 import { getAction } from "@/platform/actions";
-import { evaluateWhen } from "@/platform/context";
+import { evaluateWhen, getContext } from "@/platform/context";
 import { tx } from "@/platform/i18n";
 import { isMacHost, registerExtensionBindings } from "@/platform/keymap";
 import {
@@ -46,6 +46,7 @@ import { usePlugins } from "./store";
 import { pluginActionId } from "./points";
 import { defineUiPoint } from "./projection";
 import { declareStatusItem } from "./runtimeUi";
+import { pluginToolWindowId } from "./views/viewStore";
 import {
   CUSTOM_EDITOR_KIND,
   CustomEditor,
@@ -63,7 +64,8 @@ import styles from "./PluginsPage.module.css";
 // --- menus ------------------------------------------------------------------------
 
 interface MenuDecl {
-  menu: "editor.context" | "projectView.context" | "editorTab.context" | "tools";
+  menu: "editor.context" | "projectView.context" | "editorTab.context" | "viewItem.context" | "tools";
+  view?: string | null;
   command: string;
   when?: string | null;
 }
@@ -85,7 +87,25 @@ export function pluginMenuItems(menu: ContextMenuId, paths: readonly string[]): 
     const action = pluginActionId(pluginId, decl.command);
     if (!getAction(action)) continue;
     // The editor menu runs with the focused editor; the others name their file.
-    out.push({ kind: "action", action, arg: menu === "editor" ? undefined : paths[0] });
+    out.push({
+      kind: "action",
+      action,
+      arg: menu === "editor" ? undefined : { path: paths[0], paths: [...paths] },
+    });
+  }
+  return out;
+}
+
+/** Plugin entries of a view item's context menu, with the item key as argument. */
+export function pluginViewItemMenuItems(pluginId: string, view: string, key: string): MenuItem[] {
+  const ctx = { ...getContext(), viewItem: key, viewItemKind: key.split(":")[0] };
+  const out: MenuItem[] = [];
+  for (const { pluginId: owner, decl } of contextItems.values()) {
+    if (owner !== pluginId || decl.menu !== "viewItem.context" || decl.view !== view) continue;
+    if (!evaluateWhen(decl.when ?? undefined, ctx)) continue;
+    const action = pluginActionId(pluginId, decl.command);
+    if (!getAction(action)) continue;
+    out.push({ kind: "action", action, arg: key });
   }
   return out;
 }
@@ -288,7 +308,53 @@ function projectFileIcon(pluginId: string, decl: FileIconDecl): () => void {
   };
 }
 
-export const pluginToolWindowId = (pluginId: string, view: string) => `plugin.${pluginId}.${view}`;
+function registerView(pluginId: string, decl: ViewDecl, icon: string): () => void {
+  return registerToolWindow({
+    id: pluginToolWindowId(pluginId, decl.id),
+    title: decl.title,
+    icon,
+    anchor: decl.location,
+    order: 900,
+    component: () =>
+      decl.web ? (
+        <WebView pluginId={pluginId} view={decl.id} label={decl.title} />
+      ) : (
+        <PluginView
+          pluginId={pluginId}
+          view={decl.id}
+          label={decl.title}
+          itemMenu={(key) => pluginViewItemMenuItems(pluginId, decl.id, key)}
+        />
+      ),
+  });
+}
+
+function projectView(pluginId: string, decl: ViewDecl): () => void {
+  if (!decl.icon?.endsWith(".svg")) return registerView(pluginId, decl, decl.icon ?? "plugin");
+  let disposed = false;
+  let undo = () => {};
+  void pluginsBackend()
+    .assets(pluginId, `viewIcon/${decl.id}`)
+    .then((assets) => {
+      if (disposed) return;
+      const svg = assets.find(([id]) => id === `viewIcon/${decl.id}`)?.[1];
+      const name = `ext:${pluginId}/view-${decl.id}`;
+      const unregister = svg ? registerExternalIcons([[name, svg]]) : () => {};
+      const remove = registerView(pluginId, decl, svg ? name : "plugin");
+      undo = () => {
+        remove();
+        unregister();
+      };
+    })
+    .catch((e: unknown) => {
+      console.warn(`plugin ${pluginId}: view icon ${decl.id}`, e);
+      if (!disposed) undo = registerView(pluginId, decl, "plugin");
+    });
+  return () => {
+    disposed = true;
+    undo();
+  };
+}
 
 /** Registers the client side of the P7 points; returns their disposer. */
 export function defineViewUiPoints(): () => void {
@@ -326,20 +392,7 @@ export function defineViewUiPoints(): () => void {
     }),
     defineUiPoint<ViewDecl>("views", {
       title: "Tool Windows",
-      project: ({ pluginId, decl }) =>
-        registerToolWindow({
-          id: pluginToolWindowId(pluginId, decl.id),
-          title: decl.title,
-          icon: decl.icon ?? "plugin",
-          anchor: decl.location,
-          order: 900,
-          component: () =>
-            decl.web ? (
-              <WebView pluginId={pluginId} view={decl.id} label={decl.title} />
-            ) : (
-              <PluginView pluginId={pluginId} view={decl.id} label={decl.title} />
-            ),
-        }),
+      project: ({ pluginId, decl }) => projectView(pluginId, decl),
     }),
     defineUiPoint<CustomEditorDecl>("customEditors", {
       title: "Editors",

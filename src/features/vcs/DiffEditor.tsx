@@ -28,13 +28,13 @@ import {
 import { attachDocument, embeddedEditorExtensions, type DocumentAttachment } from "@/editor/api";
 import { setFindOpen } from "@/editor/core/cm/find";
 import { FindPanel, searchAgain, seedFind, type FindTarget } from "@/editor/core/view/FindBar";
-import { setContext } from "@/platform/context";
+import { getContext, setContext } from "@/platform/context";
 import { call, commands } from "@/platform/ipc";
 import { bindingsFor, normalizeBinding, shortcutLabel, strokeOf } from "@/platform/keymap";
 import { tx } from "@/platform/i18n";
 import { IconButton, Select, Spinner, T, showContextMenu } from "@/ui";
 import { editorService, type EditorInput } from "@/workbench/contributions";
-import { changedLineGutters, diffWords, languageFor, viewerBase } from "./cm";
+import { changedLineGutters, diffOverview, diffWords, languageFor, viewerBase } from "./cm";
 import { applyChunk, arrowControls, chunkAt, hoverRevert, revertUnifiedChunk } from "./diffControls";
 import {
   HIGHLIGHT_OPTIONS,
@@ -62,6 +62,8 @@ import {
   type DiffSide,
 } from "./diffInput";
 import { diffAnnotations } from "./diffAnnotations";
+import { annotationsShown, blameSlot, toggleAnnotations } from "./blame";
+import { diffBlameTarget } from "./diffBlame";
 import { changedChainNeighbour } from "./diffNavigation";
 import { movedCodeHighlights } from "./movedCode";
 import {
@@ -209,7 +211,20 @@ function isStrokeOf(e: KeyboardEvent, actionId: string): boolean {
   return !!stroke && bindingsFor(actionId).some((b) => normalizeBinding(b) === stroke);
 }
 
-export function DiffEditor({ input, toolbarActions }: { input: EditorInput; toolbarActions?: ReactNode }) {
+export function DiffEditor({
+  input,
+  toolbarActions,
+  onNeighbour,
+}: {
+  input: EditorInput;
+  toolbarActions?: ReactNode;
+  /**
+   * Called to show another file of the chain instead of `openDiff` (which opens an
+   * editor tab): embedded hosts such as the Commit dialog's diff window swap their
+   * own content, as a modal dialog hides the editor area.
+   */
+  onNeighbour?: (data: DiffData) => void;
+}) {
   const data = input.data as DiffData;
   const { path, left, right } = data;
   const [attached, setAttached] = useState<Attached | null>(null);
@@ -380,6 +395,7 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
       // Esc closes the find bar before it collapses the selection (a found match); open popups go first.
       Prec.high(keymap.of([{ key: "Escape", run: () => findEscape.current() }])),
       lang,
+      blameSlot(),
       att?.extension ?? [],
       editable ? [editableExtensions(), embeddedEditorExtensions(path)] : [],
       notes
@@ -414,6 +430,8 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
           extensions: [
             side(attached.a, editableA, "left"),
             colours,
+            // Aligned panes scroll together: one stripe, on the right (as IDEA's shared scrollbar).
+            panes ? diffOverview("split") : [],
             panes?.extension ?? [],
             focusTracker("a"),
             findWatch("a"),
@@ -425,6 +443,7 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
           extensions: [
             side(attached.b, editableB, "right"),
             colours,
+            diffOverview(panes ? "split" : "aligned"),
             panes?.extension ?? [],
             listener,
             focusTracker("b"),
@@ -470,6 +489,7 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
         parent: host,
         extensions: [
           side(attached.b, editableB, "right"),
+          diffOverview("unified"),
           listener,
           focusTracker("b"),
           findWatch("b"),
@@ -588,12 +608,14 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
       navigation.current = request;
       try {
         const neighbour = await changedChainNeighbour(data, dir, opts.ignore);
-        if (navigation.current === request && neighbour) await openDiff(neighbour, { preview: true });
+        if (navigation.current !== request || !neighbour) return;
+        if (onNeighbour) onNeighbour(neighbour);
+        else await openDiff(neighbour, { preview: true });
       } finally {
         if (navigation.current === request) navigation.current = null;
       }
     },
-    [data, opts.ignore],
+    [data, opts.ignore, onNeighbour],
   );
   useEffect(() => {
     if (!navHint) return;
@@ -874,19 +896,41 @@ export function DiffEditor({ input, toolbarActions }: { input: EditorInput; tool
       }),
     ]);
   };
-  /** The panes' right-click menu: the contributions' items for the clicked line (none: the default menu). */
+  /** Annotate with Git Blame for a pane, by that side's own revision. */
+  const blameItems = (pane: DiffViewerPane) => {
+    const target = diffBlameTarget(pane.side === "left" ? left : right, path, !!getContext().vcsAvailable);
+    if (!target) return [];
+    const view = pane.view;
+    const text = target.revision ? view.state.doc.toString() : undefined;
+    return [
+      {
+        label: annotationsShown(view) ? "Close Annotations" : "Annotate with Git Blame",
+        run: () => void toggleAnnotations(view, target.path, text, target.revision),
+      },
+    ];
+  };
+  /**
+   * The panes' right-click menu: the contributions' items for the clicked line and Git annotations
+   * (none: the default menu). The divider between the panes acts on the pane focused last.
+   */
   const onContextMenu = (e: MouseEvent) => {
-    const pane = viewerRef.current?.panes().find((p) => p.view.dom.contains(e.target as Node | null));
-    if (!pane) return;
-    const pos = pane.view.posAtCoords({ x: e.clientX, y: e.clientY }, false);
-    const line = pane.view.state.doc.lineAt(pos).number - 1;
-    const items = contribs.flatMap((c) => {
-      const list = c.contextMenuItems?.({ side: pane.side, line }) ?? [];
-      return list.length ? [...list, { kind: "separator" } as const] : [];
-    });
-    if (!items.length) return;
+    const viewer = viewerRef.current;
+    if (!viewer || e.defaultPrevented) return;
+    const hit = viewer.panes().find((p) => p.view.dom.contains(e.target as Node | null));
+    const pane = hit ?? viewer.focusedPane();
+    const line = hit
+      ? hit.view.state.doc.lineAt(hit.view.posAtCoords({ x: e.clientX, y: e.clientY }, false)).number - 1
+      : -1;
+    const groups = [
+      ...(hit ? contribs.map((c) => c.contextMenuItems?.({ side: hit.side, line }) ?? []) : []),
+      blameItems(pane),
+    ].filter((g) => g.length);
+    if (!groups.length) return;
     e.preventDefault();
-    showContextMenu(e, items.slice(0, -1));
+    showContextMenu(
+      e,
+      groups.flatMap((g, i) => (i ? [{ kind: "separator" } as const, ...g] : g)),
+    );
   };
   const viewerOf = () => viewerRef.current;
   const nav = useRef<DiffNavigator>({

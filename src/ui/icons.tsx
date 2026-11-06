@@ -79,6 +79,7 @@ const ICONS = {
   "file-vue": "fileTypes/vue",
   "file-svelte": "openidea/fileTypes/svelte",
   "file-jsp": "openidea/fileTypes/jsp",
+  "file-astro": "fileTypes/astro",
   "file-yaml": "fileTypes/yaml",
   "file-toml": "fileTypes/toml",
   "file-html": "fileTypes/html",
@@ -231,6 +232,8 @@ const ICONS = {
   refresh: "general/refresh",
   settings: "general/settings",
   help: "openidea/general/help",
+  "page-first": "openidea/general/pageFirst",
+  "page-last": "openidea/general/pageLast",
   sliders: "openidea/general/sliders",
   "graphql-variables": "openidea/general/graphqlVariables",
   layout: "general/layout",
@@ -316,6 +319,7 @@ const ICONS = {
   "db-clickhouse": "openidea/database/clickhouse",
   "db-mysql": "openidea/database/mysql",
   "db-sqlserver": "openidea/database/sqlserver",
+  "db-oracle": "openidea/database/oracle",
   "db-mariadb": "openidea/database/mariadb",
   "db-aurora": "openidea/database/aurora",
   "db-redshift": "openidea/database/redshift",
@@ -355,6 +359,7 @@ const ICONS = {
   profile: "run/profile",
   "toolwindow-coverage": "toolwindows/coverage",
   "toolwindow-profiler": "toolwindows/profiler",
+  "toolwindow-logcat": "openidea/fileTypes/log",
   "gutter-run": "gutter/run",
   "gutter-run-all": "actions/runAll",
   "gutter-run-passed": "gutter/runSuccess",
@@ -365,6 +370,7 @@ const ICONS = {
   "gutter-overriding": "gutter/overridingMethod",
   stop: "run/stop",
   rerun: "run/rerun",
+  "hot-reload": "openidea/general/hotReload",
   "rerun-filled": "run/rerun_stroke",
   "restart-debug": "run/restartDebug",
   "restart-debug-filled": "run/restartDebug_stroke",
@@ -945,6 +951,7 @@ const EXT_ICONS = table({
   "file-vue": "vue",
   "file-svelte": "svelte",
   "file-jsp": "jsp jspx jspf jsph tag tagf tagx",
+  "file-astro": "astro",
   "file-json": "json jsonc json5 jsonl ndjson geojson topojson webmanifest har avsc code-workspace code-snippets map",
   "file-md": "md mdx markdown mdown mkd mkdn mdwn ronn workbook",
   "file-rst": "rst",
@@ -1029,7 +1036,7 @@ const EXT_ICONS = table({
 });
 
 /** Source files for languages without a file-type icon. */
-const CODE_EXT = new Set(["astro", "nim", "wit", "wat", "sol", "v", "sv"]);
+const CODE_EXT = new Set(["nim", "wit", "wat", "sol", "v", "sv"]);
 
 let iconOverride: ((fileName: string) => IconName | null) | null = null;
 
@@ -1123,4 +1130,9 @@ export function folderIconName(kind: FolderKind = "plain"): IconName {
     default:
       return "folder";
   }
+}
+
+/** Validated built-in and registered, sanitized plugin icons. */
+export function isIconName(name: string): name is IconName {
+  return iconPath(name) !== undefined;
 }

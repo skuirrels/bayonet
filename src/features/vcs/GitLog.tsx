@@ -23,7 +23,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { Branch, ChangedFile, Commit } from "@/bindings";
 import { call, commands } from "@/platform/ipc";
 import { executeAction } from "@/platform/actions";
-import { maybeEditorService, type EditorInput } from "@/workbench/contributions";
+import { maybeEditorService, useGitLogChecks, type EditorInput } from "@/workbench/contributions";
 import {
   EmptyState,
   Icon,
@@ -33,7 +33,6 @@ import {
   SplitHandle,
   SplitPanel,
   Spinner,
-  Dialog,
   Popup,
   TOOLTIP_DELAY,
   Tabs,
@@ -49,7 +48,6 @@ import {
 import { hasPrimaryModifier } from "@/platform/keymap";
 import { laneColor, reachableFrom, type GraphRow, type GraphSegment } from "./graph";
 import { nextSpeedMatch } from "./logSearch";
-import { LogIndexStatus } from "./logIndex";
 import { presentLogGraph } from "./logPresentation";
 import {
   closeLogTab,
@@ -83,7 +81,7 @@ import {
 import { logOptions, refLabels, useLogOptions, type LogOptions } from "./logOptions";
 import { KIND_COLOR, baseName, dirName, fileCount, formatTime, relTo, type EffectiveKind } from "./model";
 import { clearConsole, useVcsConsole } from "./ops";
-import { currentRepo, loadBranches, repoName, useVcs } from "./store";
+import { currentRepo, currentRepoRoot, loadBranches, repoName, useVcs } from "./store";
 import { loadFavoriteBranches, useFavoriteBranches } from "./branchOps";
 import { branchMenu, inRepo, tagMenu } from "./branchMenu";
 import {
@@ -95,7 +93,7 @@ import {
   isFavoriteBranch,
   type BranchTreeNode,
 } from "./branches";
-import { chooseDateRange, chooseMany, openDialog } from "./dialogs";
+import { chooseDateRange, chooseMany } from "./dialogs";
 import { buildFileTree, dirKeys, type FileTreeNode } from "./fileTree";
 import { DIFF_KIND, diffInput } from "./diffInput";
 import {
@@ -105,6 +103,7 @@ import {
   showChangesDiff,
   toLogChanges,
   useLogChanges,
+  withLineStats,
   type LogChange,
 } from "./logChanges";
 import { canDeleteBranch, canUpdateBranch, useBranchesPane, type BranchTarget } from "./logPaneActions";
@@ -328,7 +327,6 @@ export function LogView() {
       <SplitPanel id="commits" defaultSize="54%" minSize="25%">
         <div className={styles.log}>
           <FilterBar />
-          <LogIndexStatus repositories={repo} />
           <CommitList />
         </div>
       </SplitPanel>
@@ -1091,6 +1089,9 @@ export function viewOptionsMenu(o: LogOptions): MenuItem[] {
         toggle("Date", o, "showDate"),
         toggle("Hash", o, "showHash"),
         toggle("Signature", o, "showSignature"),
+        toggle("GitHub Commit Checks", o, "showGitHubChecks"),
+        { kind: "separator" },
+        toggle("Column Headers", o, "showColumnHeaders"),
       ],
     },
     { kind: "separator" },
@@ -1214,6 +1215,7 @@ function CommitList() {
     });
   }, [all]);
   const opts = useLogOptions();
+  const ChecksCell = useGitLogChecks((s) => s.cell);
   const bookmarks = useGitLog((s) => s.bookmarks);
   const fragments = useGitLog((s) => s.fragments);
   const { expanded: expandedFragments, collapsed: collapsedFragments, merges: expandedMerges } = fragments;
@@ -1241,10 +1243,32 @@ function CommitList() {
       ...(opts.showSignature
         ? [{ id: "signature", title: "Signature", width: 100, render: (c: Commit) => <CommitSignature commit={c} /> }]
         : []),
+      ...(opts.showGitHubChecks && ChecksCell
+        ? [
+            {
+              id: "github-checks",
+              title: "GitHub Commit Checks",
+              width: 44,
+              render: (c: Commit) => {
+                const root = commitRepo(c) ?? currentRepoRoot();
+                return root && !(c as RepoCommit).readOnly ? <ChecksCell root={root} revision={c.id} /> : null;
+              },
+            },
+          ]
+        : []),
     ];
     const order = [...new Set([...opts.columnOrder, ...builtins.map((c) => c.id)])];
     return builtins.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-  }, [opts.showAuthor, opts.showDate, opts.showHash, opts.showSignature, opts.commitTimestamp, opts.columnOrder]);
+  }, [
+    opts.showAuthor,
+    opts.showDate,
+    opts.showHash,
+    opts.showSignature,
+    opts.showGitHubChecks,
+    opts.commitTimestamp,
+    opts.columnOrder,
+    ChecksCell,
+  ]);
   const user = useGitLog((s) => s.user);
   const headCommit = useVcs((s) => s.branch?.headCommit ?? null);
   const branches = useVcs((s) => s.branches);
@@ -1263,16 +1287,20 @@ function CommitList() {
       ),
     [all, heads, headCommit],
   );
+  const keep = useMemo(
+    () =>
+      opts.collapseLinear || fragments.collapsed.size
+        ? new Set([...headKeys, ...selection, ...Object.keys(bookmarks)])
+        : null,
+    [opts.collapseLinear, fragments.collapsed, headKeys, selection, bookmarks],
+  );
   const {
     commits,
     rows,
     linear,
     collapsed,
     graph: displayedGraph,
-  } = useMemo(
-    () => presentLogGraph(all, opts, fragments, new Set([...headKeys, ...selection, ...Object.keys(bookmarks)])),
-    [all, opts, fragments, headKeys, selection, bookmarks],
-  );
+  } = useMemo(() => presentLogGraph(all, opts, fragments, keep ?? new Set()), [all, opts, fragments, keep]);
   const { edges: highlighted, nodes: highlightedNodes } = useMemo(() => {
     const empty = { edges: new Set<string>(), nodes: new Set<string>() };
     if (!hoverColor) return empty;
@@ -1321,8 +1349,9 @@ function CommitList() {
   const onlyCurrent = filterBranches.length > 0 && filterBranches.every((b) => b === "HEAD" || b === currentBranch);
   const onBranch = useMemo(() => {
     if (!opts.highlightCurrentBranch || onlyCurrent) return null;
-    const reach = new Set<string>();
-    for (const head of headKeys) for (const id of reachableFrom(all.map(graphCommit), head)) reach.add(id);
+    const reach = all.some((c) => c.onCurrentBranch == null)
+      ? reachableFrom(all.map(graphCommit), headKeys)
+      : new Set<string>();
     for (const c of all) {
       if (c.onCurrentBranch === true) reach.add(commitKey(c));
       else if (c.onCurrentBranch === false) reach.delete(commitKey(c));
@@ -1604,15 +1633,17 @@ function CommitList() {
           );
         }}
       >
-        <div className={clsx(styles.row, styles.columnHeader)} style={{ minWidth }}>
-          {opts.showRepository && useVcs.getState().roots.length > 1 && (
-            <span className={styles.colRepository}>{tx("Repository")}</span>
-          )}
-          <span className={styles.colSubject}>{tx("Commit")}</span>
-          {columns.map((column) => (
-            <LogColumnHeader key={column.id} column={column} columns={columns} options={opts} />
-          ))}
-        </div>
+        {opts.showColumnHeaders && (
+          <div className={clsx(styles.row, styles.columnHeader)} style={{ minWidth }}>
+            {opts.showRepository && useVcs.getState().roots.length > 1 && (
+              <span className={styles.colRepository}>{tx("Repository")}</span>
+            )}
+            <span className={styles.colSubject}>{tx("Commit")}</span>
+            {columns.map((column) => (
+              <LogColumnHeader key={column.id} column={column} columns={columns} options={opts} />
+            ))}
+          </div>
+        )}
         {!commits.length && !loading && finished && (
           <div className={styles.message}>{headCommit ? tx("No commits match the filters") : tx("No commits yet")}</div>
         )}
@@ -1956,10 +1987,9 @@ function x(lane: number) {
   return LANE / 2 + lane * LANE;
 }
 
+/** Straight, also across lanes (IDEA's diagonal edges). */
 function seg(fromX: number, fromY: number, toX: number, toY: number) {
-  if (fromX === toX) return `M${fromX} ${fromY}L${toX} ${toY}`;
-  const mid = (fromY + toY) / 2;
-  return `M${fromX} ${fromY}C${fromX} ${mid} ${toX} ${mid} ${toX} ${toY}`;
+  return `M${fromX} ${fromY}L${toX} ${toY}`;
 }
 
 export function GraphCell({
@@ -2008,9 +2038,11 @@ export function GraphCell({
       if (canNavigate) onNavigate?.(s.targetRow!, target);
       else if (canFragment) onFragment?.(target!, !!s.dashed, s.source);
     };
+    const fromX = x(s.fromX ?? s.from);
+    const toX = x(s.toX ?? s.to);
     const path =
-      seg(x(s.from), up ? 0 : cy, x(s.to), up ? cy : ROW) +
-      (s.arrow ? arrowHead(x(up ? s.from : s.to), up ? 0 : ROW, up ? -1 : 1) : "");
+      seg(fromX, up ? 0 : cy, toX, up ? cy : ROW) +
+      (s.arrow ? arrowHead(up ? fromX : toX, up ? 0 : ROW, up ? -1 : 1) : "");
     return (
       <g
         key={`${up ? "u" : "d"}${i}`}
@@ -2033,9 +2065,9 @@ export function GraphCell({
       >
         <title>{label}</title>
         <rect
-          x={Math.min(x(s.from), x(s.to)) - 5}
+          x={Math.min(fromX, toX) - 5}
           y={up ? 0 : cy}
-          width={Math.max(10, Math.abs(x(s.from) - x(s.to)) + 10)}
+          width={Math.max(10, Math.abs(fromX - toX) + 10)}
           height={cy}
           fill="transparent"
           pointerEvents="none"
@@ -2167,8 +2199,9 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
   const onlyAffected = useLogOptions((s) => s.showOnlyAffected);
   const preview = useLogOptions((s) => s.diffPreview);
   const diffLocation = useLogOptions((s) => s.diffLocation);
+  const showLineStats = useLogOptions((s) => s.showLineStats);
   const filters = useGitLog((s) => s.filters);
-  const filesKey = JSON.stringify([idsKey, fromParents, parentIndex, commitRoot]);
+  const filesKey = JSON.stringify([idsKey, fromParents, parentIndex, commitRoot, showLineStats]);
   const files = result?.key === filesKey ? result.files : null;
   const error = result?.key === filesKey ? result.error : null;
 
@@ -2217,6 +2250,7 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
       return toLogChanges(files, c, commitRoot, readOnly);
     })();
     load
+      .then((files) => (showLineStats ? withLineStats(files).catch(() => files) : files))
       .then((files) => alive && setResult({ key: filesKey, files, error: null }))
       .catch(
         (e) => alive && setResult({ key: filesKey, files: null, error: e instanceof Error ? e.message : String(e) }),
@@ -2224,7 +2258,7 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
     return () => {
       alive = false;
     };
-  }, [idsKey, chosen, fromParents, parentIndex, commitRoot, filesKey, many, readOnly]);
+  }, [idsKey, chosen, fromParents, parentIndex, commitRoot, filesKey, many, readOnly, showLineStats]);
 
   const groupByDirectory = useLogOptions((s) => s.groupByDirectory);
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -2246,6 +2280,14 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
         )
       : changes;
   }, [files, commit, many, filters.path, filters.paths, onlyAffected]);
+  const lineTotals = useMemo(() => {
+    if (!showLineStats || !changes.length) return null;
+    if (changes.some((f) => f.added === undefined || f.removed === undefined)) return null;
+    return changes.reduce((sum, f) => ({ added: sum.added + f.added!, removed: sum.removed + f.removed! }), {
+      added: 0,
+      removed: 0,
+    });
+  }, [changes, showLineStats]);
   const multipleRoots = new Set(chosen.map(commitRepo)).size > 1;
   const changeTreePath = useCallback(
     (f: LogChange) => `${multipleRoots ? `${repoName(f.repo ?? "")}/` : ""}${f.group ? `${f.group}/` : ""}${f.path}`,
@@ -2333,6 +2375,7 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
       { kind: "separator" },
       { kind: "action", action: "vcs.log.changes.diffPreview" },
       toggle("Show Only Affected Changes", logOptions(), "showOnlyAffected"),
+      toggle("Show lines added and deleted", logOptions(), "showLineStats"),
       toggle("Show Changes from Parents", logOptions(), "changesFromParents"),
       {
         label: "Diff Preview Location",
@@ -2396,6 +2439,7 @@ export function CommitDetails({ commits }: { commits: Commit[] }) {
               {files ? fileCount(changes.length) : ""}
               {many ? " " + tx`in ${chosen.length} commits` : ""}
             </span>
+            {lineTotals && <LineStats added={lineTotals.added} removed={lineTotals.removed} />}
             <span className={styles.grow} />
             <IconButton
               icon="expand-all"
@@ -2510,24 +2554,6 @@ function CommitMessage({ commit, compact = false }: { commit: Commit; compact?: 
     <div className={clsx(compact && styles.commitEntry)}>
       <div className={styles.subjectLine}>
         <CommitMessageText text={subject ?? ""} repo={repo} />
-        {/* Only a message with a body has more to show. */}
-        {body && (
-          <button
-            type="button"
-            className={clsx(styles.linkButton, styles.expandMessage)}
-            onClick={() =>
-              openDialog((close) => (
-                <Dialog open title={tx`Commit ${commit.shortId}`} width={760} onClose={close}>
-                  <div className={clsx(styles.messageBox, styles.fullMessage)}>
-                    <CommitMessageText text={message} repo={repo} />
-                  </div>
-                </Dialog>
-              ))
-            }
-          >
-            {tx("Expand Commit Message")}
-          </button>
-        )}
       </div>
       {body && (
         <div className={styles.fullMessage}>
@@ -2691,13 +2717,50 @@ export function changesMenu(changes: LogChange[]): MenuItem[] {
   ];
 }
 
+function lineCount(file: ChangedFile | LogChange): { added: number; removed: number } | null {
+  if (!("added" in file) || typeof file.added !== "number" || typeof file.removed !== "number") return null;
+  return { added: file.added, removed: file.removed };
+}
+
+/** Sum of a directory once every file under it has counts; otherwise the row stays without them. */
+function nodeLineCount(node: FileTreeNode<ChangedFile | LogChange>): { added: number; removed: number } | null {
+  if (node.file) return lineCount(node.file);
+  let added = 0;
+  let removed = 0;
+  for (const child of node.children) {
+    const count = nodeLineCount(child);
+    if (!count) return null;
+    added += count.added;
+    removed += count.removed;
+  }
+  return node.children.length ? { added, removed } : null;
+}
+
+function LineStats({ added, removed }: { added: number; removed: number }) {
+  return (
+    <span className={styles.lineStats}>
+      <span className={styles.lineAdded} aria-label={added === 1 ? tx`${added} line added` : tx`${added} lines added`}>
+        +{added}
+      </span>
+      <span
+        className={styles.lineRemoved}
+        aria-label={removed === 1 ? tx`${removed} line deleted` : tx`${removed} lines deleted`}
+      >
+        −{removed}
+      </span>
+    </span>
+  );
+}
+
 function ChangedFileRow({ node, flat = false }: { node: FileTreeNode<ChangedFile | LogChange>; flat?: boolean }) {
+  const stats = nodeLineCount(node);
   if (!node.file)
     return (
       <span className={styles.fileRow}>
         <Icon name="folder" size={16} className={styles.fileIcon} />
         <span className={styles.fileName}>{node.name}</span>
         <span className={styles.fileDir}>{fileCount(node.count)}</span>
+        {stats && <LineStats added={stats.added} removed={stats.removed} />}
       </span>
     );
   const f = node.file;
@@ -2710,6 +2773,7 @@ function ChangedFileRow({ node, flat = false }: { node: FileTreeNode<ChangedFile
       </span>
       {flat && dirName(f.path) && <span className={styles.fileDir}>{dirName(f.path)}</span>}
       {f.oldPath && <span className={styles.fileDir}>{tx`renamed from ${baseName(f.oldPath)}`}</span>}
+      {stats && <LineStats added={stats.added} removed={stats.removed} />}
     </span>
   );
 }

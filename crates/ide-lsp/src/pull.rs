@@ -12,7 +12,7 @@
 
 use crate::server::{Running, Server};
 use crate::uri::uri_to_path;
-use crate::{LspManager, convert};
+use crate::{LspManager, convert, virtual_doc};
 use ide_core::{DocId, IdeEvent};
 use ide_jsonrpc::RpcError;
 use lsp_types as lsp;
@@ -52,6 +52,10 @@ impl LspManager {
         let targets: Vec<PullTarget> = {
             let docs = self.docs.lock();
             let Some(d) = docs.get(&doc) else { return };
+            // Decompiled C# is a source view, not compilable project code (e.g. Unity's older language version).
+            if virtual_doc::is_csharp_decompiled(d.uri.as_str()) {
+                return;
+            }
             d.servers
                 .iter()
                 .filter(|a| only.is_none_or(|s| s.id == a.server.id))
@@ -175,7 +179,7 @@ impl LspManager {
                 return;
             }
             let result_id = report.get("resultId").and_then(Value::as_str).map(str::to_owned);
-            let items = match report.get("kind").and_then(Value::as_str) {
+            let items: Option<Vec<lsp::Diagnostic>> = match report.get("kind").and_then(Value::as_str) {
                 Some("unchanged") => None,
                 _ => match serde_json::from_value(report.get("items").cloned().unwrap_or(json!([]))) {
                     Ok(items) => Some(items),
@@ -185,6 +189,10 @@ impl LspManager {
                     }
                 },
             };
+            if let Some(items) = &items {
+                // perf/compare times the open file's diagnostics by this line.
+                tracing::debug!("{}: {} diagnostics for {}", t.server.name, items.len(), t.path.display());
+            }
             if t.server.effective_config().workspace_diagnostics {
                 // The file's own report supersedes what the workspace pull last said about it.
                 t.server.set_diagnostics(t.path.clone(), Vec::new());

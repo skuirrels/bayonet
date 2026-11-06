@@ -1,7 +1,7 @@
 //! Versioned installs with automatic rollback, signed packages from
 //! a static marketplace index, and revocation.
 
-use ide_extension::package::{self, Index, IndexEntry, KeyEntry, Publisher, PublisherKey, Revocation};
+use ide_extension::package::{self, Index, IndexEntry, KeyEntry, PluginIcon, Publisher, PublisherKey, Revocation};
 use ide_host::plugins::*;
 use ide_plugin::{Invocation, Limits};
 use parking_lot::Mutex;
@@ -58,7 +58,7 @@ fn fixture() -> Fixture {
 }
 
 fn inv() -> Invocation {
-    Invocation { client: Some("main".into()), workspace_root: None, editor: None }
+    Invocation { client: Some("main".into()), workspace_root: None, editor: None, selected_paths: Vec::new() }
 }
 
 fn misbehave() -> PathBuf {
@@ -169,6 +169,7 @@ fn signed(
         capabilities: vec![],
         engine: "^1.0".into(),
         categories: vec!["tools".into()],
+        icon: None,
     };
     (out, entry)
 }
@@ -194,6 +195,28 @@ fn write_index(
     let path = dir.join("index.json");
     std::fs::write(&path, serde_json::to_string(&index).unwrap()).unwrap();
     path.to_string_lossy().into_owned()
+}
+
+/// First run: nothing cached yet, so listing the marketplace reads its index
+/// instead of showing an empty one; later listings use the index read.
+#[test]
+fn the_first_marketplace_listing_reads_the_index() {
+    let f = fixture();
+    assert!(f.host.market_listing(false).unwrap().is_empty(), "no marketplace configured");
+
+    let market = f.work.join("market");
+    std::fs::create_dir_all(&market).unwrap();
+    let key = PublisherKey::from_seed([3; 32]);
+    let (_, entry) = signed_hello(&market, "1.0.0", &key, &f.host);
+    let url = write_index(&market, &key, vec![entry], vec![], false);
+    f.host.set_market_url(Some(url.clone()));
+
+    let listed = f.host.market_listing(false).unwrap();
+    assert_eq!(listed.iter().map(|p| p.entry.id.as_str()).collect::<Vec<_>>(), ["acme.hello"]);
+
+    std::fs::remove_file(&url).unwrap();
+    assert_eq!(f.host.market_listing(false).unwrap().len(), 1, "the index read is kept");
+    assert!(f.host.market_listing(true).is_err(), "refresh reads the index again");
 }
 
 #[test]
@@ -486,4 +509,26 @@ fn official_plugins_need_the_key_this_ide_was_built_with() {
     f.host.refresh_market().unwrap();
     let dir = f.host.download_market_plugin("openidea.hello").unwrap();
     assert_eq!(f.host.preview_install(&dir).unwrap().publisher.as_deref(), Some(OFFICIAL_PUBLISHER));
+}
+
+#[test]
+fn marketplace_icons_are_sanitised_or_dropped() {
+    let f = fixture();
+    let market = f.work.join("market");
+    std::fs::create_dir_all(&market).unwrap();
+    let key = PublisherKey::from_seed([3; 32]);
+    let (_, entry) = signed_hello(&market, "1.0.0", &key, &f.host);
+    let icon = |light: &str| Some(PluginIcon { light: light.into(), dark: None });
+    let good =
+        IndexEntry { icon: icon(r#"<svg viewBox="0 0 16 16"><rect width="16" height="16"/></svg>"#), ..entry.clone() };
+    let hostile = IndexEntry { id: "acme.hostile".into(), icon: icon(r#"<svg onload="x()"><rect/></svg>"#), ..entry };
+    let padded = format!("<svg viewBox=\"0 0 16 16\"><!--{}--><rect/></svg>", " ".repeat(20 << 10));
+    let padded = IndexEntry { id: "acme.padded".into(), icon: icon(&padded), ..hostile.clone() };
+    f.host.set_market_url(Some(write_index(&market, &key, vec![good, hostile, padded], vec![], false)));
+
+    let listed = f.host.refresh_market().unwrap();
+    let by_id = |id: &str| listed.iter().find(|p| p.entry.id == id).unwrap_or_else(|| panic!("{id} not listed"));
+    assert!(by_id("acme.hello").entry.icon.as_ref().unwrap().light.contains("<rect"));
+    assert!(by_id("acme.hostile").entry.icon.is_none(), "an unsafe icon is dropped, the entry stays");
+    assert!(by_id("acme.padded").entry.icon.is_none(), "an icon over 16 KiB is dropped before it is sanitised");
 }

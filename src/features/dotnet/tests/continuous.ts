@@ -6,6 +6,7 @@
  * references (a few calls deep), are run. Tests not discovered yet mean all
  * tests run, once.
  */
+import { Channel } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { commands, type OutlineItem, type Pos, type Range, type TestSelection } from "@/bindings";
 import { onEditorEvent, openEditorPaths } from "@/editor/api";
@@ -163,7 +164,7 @@ export async function affectedTests(changes: ReadonlyArray<{ path: string; membe
     }
     searches++;
     const refs = await withDocument(path, (doc) =>
-      call(commands.lspReferences(nextRequestId(), doc, member.at, false, true)),
+      call(commands.lspReferences(nextRequestId(), doc, member.at, false, true, false, new Channel())),
     ).catch(() => null);
     if (!refs) {
       incomplete = true;

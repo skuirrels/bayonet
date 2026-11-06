@@ -20,14 +20,17 @@ mod icon_extensions;
 mod icon_patterns;
 mod icon_settings;
 mod icons;
+pub mod index_ops;
 mod install;
 pub mod intellij;
 mod market;
+pub mod navigation;
 mod points;
 mod providers;
 pub mod remote;
 pub mod remote_host;
 mod run_detectors;
+mod semantic_tokens;
 mod theme;
 mod types;
 pub mod ui_points;
@@ -35,14 +38,17 @@ pub mod views;
 pub mod web;
 
 pub use api::{FileSecretStore, HostWorkspace, PluginWorkspace, SecretStore};
-pub use icons::{map_asset as icon_theme_map_asset, sanitize_svg, svg_prefix as icon_theme_svg_prefix};
+pub use icons::{
+    MAX_PLUGIN_ICON, map_asset as icon_theme_map_asset, plugin_icon, sanitize_svg, svg_prefix as icon_theme_svg_prefix,
+};
 pub use market::{
     INDEX_FILE as MARKET_INDEX_FILE, MarketPlugin, OFFICIAL_INDEX as OFFICIAL_MARKET_INDEX, OFFICIAL_PUBLISHER,
     read_url as read_market_url, resolve as resolve_market_href,
 };
 pub use points::{COMMANDS, CommandDecl, register_builtin_points};
-pub(crate) use providers::editor_providers as editor_providers_for;
 pub use providers::{ProviderKind, set_editor_providers};
+pub(crate) use providers::{editor_plugin_host, editor_providers as editor_providers_for};
+pub(crate) use semantic_tokens::merge as merge_semantic_tokens;
 pub use theme::{ThemeDef, ThemeKind};
 pub use types::*;
 
@@ -182,6 +188,8 @@ const IDLE_BATCH: Duration = Duration::from_secs(2);
 
 struct LoadedPlugin {
     pkg: Package,
+    /// Read at load so disabled and failed plugins show it too.
+    icon: Option<ide_extension::package::PluginIcon>,
     /// The manifest failed to parse: `pkg` is a placeholder.
     invalid: bool,
     source: PluginSource,
@@ -308,6 +316,7 @@ pub struct PluginHost {
     run_detectors: Arc<run_detectors::RunDetectors>,
     /// `[[contributes.providers]]` of enabled plugins.
     providers: Arc<providers::Providers>,
+    navigation: Mutex<navigation::NavigationIndex>,
     /// Validated UI declarations of installed packages (start-up reuses them).
     index: Arc<ContributionIndex>,
     ledger: Mutex<Ledger>,
@@ -396,6 +405,7 @@ impl PluginHost {
             languages,
             run_detectors,
             providers,
+            navigation: Mutex::default(),
             index,
             plugins: RwLock::default(),
             state: Mutex::new(state),
@@ -1252,9 +1262,32 @@ impl PluginHost {
         self.shared.status_items()
     }
 
+    /// Plugin context keys in effect for window `client`: global keys overlaid with its own.
+    pub fn context_keys(&self, client: Option<&str>) -> Vec<PluginContextKey> {
+        self.shared.context_keys(client)
+    }
+
+    /// A window labelled `label` is about to exist again (labels are reused).
+    pub fn reopen_client(&self, label: &str) {
+        self.shared.reopen_client(label);
+    }
+
+    /// Window `label` closed: drops its context keys and queued events, and ignores
+    /// context writes of commands still running for it.
+    pub fn forget_client(&self, label: &str) {
+        self.queues.lock().retain(|(_, client), _| client.as_deref() != Some(label));
+        self.shared.forget_client(label);
+    }
+
     /// The user cancelled a plugin task (`task_id` from `TaskStarted`).
     pub fn cancel_task(&self, task_id: &str) -> bool {
         task_id.parse().is_ok_and(|id| self.shared.cancel_task(id))
+    }
+
+    /// The user answered (`Some`) or dismissed (`None`) a prompt
+    /// (`PromptRequested`); false when it is no longer waiting.
+    pub fn answer_prompt(&self, prompt_id: &str, answer: Option<Vec<String>>) -> bool {
+        prompt_id.parse().is_ok_and(|id| self.shared.answer_prompt(id, answer))
     }
 
     /// Kinds of workbench events some running or activatable plugin wants;
@@ -1385,6 +1418,7 @@ impl PluginHost {
             workspace_root: client.as_deref().and_then(|c| self.shared.project_of(c)),
             client: client.clone(),
             editor: None,
+            selected_paths: Vec::new(),
         };
         let kinds: BTreeSet<EventKind> = events.iter().map(WorkbenchEvent::kind).collect();
         {
@@ -1524,7 +1558,7 @@ impl PluginHost {
                 continue;
             }
             let pkg = Package::new(m.clone(), dir.clone());
-            let problem = match self.registry.prepare(&pkg) {
+            let problem = match self.prepare(&pkg) {
                 Err(e) => Some(e),
                 Ok(_) => m
                     .wasm
@@ -1547,6 +1581,7 @@ impl PluginHost {
                 authors: m.authors,
                 homepage: m.homepage,
                 change_notes: m.change_notes,
+                icon: plugin_icon(&pkg).ok().flatten(),
                 path: dir.into(),
                 problem,
             });
@@ -1558,6 +1593,9 @@ impl PluginHost {
     /// Deactivates every plugin (also done on drop).
     pub fn shutdown(&self) {
         let actors: Vec<_> = self.plugins.read().values().filter_map(|p| p.runtime.lock().take()).collect();
+        for id in self.plugins.read().keys() {
+            self.shared.block_prompts(id);
+        }
         for a in &actors {
             a.stop(false);
         }
@@ -1641,11 +1679,24 @@ impl PluginHost {
         self.plugins.read().values().any(|p| p.dir() == dir)
     }
 
+    /// Validates the manifest's icon and every declaration of `pkg`; the
+    /// icon files join the package files the declarations reference.
+    fn prepare(&self, pkg: &Package) -> Result<ide_extension::PreparedSet, String> {
+        plugin_icon(pkg)?;
+        let mut set = self.registry.prepare(pkg)?;
+        for icon in [&pkg.manifest.icon, &pkg.manifest.icon_dark].into_iter().flatten() {
+            if !set.files.contains(icon) {
+                set.files.push(icon.clone());
+            }
+        }
+        Ok(set)
+    }
+
     /// Parses and validates a package directory; nothing takes effect.
     fn validate_package(&self, src: &Path) -> IdeResult<(Package, ide_extension::PreparedSet)> {
         let manifest = Manifest::load(src).map_err(IdeError::invalid)?;
         let pkg = Package::new(manifest, src.to_path_buf());
-        let set = self.registry.prepare(&pkg).map_err(IdeError::invalid)?;
+        let set = self.prepare(&pkg).map_err(IdeError::invalid)?;
         if let Some(wasm) = &pkg.manifest.wasm {
             if !src.join(wasm).is_file() {
                 return Err(IdeError::invalid(format!(
@@ -1678,6 +1729,7 @@ impl PluginHost {
             pkg = pkg.with_digest(digest.trim());
         }
         let plugin = Arc::new(LoadedPlugin {
+            icon: plugin_icon(&pkg).ok().flatten(),
             pkg,
             invalid,
             source,
@@ -1727,7 +1779,7 @@ impl PluginHost {
             let publisher = self.verified_publisher(plugin.dir());
             plugin.meta.lock().publisher = publisher;
         }
-        let set = match self.registry.prepare(&plugin.pkg) {
+        let set = match self.prepare(&plugin.pkg) {
             Ok(set) => set,
             Err(e) => return self.set_failed(plugin, e),
         };
@@ -1857,6 +1909,7 @@ impl PluginHost {
             Err(e) => return Err(IdeError::internal(format!("plugin {:?}: {e}", plugin.id()))),
         };
         *runtime = Some(actor.clone());
+        self.shared.allow_prompts(plugin.id());
         let mut meta = plugin.meta.lock();
         meta.status = PluginStatus::Active;
         meta.has_syntax = has_syntax;
@@ -1881,6 +1934,7 @@ impl PluginHost {
             }
         }
         let Some(error) = actor.take_crash() else { return };
+        self.clear_plugin_navigation(plugin.id());
         if error.starts_with(CANCELLED) {
             // Cancelled on request: restart on next use, no backoff.
             let mut meta = plugin.meta.lock();
@@ -1952,6 +2006,9 @@ impl PluginHost {
     }
 
     fn stop(&self, plugin: &LoadedPlugin) {
+        self.clear_plugin_navigation(plugin.id());
+        // A call waiting on the user would keep the join below waiting.
+        self.shared.block_prompts(plugin.id());
         if let Some(actor) = plugin.runtime.lock().take() {
             actor.stop(true);
         }
@@ -1961,6 +2018,7 @@ impl PluginHost {
     }
 
     fn set_failed(&self, plugin: &LoadedPlugin, error: String) {
+        self.clear_plugin_navigation(plugin.id());
         tracing::warn!(plugin = %plugin.id(), "{error}");
         self.registry.dispose_plugin(plugin.id());
         let mut meta = plugin.meta.lock();
@@ -1969,6 +2027,7 @@ impl PluginHost {
     }
 
     fn fail(&self, plugin: &LoadedPlugin, error: &str, client: Option<&str>) {
+        self.clear_plugin_navigation(plugin.id());
         tracing::warn!(plugin = %plugin.id(), "disabled after failure: {error}");
         if let Some(actor) = plugin.runtime.lock().take() {
             actor.stop(false);
@@ -2078,7 +2137,7 @@ impl PluginHost {
             return h.trim().to_owned();
         }
         // Installed before hashes were recorded: hash once and remember.
-        let files = self.registry.prepare(&plugin.pkg).map(|s| s.files).unwrap_or_default();
+        let files = self.prepare(&plugin.pkg).map(|s| s.files).unwrap_or_default();
         let files: Vec<PathBuf> = files.into_iter().chain(plugin.manifest().wasm.clone()).collect();
         let hash = ledger::package_hash(plugin.dir(), &files).unwrap_or_default();
         let _ = std::fs::write(&file, &hash);
@@ -2145,6 +2204,7 @@ impl PluginHost {
             authors: m.authors.clone(),
             homepage: m.homepage.clone(),
             change_notes: m.change_notes.clone(),
+            icon: p.icon.clone(),
             source: p.source,
             path: p.dir().to_path_buf().into(),
             enabled: !self.state.lock().disabled.contains(&m.id),
@@ -2254,6 +2314,8 @@ fn placeholder_manifest(dir: &Path) -> Manifest {
         license: None,
         change_notes: None,
         declared_categories: Vec::new(),
+        icon: None,
+        icon_dark: None,
         engine: ide_extension::ENGINE_VERSION.into(),
         legacy: false,
         wasm: None,

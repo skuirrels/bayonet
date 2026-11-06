@@ -133,8 +133,7 @@ async function setShowToolWindowNames(on: boolean) {
   useProject.setState({ settings });
 }
 
-/** Stripe button widths: icons only, and the range with names. */
-const STRIPE_ICONS = 32;
+/** Stripe button widths with names; icons only follow `--stripe-icon-button` (smaller in compact mode). */
 const STRIPE_MIN = 44;
 const STRIPE_DEFAULT = 56;
 const STRIPE_MAX = 96;
@@ -202,8 +201,8 @@ function StripeHandle({
 }) {
   const sign = side === "left" ? 1 : -1;
   // The stripe follows the pointer; names show from STRIPE_MIN (truncated), icons only below it.
-  const resolve = (raw: number) => {
-    const px = Math.round(Math.min(STRIPE_MAX, Math.max(STRIPE_ICONS, raw)));
+  const resolve = (raw: number, icons: number) => {
+    const px = Math.round(Math.min(STRIPE_MAX, Math.max(icons, raw)));
     return px < STRIPE_MIN ? { names: false, width, px } : { names: true, width: px, px };
   };
 
@@ -214,13 +213,14 @@ function StripeHandle({
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     const origin = e.clientX;
-    const start = names ? width : STRIPE_ICONS;
+    const icons = parseFloat(getComputedStyle(stripe).getPropertyValue("--stripe-icon-button")) || 28;
+    const start = names ? width : icons;
     const cursor = document.body.style.cursor;
     document.body.style.cursor = "col-resize";
     let next = { names, width, px: start };
     const move = (ev: globalThis.PointerEvent) => {
       if (!(ev.buttons & 1)) return end();
-      const r = resolve(start + sign * (ev.clientX - origin));
+      const r = resolve(start + sign * (ev.clientX - origin), icons);
       if (r.names !== next.names) onPreview(r.names);
       next = r;
       stripe.style.setProperty("--stripe-drag", `${r.px}px`);
@@ -648,6 +648,14 @@ function HeaderRow({
     <header
       className={clsx(styles.header, tw.headerContent && styles.headerTabbed)}
       onDoubleClick={(e) => e.target === e.currentTarget && toggleMaximizeToolWindow(tw.id)}
+      onMouseDown={(e) => {
+        // A middle click on the header hides the window (like the Hide button).
+        // Not a press on the header's tabs or buttons, which close and act
+        // themselves: their event would otherwise hide the whole window too.
+        if (e.button !== 1 || (e.target as Element).closest('button, a, [role="tablist"], [role="separator"]')) return;
+        e.preventDefault();
+        hideToolWindow(tw.id);
+      }}
     >
       {!showTitle ? null : titleItems.length > 0 ? (
         <>

@@ -34,7 +34,14 @@ vi.mock("@/platform/ipc", async (orig) => {
   return {
     ...actual,
     isTauri: () => true,
-    commands: { ...actual.commands, appInstallUpdate, appCheckUpdate, appRestart, cancelRequest, appBuildInfo },
+    commands: {
+      ...actual.commands,
+      appInstallUpdate,
+      appCheckUpdate,
+      appRestart,
+      cancelRequest,
+      appBuildInfo,
+    },
   };
 });
 
@@ -60,7 +67,7 @@ beforeEach(() => {
   check = deferred();
   provideNotificationService({ notify: (n) => void notes.push(n), expire: (k) => void expired.push(k) });
   useTasks.setState({ tasks: [] });
-  useProject.setState({ project: null, lightEdit: false });
+  useProject.setState({ project: null, lightEdit: false, settings: null });
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -137,6 +144,21 @@ describe("Install and Restart", () => {
     await cancelled;
     expect(notes.at(-1)).toMatchObject({ level: "info", title: "Update cancelled", key: UPDATE_KEY });
     expect(appRestart).not.toHaveBeenCalled();
+  });
+
+  it("offers a cancelled download again", async () => {
+    const first = installUpdate("0.1.22");
+    install.resolve({ status: "error", error: { kind: "cancelled", message: "cancelled" } });
+    await first;
+    const action = notes.at(-1)!.actions!.at(-1)!;
+    expect(action.label).toBe("Retry");
+
+    install = deferred();
+    action.run();
+    await tick();
+    expect(appInstallUpdate).toHaveBeenCalledTimes(2);
+    install.resolve(ok(null));
+    await tick();
   });
 });
 
