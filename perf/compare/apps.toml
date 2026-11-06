@@ -11,6 +11,7 @@
 #   cache_dirs    globs deleted by --wipe-caches, and measured for "cache_mb"
 #   install_dir   measured once for the install size
 #   quit_command  instead of WM_CLOSE (Windows) / SIGTERM (macOS, Linux)
+#   env           extra environment variables for the app (e.g. a log level a marker needs)
 #   daemons       process names meant to outlive the app (not waited for or killed on exit)
 #   single_instance  default true: refuse to start while a process with the same
 #                 executable name runs (it would take over the launch)
@@ -40,4 +41,40 @@ cache_dirs = { windows = ["%LOCALAPPDATA%/JetBrains/IntelliJIdea2026.2/caches", 
 
 [apps.idea.markers]
 # Indexing done: IDEA leaves dumb mode, possibly several times; compare "last".
+smart = 'exit dumb mode \[{project_name}\]'
+
+# NFR-1 and NFR-2: Bayonet against Rider on a large .NET solution (perf/compare/gen-dotnet-solution.sh).
+[apps.bayonet]
+name = "Bayonet"
+command = { windows = "%LOCALAPPDATA%/Bayonet/bayonet.exe", macos = "/Applications/Bayonet.app/Contents/MacOS/bayonet", linux = "/usr/bin/bayonet" }
+install_dir = { windows = "%LOCALAPPDATA%/Bayonet", macos = "/Applications/Bayonet.app" }
+logs = { windows = "%LOCALAPPDATA%/io.github.skuirrels.bayonet/logs/openidea*.log", macos = "~/Library/Logs/io.github.skuirrels.bayonet/openidea*.log", linux = "~/.local/share/io.github.skuirrels.bayonet/logs/openidea*.log" }
+cache_dirs = { windows = ["%LOCALAPPDATA%/io.github.skuirrels.bayonet/index", "%LOCALAPPDATA%/io.github.skuirrels.bayonet/cache"], macos = ["~/Library/Application Support/io.github.skuirrels.bayonet/index", "~/Library/Application Support/io.github.skuirrels.bayonet/cache"], linux = ["~/.local/share/io.github.skuirrels.bayonet/index", "~/.local/share/io.github.skuirrels.bayonet/cache"] }
+# "Ready" needs Roslyn to have evaluated every project and reported on the open file.
+ready_after = ["projects_loaded", "file_diagnostics"]
+# The diagnostics line is a debug one.
+env = { RUST_LOG = "info,openidea_lib=debug,ide_lsp::pull=debug" }
+# Dev builds have their own identity per worktree, so a running `pnpm tauri dev` does not take
+# over the release launch.
+single_instance = false
+
+[apps.bayonet.markers]
+project_opened = 'opened .* in window'
+indexed = 'indexed \d+ files'
+projects_loaded = 'Completed \(re\)load of \d+ project'
+# Pulled diagnostics for any file ("last" is the report after the projects loaded).
+file_diagnostics = '\d+ diagnostics for .*\.cs$'
+
+[apps.rider]
+name = "Rider"
+command = { windows = "C:/Program Files/JetBrains/JetBrains Rider 2026.2.4/bin/rider64.exe", macos = "~/Applications/Rider.app/Contents/MacOS/rider", linux = "~/rider/bin/rider" }
+daemons = ["jetbrainsd.exe", "jetbrainsd"]
+install_dir = { windows = "C:/Program Files/JetBrains/JetBrains Rider 2026.2.4", macos = "~/Applications/Rider.app", linux = "~/rider" }
+logs = { windows = "%LOCALAPPDATA%/JetBrains/Rider2026.2/log/idea.log", macos = "~/Library/Logs/JetBrains/Rider2026.2/idea.log", linux = "~/.cache/JetBrains/Rider2026.2/log/idea.log" }
+cache_dirs = { windows = ["%LOCALAPPDATA%/JetBrains/Rider2026.2/caches", "%LOCALAPPDATA%/JetBrains/Rider2026.2/index", "%LOCALAPPDATA%/JetBrains/Rider2026.2/resharper-host"], macos = ["~/Library/Caches/JetBrains/Rider2026.2/caches", "~/Library/Caches/JetBrains/Rider2026.2/index", "~/Library/Caches/JetBrains/Rider2026.2/resharper-host"], linux = ["~/.cache/JetBrains/Rider2026.2/caches", "~/.cache/JetBrains/Rider2026.2/index", "~/.cache/JetBrains/Rider2026.2/resharper-host"] }
+ready_after = ["ready_for_work"]
+
+[apps.rider.markers]
+# The backend has loaded the solution; the frontend then leaves dumb mode (compare "last").
+ready_for_work = 'SolutionInitializerActivity - Ready for work'
 smart = 'exit dumb mode \[{project_name}\]'

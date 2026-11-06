@@ -138,18 +138,10 @@ fn path_arg(p: &Path) -> String {
 
 /// Runs `dotnet <args>` in `cwd` with telemetry, banners and localisation off; stdout on success.
 pub fn run(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> IdeResult<String> {
-    let program = dotnet.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("dotnet"));
-    let mut cmd = Command::new(&program);
-    cmd.args(args)
-        .current_dir(cwd)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
-        .env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1");
-    if let Some(root) = dotnet.and_then(Path::parent) {
-        cmd.env("DOTNET_ROOT", root);
-    }
-    let out = cmd.output().map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", program.display())))?;
+    let mut cmd = command(dotnet, cwd, args);
+    let out = cmd
+        .output()
+        .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", cmd.get_program().to_string_lossy())))?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if out.status.success() {
         return Ok(stdout);
@@ -159,6 +151,24 @@ pub fn run(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> IdeResult<Stri
         return Ok(stdout);
     }
     Err(IdeError::new(ErrorKind::Io, failure(&stdout, &String::from_utf8_lossy(&out.stderr))))
+}
+
+fn command(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> Command {
+    let program = dotnet.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("dotnet"));
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .env("DOTNET_NOLOGO", "1")
+        .env("DOTNET_CLI_UI_LANGUAGE", "en")
+        .env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1")
+        // `package list` evaluates every project on one MSBuild node per core; reused
+        // nodes would outlive the listing (and the IDE) by 15 minutes, holding ~1.5 GB.
+        .env("MSBUILDDISABLENODEREUSE", "1");
+    if let Some(root) = dotnet.and_then(Path::parent) {
+        cmd.env("DOTNET_ROOT", root);
+    }
+    cmd
 }
 
 /// The lines of a failed `dotnet` run that say why: errors first, else the last output.
@@ -540,6 +550,16 @@ fn pos_at(text: &str, offset: usize) -> Pos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listings_leave_no_msbuild_nodes_behind() {
+        let cmd =
+            command(Some(Path::new("/sdk/dotnet")), Path::new("/s"), &list_args(Path::new("/s/S.slnx"), false, false));
+        let env: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned))).collect();
+        assert!(env.contains(&("MSBUILDDISABLENODEREUSE".into(), Some("1".into()))));
+        assert!(env.contains(&("DOTNET_ROOT".into(), Some("/sdk".into()))));
+        assert_eq!(cmd.get_program(), "/sdk/dotnet");
+    }
 
     #[test]
     fn search_results_per_source_with_problems() {

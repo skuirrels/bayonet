@@ -812,6 +812,11 @@ pub fn configure_server(cfg: &mut LanguageServerConfig, root: &Path, server_root
             }
         }
     }
+    // Roslyn ships with the server GC: a heap per core. On a 100-project solution
+    // (14 cores) the workstation GC holds 750 MB instead of 1.9 GB and loads as fast.
+    if name == "roslyn-language-server" && std::env::var_os("DOTNET_gcServer").is_none() {
+        cfg.env.entry("DOTNET_gcServer".into()).or_insert_with(|| "0".into());
+    }
 
     if name == "jdtls" {
         // The jdtls launcher forwards `--jvm-arg=` values to the JVM it starts.

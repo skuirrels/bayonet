@@ -81,6 +81,7 @@ class App:
         self.quit_command = as_list(per_os(raw.get("quit_command")))
         self.single_instance = raw.get("single_instance", True)
         self.daemons = {n.lower() for n in as_list(raw.get("daemons"))}
+        self.env = {k: expand(str(v), project) for k, v in (per_os(raw.get("env")) or {}).items()}
         unknown = set(self.ready_after) - self.markers.keys()
         if unknown:
             raise SystemExit(f"apps.{key}.ready_after names unknown markers: {sorted(unknown)}")
@@ -172,6 +173,24 @@ if OS == "macos":
     except (OSError, AttributeError):
         _responsible = None
 
+_rusage = None
+if OS == "macos":
+    try:
+        _rusage = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage
+    except (OSError, AttributeError):
+        _rusage = None
+
+
+def mac_footprint(pid: int) -> int | None:
+    """Activity Monitor's "Memory" (phys_footprint). Unlike USS it needs no root."""
+    if not _rusage:
+        return None
+    buf = ctypes.create_string_buffer(512)
+    if _rusage(pid, 0, buf) != 0:  # RUSAGE_INFO_V0
+        return None
+    # rusage_info_v0: a 16-byte uuid, then uint64s; ri_phys_footprint is the eighth.
+    return int.from_bytes(buf.raw[72:80], sys.byteorder)
+
 
 class Tree:
     """Every process the app started, including ones whose parent already exited.
@@ -204,14 +223,18 @@ class Tree:
                 pass
 
     def _webkit(self) -> list[psutil.Process]:
+        # Launched outside LaunchServices (as here), the app is not responsible for
+        # itself: its WebKit processes are charged to the terminal that started it.
+        owners = {self.root.pid}
+        if _responsible:
+            owners.add(_responsible(self.root.pid))
         out = []
         for p in psutil.process_iter(["name", "create_time"]):
             if not (p.info["name"] or "").startswith("com.apple.WebKit"):
                 continue
-            if _responsible:
-                if _responsible(p.pid) == self.root.pid:
-                    out.append(p)
-            elif (p.info["create_time"] or 0) >= self.started - 1:
+            if (p.info["create_time"] or 0) < self.started - 1:
+                continue
+            if not _responsible or _responsible(p.pid) in owners:
                 out.append(p)
         return out
 
@@ -238,23 +261,38 @@ class Tree:
 
     def memory(self) -> dict:
         """Summed memory of the live tree. RSS double-counts shared pages, USS leaves them out."""
-        rss = uss = pss = 0
+        rss = uss = pss = footprint = 0
+        uss_denied = False
         by_name: dict[str, int] = collections.Counter()
         count = 0
         for p in self.alive():
             try:
-                full = p.memory_full_info()
+                try:
+                    full = p.memory_full_info()
+                    p_rss, p_uss, p_pss = full.rss, full.uss, getattr(full, "pss", 0)
+                except psutil.AccessDenied:
+                    # macOS: USS needs task_for_pid, which only root gets.
+                    p_rss, p_uss, p_pss = p.memory_info().rss, 0, 0
+                    uss_denied = True
+                name = p.name()
             except GONE:
                 continue
+            p_footprint = mac_footprint(p.pid) or 0
             count += 1
-            rss += full.rss
-            uss += full.uss
-            pss += getattr(full, "pss", 0)
-            by_name[p.name()] += full.uss
-        out = {"rss_mb": rss / MB, "uss_mb": uss / MB, "procs": count}
+            rss += p_rss
+            uss += p_uss
+            pss += p_pss
+            footprint += p_footprint
+            by_name[name] += p_footprint if OS == "macos" else p_uss
+        out = {"rss_mb": rss / MB, "procs": count}
+        if not uss_denied:
+            out["uss_mb"] = uss / MB
         if OS == "linux":
             out["pss_mb"] = pss / MB
-        out["uss_by_process_mb"] = {k: round(v / MB, 1) for k, v in by_name.most_common()}
+        if OS == "macos":
+            out["footprint_mb"] = footprint / MB
+        key = "footprint_by_process_mb" if OS == "macos" else "uss_by_process_mb"
+        out[key] = {k: round(v / MB, 1) for k, v in by_name.most_common()}
         return out
 
 
@@ -381,7 +419,13 @@ def run_once(app: App, args, out_dir: Path, label: str) -> dict:
     started_wall = time.time()
     with open(stdout_path, "wb") as stdout:
         t0 = time.perf_counter()
-        proc = subprocess.Popen(app.command, stdout=stdout, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        proc = subprocess.Popen(
+            app.command,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, **app.env},
+        )
     tree = Tree(psutil.Process(proc.pid), started_wall)
 
     result: dict = {"app": app.key, "label": label, "markers_first_s": {}, "markers_last_s": {}}
@@ -458,6 +502,13 @@ def run_once(app: App, args, out_dir: Path, label: str) -> dict:
     return result
 
 
+def mem_label(r: dict) -> str:
+    for key, name in (("uss_mb", "USS"), ("footprint_mb", "footprint"), ("rss_mb", "RSS")):
+        if key in r:
+            return f"{name} {r[key]:.0f} MB"
+    return "memory n/a"
+
+
 # ── report ──────────────────────────────────────────────────────────────────
 
 METRICS = [
@@ -467,6 +518,7 @@ METRICS = [
     ("rss_mb", "RSS after idle (MB)"),
     ("uss_mb", "USS after idle (MB)"),
     ("pss_mb", "PSS after idle (MB)"),
+    ("footprint_mb", "Memory footprint after idle (MB)"),
     ("procs", "Processes"),
     ("total_cpu_s", "CPU used until ready (s)"),
     ("idle_cpu_pct", "Idle CPU (% of a core)"),
@@ -597,7 +649,7 @@ def main():
             r = run_once(app, args, out_dir, label)
             print(
                 f"[{label}] window {fmt(r['window_s'])} s · ready {fmt(r['ready_s'])} s · "
-                f"USS {r['uss_mb']:.0f} MB · idle CPU {r['idle_cpu_pct']:.1f}%",
+                f"{mem_label(r)} · idle CPU {r['idle_cpu_pct']:.1f}%",
                 flush=True,
             )
             if not warm:

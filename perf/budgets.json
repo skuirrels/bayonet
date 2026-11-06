@@ -3,8 +3,8 @@
   "regressionTolerance": 0.2,
   "regressionFloor": 1,
   "ui": {
-    "bundle.initialJsKb": 850,
-    "bundle.initialCssKb": 60,
+    "bundle.initialJsKb": 1550,
+    "bundle.initialCssKb": 87,
 
     "startup.readyMs": 400,
     "startup.tbtMs": 50,

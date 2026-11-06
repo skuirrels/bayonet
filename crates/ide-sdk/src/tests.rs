@@ -1525,11 +1525,15 @@ fn dotnet_servers_get_the_chosen_install_and_quiet_sdk_commands() {
     if std::env::var_os("DOTNET_CLI_TELEMETRY_OPTOUT").is_none() {
         assert_eq!(roslyn.env["DOTNET_CLI_TELEMETRY_OPTOUT"], "1");
     }
+    if std::env::var_os("DOTNET_gcServer").is_none() {
+        assert_eq!(roslyn.env["DOTNET_gcServer"], "0");
+    }
 
     // Without a choice the server finds `dotnet` on PATH itself.
     let mut default = server("fsautocomplete");
     configure_server(&mut default, tmp.path(), tmp.path(), &Settings::default());
     assert!(!default.env.contains_key("DOTNET_ROOT") && !default.env.contains_key("PATH"));
+    assert!(!default.env.contains_key("DOTNET_gcServer"));
 
     // Other servers are left alone.
     let mut gopls = server("gopls");
