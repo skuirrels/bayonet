@@ -93,10 +93,16 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
 
 ## Disabled
 
-- **Auto-update.** OpenIDEA's updater feed and public key were removed from
-  `tauri.conf.json`. With no endpoints, "Check for Updates" is hidden
-  (`src-tauri/src/commands/window.rs`). Re-enable once Bayonet has its own signed
-  release feed.
+- **The CNB update mirror.** OpenIDEA fell back to its CNB mirror (and offered it for the
+  Chinese UI); Bayonet has one update source, its release site, so the "Update source"
+  setting is gone.
+
+## Releases
+
+Releases use the release kit shared with Tessera and the other apps (`scripts/release-kit/`,
+synced from `skuirrels/release-kit`): `make release` on a Mac and on a Windows PC builds the
+installers locally and publishes them to https://skuirrels.github.io/bayonet-releases/ with
+signed per-platform update feeds. `RELEASING.md` has the steps, the settings and the key.
 
 ## Still to do
 
@@ -107,10 +113,9 @@ Renaming these would conflict with nearly every upstream merge, and none is visi
   set "Bayonet" in Inter Bold at 66 px, outlined with fontTools from the variable Inter
   the UI already ships (`@fontsource-variable/inter`, weight 700). The Windows
   icons come from `bayonet-windows.svg` (a larger mark) via `pnpm gen:windows-icons`.
-- There is no release workflow: OpenIDEA's `release.yml` (its signing secrets, updater
-  artifacts and `openidea-server` uploads) was removed until Bayonet plans releases.
-  Remote development still downloads `openidea-server` from OpenIDEA's GitHub releases of
-  the same version (`crates/ide-tools/src/server.rs`).
+- Remote development still downloads `openidea-server` from OpenIDEA's GitHub releases of
+  the same version (`crates/ide-tools/src/server.rs`). The release kit doesn't publish a
+  Bayonet server yet: its Linux hosts need a musl build, which the Mac can't make.
 - Unity and Mono debugging (DBG-7) is out of scope for now: it needs a Mono soft-debugger
   adapter, and nothing on the development machine can check it.
 

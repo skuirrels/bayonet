@@ -924,24 +924,24 @@ export const commands = {
 	menuSetDisabled: (ids: string[]) => __TAURI_INVOKE<void>("menu_set_disabled", { ids }),
 	appLogLocation: () => typedError<LogLocation, IdeError>(__TAURI_INVOKE("app_log_location")),
 	appBuildInfo: () => __TAURI_INVOKE<BuildInfo>("app_build_info"),
-	appCheckUpdate: (source: UpdateSource) => typedError<UpdateCheck, IdeError>(__TAURI_INVOKE("app_check_update", { source })),
+	appCheckUpdate: () => typedError<UpdateCheck, IdeError>(__TAURI_INVOKE("app_check_update")),
 	/**
 	 *  The background check made once per process when the first window starts;
 	 *  later calls (other windows) and debug builds get `None`. Failures are logged,
 	 *  not reported: the user didn't ask for this check.
 	 */
-	appStartupUpdateCheck: (source: UpdateSource) => __TAURI_INVOKE<{
+	appStartupUpdateCheck: () => __TAURI_INVOKE<{
 	version: string,
 	currentVersion: string,
 	notes: string | null,
 	date: string | null,
-} | null>("app_startup_update_check", { source }),
+} | null>("app_startup_update_check"),
 	/**
 	 *  Downloads and installs the available update, streaming progress to `on_progress`.
 	 *  Cancellable through `request` until the download completes; the UI then restarts
 	 *  with `app_restart`. One install runs at a time.
 	 */
-	appInstallUpdate: (source: UpdateSource, request: RequestId, onProgress: Channel<UpdateProgress>) => typedError<null, IdeError>(__TAURI_INVOKE("app_install_update", { source, request, onProgress })),
+	appInstallUpdate: (request: RequestId, onProgress: Channel<UpdateProgress>) => typedError<null, IdeError>(__TAURI_INVOKE("app_install_update", { request, onProgress })),
 	debugExceptionFilters: () => typedError<SessionExceptionFilters[], IdeError>(__TAURI_INVOKE("debug_exception_filters")),
 	debugSetExceptionBreakpoints: (choices: { [key in string]: boolean }) => typedError<null, IdeError>(__TAURI_INVOKE("debug_set_exception_breakpoints", { choices })),
 	debugSetVariable: (session: DebugSessionId, container: number, name: string, evaluateName: string | null, frameId: number | null, value: string) => typedError<Variable, IdeError>(__TAURI_INVOKE("debug_set_variable", { session, container, name, evaluateName, frameId, value })),
@@ -4337,8 +4337,6 @@ export type GeneralSettings = {
 	powerSaveMode?: boolean,
 	/**  File › Rename Project… (project layer): the name shown for the project; empty = its folder name. */
 	projectName?: string,
-	/**  Where updates come from: `auto` (the CNB mirror for the Chinese UI, else GitHub) | `github` | `cnb`. */
-	updateSource?: string,
 };
 
 /**  A project's analysers and what its source generators wrote. */
@@ -8472,13 +8470,6 @@ export type UpdateProgress =
 { type: "downloading"; downloaded: number | null; total: number | null } | 
 /**  Download done; the new version is being written over this one. */
 { type: "installing" };
-
-/**  Where updates are downloaded from (System Settings › Updates). */
-export type UpdateSource = 
-/**  The GitHub releases named in tauri.conf.json. */
-"github" | 
-/**  The CNB mirror of the same releases, for networks where GitHub is slow. */
-"cnb";
 
 export type Variable = {
 	name: string,

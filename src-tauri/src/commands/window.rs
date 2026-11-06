@@ -336,19 +336,6 @@ pub fn updates_configured<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
     !config_endpoints(app).is_empty() || update_endpoint_env().is_some()
 }
 
-/// Where updates are downloaded from (System Settings › Updates).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateSource {
-    /// The GitHub releases named in tauri.conf.json.
-    #[default]
-    Github,
-    /// The CNB mirror of the same releases, for networks where GitHub is slow.
-    Cnb,
-}
-
-const CNB_ENDPOINT: &str = "https://cnb.cool/l0ng-ai/openidea/-/releases/latest/download/latest.json";
-
 fn config_endpoints<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<String> {
     app.config()
         .plugins
@@ -360,28 +347,29 @@ fn config_endpoints<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The endpoints tried in order: `source` first, the other source when it fails or has
-/// no manifest. Bundles are signed, so either source's manifest and downloads verify.
-/// No official endpoint (a build without updates) means no mirror either.
-fn source_endpoints(official: Vec<String>, source: UpdateSource) -> Vec<String> {
-    if official.is_empty() {
-        return official;
-    }
-    let mirror = vec![CNB_ENDPOINT.to_string()];
-    match source {
-        UpdateSource::Github => [official, mirror].concat(),
-        UpdateSource::Cnb => [mirror, official].concat(),
+/// The release site publishes each platform on its own (scripts/release-kit): a feed that has a
+/// newer version but no build for this platform yet is no update, not a failure.
+fn no_build_for_this_platform(e: &tauri_plugin_updater::Error) -> bool {
+    matches!(e, tauri_plugin_updater::Error::TargetNotFound(_) | tauri_plugin_updater::Error::TargetsNotFound(_))
+}
+
+/// The available update, if any.
+async fn check(updater: &tauri_plugin_updater::Updater) -> IdeResult<Option<tauri_plugin_updater::Update>> {
+    match updater.check().await {
+        Ok(update) => Ok(update),
+        Err(e) if no_build_for_this_platform(&e) => Ok(None),
+        Err(e) => Err(IdeError::unavailable(e.to_string())),
     }
 }
 
-fn updater(app: &AppHandle, source: UpdateSource) -> IdeResult<Option<tauri_plugin_updater::Updater>> {
+fn updater(app: &AppHandle) -> IdeResult<Option<tauri_plugin_updater::Updater>> {
     use tauri_plugin_updater::UpdaterExt;
     if !updates_configured(app) {
         return Ok(None);
     }
     let endpoints = match update_endpoint_env() {
         Some(url) => vec![url],
-        None => source_endpoints(config_endpoints(app), source),
+        None => config_endpoints(app),
     };
     let endpoints = endpoints
         .iter()
@@ -399,11 +387,11 @@ fn updater(app: &AppHandle, source: UpdateSource) -> IdeResult<Option<tauri_plug
 
 #[tauri::command]
 #[specta::specta]
-pub async fn app_check_update(app: AppHandle, source: UpdateSource) -> IdeResult<UpdateCheck> {
-    let Some(updater) = updater(&app, source)? else {
+pub async fn app_check_update(app: AppHandle) -> IdeResult<UpdateCheck> {
+    let Some(updater) = updater(&app)? else {
         return Ok(UpdateCheck { enabled: false, update: None });
     };
-    let update = updater.check().await.map_err(|e| IdeError::unavailable(e.to_string()))?;
+    let update = check(&updater).await?;
     Ok(UpdateCheck {
         enabled: true,
         update: update.map(|u| UpdateInfo {
@@ -420,12 +408,12 @@ pub async fn app_check_update(app: AppHandle, source: UpdateSource) -> IdeResult
 /// not reported: the user didn't ask for this check.
 #[tauri::command]
 #[specta::specta]
-pub async fn app_startup_update_check(app: AppHandle, source: UpdateSource) -> Option<UpdateInfo> {
+pub async fn app_startup_update_check(app: AppHandle) -> Option<UpdateInfo> {
     static DONE: AtomicBool = AtomicBool::new(false);
     if cfg!(debug_assertions) || DONE.swap(true, Ordering::SeqCst) {
         return None;
     }
-    match app_check_update(app, source).await {
+    match app_check_update(app).await {
         Ok(check) => check.update,
         Err(e) => {
             tracing::warn!("startup update check failed: {e}");
@@ -493,7 +481,6 @@ impl Drop for InstallingGuard {
 pub async fn app_install_update(
     app: AppHandle,
     state: State<'_, AppState>,
-    source: UpdateSource,
     request: RequestId,
     on_progress: Channel<UpdateProgress>,
 ) -> IdeResult<()> {
@@ -501,9 +488,9 @@ pub async fn app_install_update(
         InstallingGuard::acquire().ok_or_else(|| IdeError::unavailable("an update is already being installed"))?;
     let token = state.host.begin_request(request);
     let result = async {
-        let updater = updater(&app, source)?.ok_or_else(|| IdeError::unavailable("updates are not configured"))?;
+        let updater = updater(&app)?.ok_or_else(|| IdeError::unavailable("updates are not configured"))?;
         let update = tokio::select! {
-            r = updater.check() => r.map_err(|e| IdeError::unavailable(e.to_string()))?,
+            r = check(&updater) => r?,
             _ = token.cancelled() => return Err(IdeError::cancelled()),
         }
         .ok_or_else(|| IdeError::not_found("no update available"))?;
@@ -565,12 +552,11 @@ mod tests {
     }
 
     #[test]
-    fn chosen_source_is_tried_first_and_the_other_after_it() {
-        let github = "https://github.com/l0ng-ai/openidea/releases/latest/download/latest.json".to_string();
-        assert_eq!(source_endpoints(vec![github.clone()], UpdateSource::Github), [github.clone(), CNB_ENDPOINT.into()]);
-        assert_eq!(source_endpoints(vec![github.clone()], UpdateSource::Cnb), [CNB_ENDPOINT.into(), github]);
-        // A build without an update endpoint stays without one.
-        assert!(source_endpoints(Vec::new(), UpdateSource::Cnb).is_empty());
+    fn a_feed_without_this_platform_is_no_update() {
+        use tauri_plugin_updater::Error;
+        assert!(no_build_for_this_platform(&Error::TargetNotFound("darwin-aarch64".into())));
+        assert!(no_build_for_this_platform(&Error::TargetsNotFound(vec!["darwin-aarch64-app".into()])));
+        assert!(!no_build_for_this_platform(&Error::ReleaseNotFound));
     }
 
     #[test]

@@ -9,6 +9,7 @@
   },
   "ignorePatterns": [
     "dist",
+    "scripts/release-kit",
     "target",
     "src-tauri",
     "crates",

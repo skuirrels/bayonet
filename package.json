@@ -30,7 +30,13 @@
     "e2e": "playwright test",
     "perf": "node perf/run.ts",
     "perf:rust": "node perf/rust.ts",
-    "release:prepare": "node scripts/release-prepare.ts"
+    "release:prepare": "node scripts/release-prepare.ts",
+    "release:version": "node scripts/release-kit/release.mjs version",
+    "release:bump": "node scripts/release-kit/release.mjs bump",
+    "release:build": "node scripts/release-kit/release.mjs build",
+    "release:publish": "node scripts/release-kit/release.mjs publish",
+    "release:release": "node scripts/release-kit/release.mjs release",
+    "release:clean": "node scripts/release-kit/release.mjs clean"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm lint-staged"
