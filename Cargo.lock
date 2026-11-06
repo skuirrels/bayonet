@@ -4273,7 +4273,7 @@ dependencies = [
 
 [[package]]
 name = "ide-dotnet"
-version = "0.1.36"
+version = "0.1.37"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
@@ -4281,7 +4281,7 @@ dependencies = [
  "ide-core",
  "ide-jsonrpc",
  "png 0.18.1",
- "quick-xml",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
  "specta",
