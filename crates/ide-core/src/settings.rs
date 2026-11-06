@@ -268,6 +268,8 @@ pub struct GeneralSettings {
     pub power_save_mode: bool,
     /// File › Rename Project… (project layer): the name shown for the project; empty = its folder name.
     pub project_name: String,
+    /// Where updates come from: `auto` (the CNB mirror for the Chinese UI, else GitHub) | `github` | `cnb`.
+    pub update_source: String,
 }
 
 impl Default for GeneralSettings {
@@ -282,6 +284,7 @@ impl Default for GeneralSettings {
             date_format: DateFormatSettings::default(),
             power_save_mode: false,
             project_name: String::new(),
+            update_source: "auto".into(),
         }
     }
 }
@@ -601,7 +604,7 @@ impl Default for FileSettings {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LanguagesSettings {
     pub python: PythonSettings,
@@ -612,6 +615,7 @@ pub struct LanguagesSettings {
     pub typescript: TypeScriptSettings,
     pub prettier: ExternalFormatterSettings,
     pub oxfmt: ExternalFormatterSettings,
+    pub ruff: ExternalFormatterSettings,
     pub java: JavaSettings,
     pub dotnet: DotnetSettings,
     pub ruby: RubySettings,
@@ -628,6 +632,29 @@ pub struct DotnetSettings {
     pub binary_log: bool,
 }
 
+impl Default for LanguagesSettings {
+    fn default() -> Self {
+        Self {
+            python: PythonSettings::default(),
+            node: NodeSettings::default(),
+            php: PhpSettings::default(),
+            rust: RustSettings::default(),
+            go: GoSettings::default(),
+            typescript: TypeScriptSettings::default(),
+            prettier: ExternalFormatterSettings::default(),
+            oxfmt: ExternalFormatterSettings::default(),
+            ruff: ExternalFormatterSettings {
+                languages: vec!["python".into()],
+                ..ExternalFormatterSettings::default()
+            },
+            java: JavaSettings::default(),
+            dotnet: DotnetSettings::default(),
+            ruby: RubySettings::default(),
+            markdown: MarkdownSettings::default(),
+        }
+    }
+}
+
 /// Languages & Frameworks › Markdown. Like IDEA's, it is application-level only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
@@ -641,6 +668,7 @@ impl LanguagesSettings {
         match tool {
             ExternalFormatter::Prettier => &self.prettier,
             ExternalFormatter::Oxfmt => &self.oxfmt,
+            ExternalFormatter::Ruff => &self.ruff,
         }
     }
 }
@@ -651,6 +679,7 @@ impl LanguagesSettings {
 pub enum ExternalFormatter {
     Prettier,
     Oxfmt,
+    Ruff,
 }
 
 impl ExternalFormatter {
@@ -659,16 +688,19 @@ impl ExternalFormatter {
         match self {
             Self::Prettier => "prettier",
             Self::Oxfmt => "oxfmt",
+            Self::Ruff => "ruff",
         }
     }
 }
 
-/// An external formatter (Prettier, oxfmt) and the languages it formats.
+/// An external formatter (Prettier, oxfmt, Ruff) and the languages it formats.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ExternalFormatterSettings {
-    /// Empty path: project node_modules, managed installation, then PATH.
+    /// Empty path: project node_modules (Prettier/oxfmt), managed installation, then PATH.
     pub path: String,
+    /// Ruff only: directory containing its configuration, or a configuration file.
+    pub configuration_directory: String,
     pub languages: Vec<String>,
     /// Prefer this formatter even when a language server offers formatting.
     pub prefer: bool,
@@ -679,6 +711,7 @@ impl Default for ExternalFormatterSettings {
     fn default() -> Self {
         Self {
             path: String::new(),
+            configuration_directory: String::new(),
             languages: [
                 "markdown",
                 "yaml",
@@ -733,6 +766,10 @@ pub struct PhpSettings {
     /// Intelephense stub sets loaded on top of its defaults and the `ext-*` entries of
     /// `composer.json` (`wordpress`).
     pub stubs: Vec<String>,
+    /// PHPStan configuration file for checking saved files; empty = the `phpstan.neon`,
+    /// `phpstan.neon.dist` or `phpstan.dist.neon` PHPStan finds in the project root. Absolute,
+    /// `~/`, or relative to the project.
+    pub phpstan_config: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
@@ -839,6 +876,8 @@ pub struct JavaSettings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GradleSettings {
+    /// Linked build directories; absent preserves automatic discovery, empty unlinks all builds.
+    pub linked_projects: Option<Vec<String>>,
     /// Empty = Project JDK; otherwise a JDK home.
     pub jvm: String,
     pub distribution: GradleDistribution,
@@ -875,6 +914,8 @@ pub enum GradleDistribution {
 pub struct MavenSettings {
     /// Project-relative root POMs removed from the Maven project model.
     pub unlinked_projects: Vec<String>,
+    /// Project-relative POMs outside the root reactor added as independent top-level projects.
+    pub linked_projects: Vec<String>,
     /// Maven home (or its `mvn` executable); empty = the project's `mvnw`, else `mvn` on `PATH`.
     pub home: String,
     /// User `settings.xml` (`-s`); empty = `~/.m2/settings.xml`.
@@ -1136,6 +1177,16 @@ mod gradle_settings_tests {
     use super::*;
 
     #[test]
+    fn absent_and_explicitly_empty_gradle_links_remain_distinct() {
+        let automatic: GradleSettings = serde_json::from_str("{}").unwrap();
+        let unlinked: GradleSettings = serde_json::from_str(r#"{"linkedProjects":[]}"#).unwrap();
+        assert_eq!(automatic.linked_projects, None);
+        assert_eq!(unlinked.linked_projects, Some(vec![]));
+        let restored: GradleSettings = serde_json::from_str(&serde_json::to_string(&unlinked).unwrap()).unwrap();
+        assert_eq!(restored.linked_projects, Some(vec![]));
+    }
+
+    #[test]
     fn defaults_and_round_trip() {
         let old: JavaSettings = serde_json::from_str(r#"{"jdk":"/jdk"}"#).unwrap();
         assert_eq!(old.gradle, GradleSettings::default());
@@ -1147,6 +1198,7 @@ mod gradle_settings_tests {
                 home: "/gradle".into(),
                 user_home: "/cache/gradle".into(),
                 run_using: GradleRunUsing::Ide,
+                linked_projects: Some(vec!["backend".into(), "../shared".into()]),
             };
             let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
             assert_eq!(restored.languages.java.gradle, settings.languages.java.gradle);

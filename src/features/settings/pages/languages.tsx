@@ -14,7 +14,7 @@ import {
   TypeScriptPage,
 } from "../languages/LanguagePages";
 import { MarkdownPage } from "../languages/MarkdownPage";
-import { OxfmtPage, PrettierPage } from "../languages/FormatterPage";
+import { OxfmtPage, PrettierPage, RuffPage } from "../languages/FormatterPage";
 import { ProjectStructurePage } from "../languages/ProjectStructurePage";
 import { PythonInterpreterPage } from "../languages/PythonInterpreterPage";
 import { GoBuildTagsPage, GO_BUILD_TAG_SECTIONS } from "../languages/GoBuildTags";
@@ -158,6 +158,24 @@ export const LANGUAGE_PAGES: PageSpec[] = [
     component: OxfmtPage,
   },
   {
+    id: "languages.ruff",
+    projectScope: true,
+    defaultScope: "project",
+    title: "Ruff",
+    group: LANGUAGES_GROUP,
+    order: 403.7,
+    keywords: [
+      "formatter",
+      "ruff",
+      "python",
+      "configuration directory",
+      "pyproject.toml",
+      "ruff.toml",
+      "format on save",
+    ],
+    component: RuffPage,
+  },
+  {
     id: "languages.php",
     projectScope: true,
     defaultScope: "project",
@@ -172,6 +190,8 @@ export const LANGUAGE_PAGES: PageSpec[] = [
       "php",
       "composer",
       "phpunit",
+      "phpstan",
+      "phpstan.neon",
       "xampp",
       "herd",
       "homebrew",

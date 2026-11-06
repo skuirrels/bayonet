@@ -122,6 +122,12 @@ export interface EditorKindContribution {
   restorable?: boolean;
   /** Can remain visible in a window without a project (for example, an external Git log). */
   standalone?: boolean;
+  /**
+   * Its recently used tabs stay mounted, hidden, while another tab is active: switching back
+   * shows them as they were instead of building them again (long agent conversations). A hidden
+   * tab keeps running; `useEditorShown` tells it whether it is the one shown.
+   */
+  keepAlive?: boolean;
   /** Last tab showing this input closed (including split tabs and tab-limit eviction). */
   onClose?(input: EditorInput): void;
   /**
@@ -325,6 +331,12 @@ export const registerWorkbenchBanner = (c: WorkbenchBannerContribution) => regis
 export const registerToolWindow = (c: ToolWindowContribution) => register("toolWindows", c.id, c);
 export const registerStatusItem = (c: StatusItemContribution) => register("statusItems", c.id, c);
 export const registerOverlay = (c: OverlayContribution) => register("overlays", c.id, c);
+
+const EditorShown = createContext(true);
+export const EditorShownProvider = EditorShown.Provider;
+/** Whether this editor tab is the one its pane shows (a `keepAlive` tab stays mounted when it isn't). */
+export const useEditorShown = () => useContext(EditorShown);
+
 export const registerEditorKind = (c: EditorKindContribution) => register("editorKinds", c.kind, c);
 export const registerTitleItem = (c: TitleItemContribution) => register("titleItems", c.id, c);
 export const registerServiceView = (c: ServiceViewContribution) => register("serviceViews", c.id, c);
@@ -1537,6 +1549,42 @@ export const useDebugRunSessions = create<{
   serviceSessions: DebugServiceSession[];
   Console: ComponentType<{ sessionId: number }> | null;
 }>(() => ({ sessions: [], serviceSessions: [], Console: null }));
+
+// ---------------------------------------------------------------------------
+// Processes a closing window or project would terminate. Features that own
+// child processes (Run/Debug sessions) publish them here, so the close guard can
+// ask first (IDEA's "Terminate processes?").
+
+export interface RunningProcess {
+  /** Configuration or session name shown in the prompt. */
+  name: string;
+}
+
+export interface RunningProcessesProvider {
+  id: string;
+  /** Processes this feature is running in the window right now. */
+  running(): RunningProcess[] | Promise<RunningProcess[]>;
+}
+
+const runningProcessesProviders = new Map<string, RunningProcessesProvider>();
+
+export function registerRunningProcessesProvider(p: RunningProcessesProvider): () => void {
+  runningProcessesProviders.set(p.id, p);
+  return () => {
+    if (runningProcessesProviders.get(p.id) === p) runningProcessesProviders.delete(p.id);
+  };
+}
+
+/** Live processes of every provider, one entry per name. */
+export async function runningProcesses(): Promise<RunningProcess[]> {
+  const all = (await Promise.all([...runningProcessesProviders.values()].map((p) => p.running()))).flat();
+  const seen = new Set<string>();
+  return all.filter((p) => {
+    if (!p.name || seen.has(p.name)) return false;
+    seen.add(p.name);
+    return true;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // "Get from Version Control" sources besides a plain URL (IDEA: GitHub, GitLab…),

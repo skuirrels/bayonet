@@ -15,7 +15,7 @@ import {
 } from "./configs";
 import { contextConfig, fileRole } from "./context";
 import { envFromRows } from "./EnvDialog";
-import { defaultSelection } from "./store";
+import { configRemoved, defaultSelection, rerunConfig, useRun, type RunSession } from "./store";
 
 const cfg = (over: Partial<RunConfig> & { id: string }): RunConfig => ({
   name: over.id,
@@ -235,6 +235,43 @@ describe("context configuration", () => {
     ]);
   });
 
+  it("does not borrow another Go module's run or test configuration", () => {
+    const go = [
+      cfg({ id: "go:run:api", kind: "go", command: "go", args: ["run", "."], cwd: "api" }),
+      cfg({ id: "go:test:api", kind: "go", command: "go", args: ["test", "./..."], cwd: "api", isTest: true }),
+    ];
+    expect(contextConfig("other/main.go", go, "package main\nfunc main() {}")).toBeNull();
+    expect(contextConfig("other/main_test.go", go, "package main")).toBeNull();
+  });
+
+  it("uses a nested Go module even when only the parent has a run configuration", () => {
+    const go = [
+      cfg({ id: "go:run", kind: "go", command: "go", args: ["run", "."] }),
+      cfg({ id: "go:test:api", kind: "go", command: "go", args: ["test", "./..."], cwd: "api", isTest: true }),
+    ];
+    expect(contextConfig("api/tool/main.go", go, "package main\nfunc main() {}")).toMatchObject({
+      cwd: "api",
+      args: ["run", "./tool"],
+    });
+  });
+
+  it("does not pass typed Go test flags to an application build", () => {
+    const go = cfg({
+      id: "user:go-test",
+      kind: "go",
+      command: "go",
+      args: ["test", "-count=1", "./..."],
+      isTest: true,
+      params: { goKind: "test", module: "api", toolArgs: "-count=1" },
+    });
+    expect(contextConfig("api/cmd/server/main.go", [go], "package main\nfunc main() {}")).toMatchObject({
+      cwd: "api",
+      args: ["run", "./cmd/server"],
+      params: undefined,
+      isTest: false,
+    });
+  });
+
   it("finds run targets and script invocations", () => {
     expect(contextConfig("src/bin/server.rs", configs)!.id).toBe("cargo:run:server");
     expect(contextConfig("tools/gen.py", configs)).toMatchObject({
@@ -254,6 +291,37 @@ describe("context configuration", () => {
     });
     expect(contextConfig("scripts/build.bat", configs, undefined, false)).toBeNull();
     expect(contextConfig("docs/readme.md", configs)).toBeNull();
+  });
+
+  it("runs a module that imports relatively as a module of its package", () => {
+    const cli = "from .models import Priority, TaskList\n\n\ndef main():\n    pass\n";
+    expect(contextConfig("src/tasks/cli.py", configs, cli)).toMatchObject({
+      kind: "python",
+      command: "../.venv/bin/python",
+      args: ["-m", "tasks.cli"],
+      cwd: "src",
+      debugAdapter: "debugpy",
+    });
+    expect(contextConfig("app/api/routes.py", [], "from . import models\n")).toMatchObject({
+      command: "python3",
+      args: ["-m", "app.api.routes"],
+      cwd: null,
+    });
+    expect(contextConfig("src/app/__main__.py", [], "from .cli import main\n")).toMatchObject({
+      args: ["-m", "app"],
+      cwd: "src",
+    });
+    // Inside a nested Python project: from its folder (the venv command stays relative to the root).
+    const nested = [cfg({ id: "pytest", kind: "pytest", command: "backend/.venv/bin/pytest", cwd: "backend" })];
+    expect(contextConfig("backend/app/jobs.py", nested, "from .db import session\n")).toMatchObject({
+      command: "../backend/.venv/bin/python",
+      args: ["-m", "app.jobs"],
+      cwd: "backend",
+    });
+    // Absolute imports, a top-level file, a folder that can't be a package: as a script.
+    expect(contextConfig("src/tasks/cli.py", configs, "import os\n")!.args).toEqual(["src/tasks/cli.py"]);
+    expect(contextConfig("tool.py", [], "from .x import y\n")!.args).toEqual(["tool.py"]);
+    expect(contextConfig("my-scripts/run.py", [], "from .x import y\n")!.args).toEqual(["my-scripts/run.py"]);
   });
 
   it("runs pytest for a test file even without a detected pytest config", () => {
@@ -311,5 +379,40 @@ describe("context configuration", () => {
     const plain = [cfg({ id: "python:module:app", kind: "python", command: "python3", args: ["-m", "app"] })];
     expect(contextConfig("tools/gen.py", plain)).toMatchObject({ command: "python3", args: ["tools/gen.py"] });
     expect(contextConfig("tools/gen.py", [])).toMatchObject({ command: "python3", args: ["tools/gen.py"] });
+  });
+});
+
+describe("rerunning a session after its configuration changed (#1497)", () => {
+  const session = (config: RunConfig, baseConfig?: RunConfig): RunSession => ({
+    id: "s",
+    config,
+    baseConfig,
+    runId: null,
+    status: "finished",
+    exitCode: 0,
+    startedAt: 1,
+    endedAt: 2,
+    stdinClosed: true,
+  });
+
+  it("launches the configuration as saved now, or the one it ran with once deleted", () => {
+    const ran = cfg({ id: "app", command: "python", args: ["init.py"] });
+    const edited = { ...ran, args: ["main.py"] };
+    useRun.setState({ configs: [edited] });
+    expect(rerunConfig(session(ran))).toBe(edited);
+    expect(configRemoved("app")).toBe(false);
+    useRun.setState({ configs: [] });
+    expect(rerunConfig(session(ran))).toBe(ran);
+    expect(configRemoved("app")).toBe(true);
+    // A run that was never a listed configuration isn't "removed".
+    expect(configRemoved("build:task")).toBe(false);
+  });
+
+  it("keeps the tests of a derived run (Rerun Failed Tests)", () => {
+    const base = cfg({ id: "tests", isTest: true });
+    const derived = { ...base, args: ["-k", "failing"] };
+    useRun.setState({ configs: [base] });
+    expect(rerunConfig(session(derived, base))).toBe(derived);
+    useRun.setState({ configs: [] });
   });
 });

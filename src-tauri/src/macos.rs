@@ -7,8 +7,9 @@ use objc2::{
     rc::Retained,
     runtime::{AnyClass, AnyObject, Imp, ProtocolObject, Sel},
 };
-use objc2_app_kit::{NSWindow, NSWindowUserTabbingPreference};
-use objc2_foundation::{NSNotificationCenter, NSObjectProtocol};
+use objc2_app_kit::{NSWindow, NSWindowAnimationBehavior, NSWindowUserTabbingPreference};
+use objc2_foundation::{NSNotificationCenter, NSObjectProtocol, NSRect};
+use std::cell::Cell;
 use tauri::{AppHandle, Manager, WebviewWindow};
 
 fn tabbing_preference(app: &AppHandle) -> IdeResult<TabbingPreference> {
@@ -46,7 +47,9 @@ pub fn new_project_tab_target(app: &AppHandle, launch: &Launch) -> IdeResult<Opt
         let host = app.state::<crate::state::AppState>();
         host.project(w.label()).is_ok_and(|p| !p.light) || host.remote_dev.get(w.label()).is_some()
     });
-    let fullscreen = active.as_ref().is_some_and(|w| w.is_fullscreen().unwrap_or(false));
+    // A project-tab group is fullscreen through simple fullscreen, which the native flag misses.
+    let fullscreen =
+        active.as_ref().is_some_and(|w| w.is_fullscreen().unwrap_or(false) || is_simple_fullscreen(w.label()));
     let light_edit = launch.project.is_none() && launch.remote.is_none();
     Ok(should_group_new_project(tabbing_preference(app)?, fullscreen, active.is_some(), light_edit)
         .then_some(active)
@@ -134,30 +137,35 @@ pub fn set_simple_fullscreen(window: &WebviewWindow, on: bool) -> tauri::Result<
     })
 }
 
+/// A window in simple fullscreen: its `NSWindow` and the minimum size restored when it leaves.
+struct Covering {
+    native: usize,
+    min_size: objc2_foundation::NSSize,
+}
+
 thread_local! {
-    /// Minimum sizes of windows in simple fullscreen, restored when they leave it.
-    static MIN_SIZES: std::cell::RefCell<std::collections::HashMap<String, objc2_foundation::NSSize>> =
-        std::cell::RefCell::default();
+    static COVERING: std::cell::RefCell<std::collections::HashMap<String, Covering>> = std::cell::RefCell::default();
 }
 
 /// Simple fullscreen drops the title bar and resizing; ours is transparent over the web toolbar,
 /// so keep it and its buttons, the green one (enabled only for a resizable window) leading back
 /// out of fullscreen. A minimum size of the whole screen keeps the edges from being dragged.
+/// A titled window is kept below the menu bar or camera housing; see `constrain_frame_rect`.
 fn keep_window_buttons(window: &WebviewWindow, on: bool) {
     use objc2_app_kit::NSWindowStyleMask;
     let Ok(pointer) = window.ns_window() else { return };
     let native = unsafe { &*pointer.cast::<NSWindow>() };
     let label = window.label().to_owned();
     if !on {
-        if let Some(size) = MIN_SIZES.with_borrow_mut(|sizes| sizes.remove(&label)) {
-            native.setMinSize(size);
+        if let Some(covering) = COVERING.with_borrow_mut(|windows| windows.remove(&label)) {
+            native.setMinSize(covering.min_size);
         }
         return;
     }
     let Some(screen) = native.screen() else { return };
     let frame = screen.frame();
-    MIN_SIZES.with_borrow_mut(|sizes| {
-        sizes.entry(label).or_insert_with(|| native.minSize());
+    COVERING.with_borrow_mut(|windows| {
+        windows.entry(label).or_insert_with(|| Covering { native: pointer as usize, min_size: native.minSize() });
     });
     native.setMinSize(frame.size);
     native.setStyleMask(native.styleMask() | NSWindowStyleMask::Titled | NSWindowStyleMask::Resizable);
@@ -175,7 +183,7 @@ pub fn forget_simple_fullscreen(app: &AppHandle, label: &str) -> bool {
     if was {
         let label = label.to_owned();
         let _ = app.run_on_main_thread(move || {
-            MIN_SIZES.with_borrow_mut(|sizes| sizes.remove(&label));
+            COVERING.with_borrow_mut(|windows| windows.remove(&label));
             present(any);
         });
     }
@@ -193,6 +201,43 @@ fn present(fullscreen: bool) {
         NSApplicationPresentationOptions::Default
     };
     NSApplication::sharedApplication(mtm).setPresentationOptions(options);
+}
+
+type ShouldTerminate = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize;
+
+/// `NSApplicationTerminateReply`.
+const TERMINATE_CANCEL: usize = 0;
+const TERMINATE_NOW: usize = 1;
+
+/// The Dock's Quit, the system's app menu and a logout ask the application delegate whether it
+/// may terminate; tao's delegate doesn't answer, so AppKit terminated at once, past the exit,
+/// running-process and unsaved-changes prompts. Answer it: cancel, and quit like Cmd+Q does.
+pub fn intercept_system_quit(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let application = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    unsafe {
+        let delegate: *mut AnyObject = objc2::msg_send![&*application, delegate];
+        if delegate.is_null() {
+            return;
+        }
+        let class = objc2::ffi::object_getClass(delegate.cast()) as *mut AnyClass;
+        let imp: Imp = std::mem::transmute(should_terminate as ShouldTerminate);
+        let added = objc2::ffi::class_addMethod(class, objc2::sel!(applicationShouldTerminate:), imp, c"Q@:@".as_ptr());
+        if !added.as_bool() {
+            tracing::warn!("could not handle applicationShouldTerminate:");
+        }
+    }
+}
+
+unsafe extern "C-unwind" fn should_terminate(_this: *mut AnyObject, _selector: Sel, _sender: *mut AnyObject) -> usize {
+    let Some(app) = APP.get() else { return TERMINATE_NOW };
+    // Our own quit exits through the event loop; a system quit during it goes ahead.
+    if app.try_state::<WindowsState>().is_none_or(|w| w.quitting()) {
+        return TERMINATE_NOW;
+    }
+    crate::dispatch_menu_action(app, "app.quit");
+    TERMINATE_CANCEL
 }
 
 type ToggleFullScreen = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
@@ -216,7 +261,123 @@ pub fn intercept_toggle_fullscreen(window: &WebviewWindow) {
         let _ = NATIVE_TOGGLE_FULLSCREEN.set(native);
         let replacement: Imp = std::mem::transmute(toggle_fullscreen as ToggleFullScreen);
         objc2::ffi::class_replaceMethod(class, selector, replacement, types);
+
+        let selector = objc2::sel!(constrainFrameRect:toScreen:);
+        let Some(method) = (*class).instance_method(selector) else { return };
+        let native: ConstrainFrameRect = std::mem::transmute(method.implementation());
+        let types = objc2::ffi::method_getTypeEncoding(method);
+        let _ = NATIVE_CONSTRAIN_FRAME_RECT.set(native);
+        let replacement: Imp = std::mem::transmute(constrain_frame_rect as ConstrainFrameRect);
+        objc2::ffi::class_replaceMethod(class, selector, replacement, types);
     });
+}
+
+type ConstrainFrameRect = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, NSRect, *mut AnyObject) -> NSRect;
+
+static NATIVE_CONSTRAIN_FRAME_RECT: std::sync::OnceLock<ConstrainFrameRect> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// Native window whose next frame assignment must keep the rectangle it was given.
+    static EXACT_FRAME: Cell<usize> = const { Cell::new(0) };
+}
+
+struct ExactFrame(usize);
+
+impl ExactFrame {
+    fn begin(native: usize) -> Self {
+        EXACT_FRAME.with(|slot| slot.set(native));
+        Self(native)
+    }
+}
+
+impl Drop for ExactFrame {
+    fn drop(&mut self) {
+        EXACT_FRAME.with(|slot| {
+            if slot.get() == self.0 {
+                slot.set(0);
+            }
+        });
+    }
+}
+
+/// Copies `from`'s frame onto `to`. `setFrame:display:animate:` finishes before it returns;
+/// tao's position and size setters only schedule the change.
+pub fn copy_window_frame(from: &WebviewWindow, to: &WebviewWindow) -> tauri::Result<()> {
+    apply_window_frame(from, to, false)
+}
+
+/// Copies the frame and orders `to` front before AppKit can animate or constrain it.
+/// A later `show` runs `constrainFrameRect:toScreen:` and slides a titled window into place.
+pub fn present_window_frame(from: &WebviewWindow, to: &WebviewWindow) -> tauri::Result<()> {
+    apply_window_frame(from, to, true)
+}
+
+fn apply_window_frame(from: &WebviewWindow, to: &WebviewWindow, show: bool) -> tauri::Result<()> {
+    if MainThreadMarker::new().is_some() {
+        return apply_window_frame_on_main(from, to, show);
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let from = from.clone();
+    let to = to.clone();
+    to.clone().run_on_main_thread(move || {
+        let _ = tx.send(apply_window_frame_on_main(&from, &to, show));
+    })?;
+    rx.recv().map_err(|error| tauri::Error::Io(std::io::Error::other(error.to_string())))?
+}
+
+fn apply_window_frame_on_main(from: &WebviewWindow, to: &WebviewWindow, show: bool) -> tauri::Result<()> {
+    let source_pointer = from.ns_window()?;
+    let target_pointer = to.ns_window()?;
+    unsafe {
+        let source = &*source_pointer.cast::<NSWindow>();
+        let target = &*target_pointer.cast::<NSWindow>();
+        let frame = source.frame();
+        let current = target.frame();
+        let differs = frame.origin.x != current.origin.x
+            || frame.origin.y != current.origin.y
+            || frame.size.width != current.size.width
+            || frame.size.height != current.size.height;
+        if !differs && !show {
+            return Ok(());
+        }
+        // Zoom and ordering use the window's animation behavior. `animate: false` alone does not
+        // stop a zoomed window from sliding to the new frame as it is shown.
+        let behavior = target.animationBehavior();
+        target.setAnimationBehavior(NSWindowAnimationBehavior::None);
+        let result = (|| {
+            let _exact = ExactFrame::begin(target_pointer as usize);
+            if differs {
+                target.setFrame_display_animate(frame, false, false);
+            }
+            if show {
+                to.show()?;
+                to.set_focus()?;
+            }
+            Ok(())
+        })();
+        target.setAnimationBehavior(behavior);
+        result
+    }
+}
+
+/// AppKit keeps a titled window's top edge below the menu bar, and on a notched display below the
+/// camera housing, whenever the window is placed, shown or resized. A window in simple fullscreen
+/// is titled for its buttons but must still cover the whole screen. A group-tab frame copy also
+/// keeps the rectangle it was given, so the window about to be shown is not shifted.
+unsafe extern "C-unwind" fn constrain_frame_rect(
+    this: *mut AnyObject,
+    selector: Sel,
+    frame: NSRect,
+    screen: *mut AnyObject,
+) -> NSRect {
+    let exact = EXACT_FRAME.with(|slot| slot.get() == this as usize);
+    if exact || COVERING.with_borrow(|windows| windows.values().any(|covering| covering.native == this as usize)) {
+        return frame;
+    }
+    match NATIVE_CONSTRAIN_FRAME_RECT.get() {
+        Some(native) => unsafe { native(this, selector, frame, screen) },
+        None => frame,
+    }
 }
 
 unsafe extern "C-unwind" fn toggle_fullscreen(this: *mut AnyObject, selector: Sel, sender: *mut AnyObject) {

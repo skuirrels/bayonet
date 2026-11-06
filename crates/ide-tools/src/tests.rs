@@ -37,6 +37,12 @@ impl Env {
         fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         archive::make_executable(&p).unwrap();
     }
+
+    #[cfg(windows)]
+    fn script(&self, dir: &Path, name: &str, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(format!("{name}.cmd")), format!("@echo off\r\n{body}\r\n")).unwrap();
+    }
 }
 
 fn find<'a>(list: &'a [ToolInfo], name: &str) -> &'a ToolInfo {
@@ -52,16 +58,20 @@ fn bundled_lombok_replaces_legacy_installs_on_every_platform_without_downloads()
             fs::create_dir_all(legacy.parent().unwrap()).unwrap();
             fs::write(&legacy, b"old official agent").unwrap();
             fs::write(env.root.join("lombok").join(MANIFEST), r#"{"version":"1.18.48"}"#).unwrap();
+            let previous = env.root.join("lombok/bin/lombok-1.18.48-openidea.2.jar");
+            fs::write(&previous, b"previous bundled agent").unwrap();
             let tools = Tools::with_paths(env.root.clone(), OsString::new(), Platform { os, arch });
             let info = tools.info("lombok", &[]).unwrap();
             let path = managed_bundle(env.root.parent().unwrap(), "lombok").unwrap();
             assert_eq!(info.status, ToolStatus::Installed);
-            assert_eq!(info.version.as_deref(), Some("1.18.48-openidea.2"));
+            assert_eq!(info.version.as_deref(), Some("1.18.48-openidea.3"));
             assert_eq!(info.path, Some(path.clone().into()));
-            assert_eq!(path.file_name().unwrap(), "lombok-1.18.48-openidea.2.jar");
+            assert_eq!(path.file_name().unwrap(), "lombok-1.18.48-openidea.3.jar");
             assert!(!info.can_install && !info.can_uninstall);
             assert_eq!(tools.unavailable_reason(registry::find("lombok").unwrap()), None);
             assert_eq!(fs::read(&legacy).unwrap(), b"old official agent", "other windows may still use it");
+            assert_ne!(path, previous, "new agent path must invalidate the JDT LS workspace");
+            assert_eq!(fs::read(&previous).unwrap(), b"previous bundled agent", "other windows may still use it");
         }
     }
 }
@@ -586,6 +596,51 @@ printf '#!/bin/sh\necho "$GEM_HOME"\n' > "$bin/solargraph"; /bin/chmod +x "$bin/
 
 #[cfg(unix)]
 #[test]
+fn ruby_lsp_installs_into_the_project_ruby_not_a_private_gem_home() {
+    let env = Env::new();
+    let project = env._tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let marker = env._tmp.path().join("installed");
+    // Homebrew's Ruby: the gem bindir is not on the search path; only the Ruby knows it.
+    let bindir = env._tmp.path().join("gems/bin");
+    fs::create_dir_all(&bindir).unwrap();
+    env.script(&env.sys, "ruby", &format!("echo '{}'", bindir.display()));
+    // `gem list --exact ruby-lsp` knows the gem once `gem install ruby-lsp` ran, in the cwd it was given.
+    env.script(
+        &env.sys,
+        "gem",
+        &format!(
+            r#"case "$1" in
+install) echo "$PWD $@" > '{m}'; printf '#!/bin/sh\n' > '{b}/ruby-lsp'; /bin/chmod +x '{b}/ruby-lsp' ;;
+list) [ -f '{m}' ] && echo "ruby-lsp (0.26.11)" ;;
+uninstall) /bin/rm -f '{m}' ;;
+esac"#,
+            m = marker.display(),
+            b = bindir.display()
+        ),
+    );
+    let tools = env.tools().with_work_dir(Some(project.clone()));
+    assert_eq!(find(&tools.list(&langs()), "ruby-lsp").status, ToolStatus::Missing);
+    let info = tools.install("ruby-lsp", &langs(), &CancellationToken::new(), &|_| {}).unwrap();
+    assert_eq!(info.status, ToolStatus::OnPath);
+    assert_eq!(info.version.as_deref(), Some("0.26.11"));
+    // Found in the Ruby's own bindir, not reported as the `gem` command.
+    assert_eq!(info.path.as_deref(), Some(bindir.join("ruby-lsp").as_path()));
+    // Run in the project (so a version manager picks its Ruby), into the Ruby's own gem home.
+    let log = fs::read_to_string(&marker).unwrap();
+    assert!(log.starts_with(&*project.canonicalize().unwrap().to_string_lossy()), "{log}");
+    assert!(log.contains("install --no-document ruby-lsp") && !log.contains("--install-dir"), "{log}");
+    // No private gem home, no wrapper directory on the search path.
+    assert!(!env.root.join("ruby-lsp").exists());
+    // Uninstalling removes the gem, and an older managed copy.
+    fs::create_dir_all(env.root.join("ruby-lsp/gems")).unwrap();
+    let info = tools.uninstall("ruby-lsp", &langs()).unwrap();
+    assert_eq!(info.status, ToolStatus::Missing);
+    assert!(!env.root.join("ruby-lsp").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn dotnet_tool_install_into_tool_path() {
     let env = Env::new();
     env.script(
@@ -717,6 +772,34 @@ fn rust_analyzer_managed_copy_survives_rustup_becoming_available() {
     }
     env.tools().uninstall("rust-analyzer", &langs()).unwrap();
     assert!(!env.root.join("rust-analyzer").exists());
+}
+
+/// Windows has `python.exe` and `py`, not `python3.exe`; the `WindowsApps` aliases only count
+/// when the Store's Python behind them runs.
+#[test]
+fn windows_python_skips_store_aliases_that_do_not_run() {
+    let env = Env::new();
+    let aliases = env.sys.parent().unwrap().join("Microsoft").join("WindowsApps");
+    env.script(&aliases, "python", "exit 9009");
+    env.script(&aliases, "python3", "exit 9009");
+    env.script(&env.sys, "py", "echo Python 3.12.0");
+    let windows = Platform { os: Os::Windows, arch: platform::Arch::X64 };
+    let found = || {
+        let dirs = std::env::join_paths([aliases.clone(), env.sys.clone()]).unwrap();
+        Tools::with_paths(env.root.clone(), dirs, windows).python().map(|python| {
+            let dir = python.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
+            format!("{dir}/{}", python.file_stem().unwrap().to_string_lossy())
+        })
+    };
+    assert_eq!(found().as_deref(), Some("sysbin/py"));
+    fs::remove_file(env.sys.join(if cfg!(windows) { "py.cmd" } else { "py" })).unwrap();
+    assert_eq!(found(), None, "only broken aliases are available");
+    env.script(&env.sys, "python3", "echo Python 3.12.0");
+    assert_eq!(found().as_deref(), Some("sysbin/python3"), "python3 is the final fallback");
+    env.script(&env.sys, "python", "echo Python 3.12.0");
+    assert_eq!(found().as_deref(), Some("sysbin/python"), "a broken alias must not hide a later interpreter");
+    env.script(&aliases, "python", "echo Python 3.13.0");
+    assert_eq!(found().as_deref(), Some("WindowsApps/python"), "the Store's Python runs");
 }
 
 #[cfg(unix)]

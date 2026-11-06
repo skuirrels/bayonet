@@ -114,6 +114,9 @@ pub fn forwarded(event: &PluginEvent) -> bool {
             | PluginEvent::ViewChanged { .. }
             | PluginEvent::ViewMessage { .. }
             | PluginEvent::OpenTerminal { .. }
+            | PluginEvent::OpenLocation { .. }
+            | PluginEvent::CopyToClipboard { .. }
+            | PluginEvent::OpenUrl { .. }
     )
 }
 
@@ -443,6 +446,44 @@ impl RemotePlugins {
                     c.arg("editor")?,
                 )
                 .await
+            }
+        });
+        let h = host.clone();
+        d.add("plugin_navigation_files", move |c| {
+            let h = h.clone();
+            async move { super::index_ops::plugin_navigation_files(&c.host, alive(&h)?, &c.window).await }
+        });
+        let h = host.clone();
+        d.add("plugin_navigation_invalidate", move |c| { let h = h.clone(); async move {
+            super::index_ops::plugin_navigation_invalidate(&c.host, alive(&h)?, &c.window, c.arg("paths")?)
+        } });
+        let h = host.clone();
+        d.add("plugin_navigation_index", move |c| {
+            let h = h.clone();
+            async move {
+                super::index_ops::plugin_navigation_index(
+                    &c.host,
+                    alive(&h)?,
+                    &c.window,
+                    c.arg("paths")?,
+                    c.arg("request")?,
+                )
+                .await
+            }
+        });
+        let h = host.clone();
+        d.add("plugin_navigation_goto", move |c| {
+            let h = h.clone();
+            async move {
+                super::index_ops::plugin_navigation_goto(&c.host, alive(&h)?, &c.window, c.arg("doc")?, c.arg("pos")?)
+                    .await
+            }
+        });
+        let h = host.clone();
+        d.add("plugin_navigation_markers", move |c| {
+            let h = h.clone();
+            async move {
+                super::index_ops::plugin_navigation_markers(&c.host, alive(&h)?, &c.window, c.arg("paths")?).await
             }
         });
         d.add("plugin_line_markers", |c| async move {

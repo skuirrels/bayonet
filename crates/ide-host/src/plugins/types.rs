@@ -153,6 +153,8 @@ pub struct PluginUpdate {
 pub enum PluginEvent {
     /// Plugins, their status or their contributions changed: re-fetch `plugin_list`.
     CommandsChanged,
+    /// Cached document associations were disposed (reload, disable or failure).
+    DocumentIndexesChanged,
     /// The marketplace offers newer versions of installed plugins (announced
     /// once per set of versions).
     UpdatesAvailable { updates: Vec<PluginUpdate> },
@@ -192,9 +194,17 @@ pub enum PluginEvent {
         args: Vec<String>,
         cwd: ide_core::IpcPath,
     },
+    #[serde(rename_all = "camelCase")]
+    OpenLocation { plugin_id: String, path: ide_core::IpcPath, line: u32, column: u32 },
     /// Plugin languages, or the servers they may start, changed: re-fetch
     /// `languages` (the host re-detects open documents: [`crate::Host::plugin_languages_changed`]).
     LanguagesChanged,
+    /// Copy `text` to the system clipboard.
+    #[serde(rename_all = "camelCase")]
+    CopyToClipboard { plugin_id: String, text: String },
+    /// Open `url` (`http(s)://`) in the system browser.
+    #[serde(rename_all = "camelCase")]
+    OpenUrl { plugin_id: String, url: String },
 }
 
 /// Delivers events to the UI. `client` is the window that invoked the plugin

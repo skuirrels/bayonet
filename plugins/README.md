@@ -11,9 +11,10 @@ editors, and contribute menus, shortcuts, settings, themes, file icon themes
 and languages. Plugins that only contribute data (themes, icons, languages,
 menus, settings) need no code at all.
 
-> **Preview.** The plugin system ships as a preview: until it is declared
-> stable the API (`openidea:plugin@1.0`) may still change, and the official
-> plugins are versioned `0.x`. See _Evolving the plugin API_ below.
+> **Preview.** The plugin system ships as a preview and the official plugins
+> are versioned `0.x`. Released API versions only grow: a plugin built for
+> `openidea:plugin@1.0` keeps loading in later 1.x IDEs. See _Evolving the
+> plugin API_ below.
 
 ```
 plugins/
@@ -36,7 +37,7 @@ sdk/rust/openidea-plugin/     # the Rust SDK (host API, Plugin trait, mock host)
 crates/ide-plugin/tests/fixtures/  # test plugins: hello, jobs, language-toy, misbehave
 ```
 
-The plugin API is defined in [`wit/`](../wit/) (`openidea:plugin@1.0.0`, world
+The plugin API is defined in [`wit/`](../wit/) (`openidea:plugin@1.2.0`, world
 `plugin`).
 
 ## 1. Quick start
@@ -71,7 +72,8 @@ target through rustup if needed), copies the component to the manifest's
 `wasm` path and runs `check`. `check` validates the package exactly as
 _Install Plugin from Disk…_ would — manifest, every contribution, the SVG
 sanitiser, the component — and that the component imports nothing but the
-plugin API and WASI. It prints what the user will be asked to grant.
+plugin API and WASI and links against the IDE's: every function it imports
+exists with the same signature, and it exports the plugin world. It prints what the user will be asked to grant.
 
 `link` adds the folder to `links.json` in the IDE's plugins directory
 (`$OPENIDEA_PLUGINS_DIR`, default `<app-data>/ai.l0ng.openidea/plugins`). Linked
@@ -125,23 +127,23 @@ work), but 0.1 code no longer runs: rebuild it against the 1.0 SDK.
 
 ### Contribution points
 
-| Point           | Declaration                                                                                        | Code needed   |
-| --------------- | -------------------------------------------------------------------------------------------------- | ------------- |
-| `commands`      | `id`, `title`, `category?`, `when?`                                                                | to run them   |
-| `themes`        | `path` (theme JSON), `editor-scheme?`                                                              | no            |
-| `iconThemes`    | `id`, `label`, `path` (icon theme JSON, see §5)                                                    | no            |
-| `languages`     | `path` (`languages/<id>.toml` format, see §6)                                                      | no            |
-| `runDetectors`  | `id`, `name`, `files`, `command`, `args?`, `test?` (§6.2)                                          | no            |
-| `providers`     | `kinds`, `languages` (editor providers, see _Providers_)                                           | yes           |
-| `secrets`       | `name`, `label`, `description?` (see _Network_)                                                    | to use them   |
-| `menus`         | `menu` (`editor.context`, `projectView.context`, `editorTab.context`, `tools`), `command`, `when?` | no            |
-| `keymaps`       | `command`, `key`, `mac?` (`Ctrl+Alt+C`; a chord: `Meta+K Meta+C`)                                  | no            |
-| `statusBar`     | `id`, `text`, `tooltip?`, `command?`, `align?`, `priority?`                                        | no            |
-| `settings`      | `schema` (JSON file), `title?` — one table, see _Settings_                                         | no            |
-| `views`         | `id`, `title`, `icon?`, `location` (`left`, `right`, `bottom`), `web?` (see _Web views_)           | without `web` |
-| `customEditors` | `id`, `title`, `patterns` (file names), `priority` (`default`, `option`), `layout?`, `web?`        | without `web` |
-| `fileIcons`     | `id`, `patterns` (file names), `icon` (SVG), `iconDark?` — whatever icon theme is in use           | no            |
-| `fileTemplates` | `id`, `name`, `extension`, `path` (the new file's content; template variables work) — New menu     | no            |
+| Point           | Declaration                                                                                                                       | Code needed   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `commands`      | `id`, `title`, `category?`, `when?`                                                                                               | to run them   |
+| `themes`        | `path` (theme JSON), `editor-scheme?`                                                                                             | no            |
+| `iconThemes`    | `id`, `label`, `path` (icon theme JSON, see §5)                                                                                   | no            |
+| `languages`     | `path` (`languages/<id>.toml` format, see §6)                                                                                     | no            |
+| `runDetectors`  | `id`, `name`, `files`, `command`, `args?`, `test?` (§6.2)                                                                         | no            |
+| `providers`     | `kinds`, `languages` (editor providers, see _Providers_)                                                                          | yes           |
+| `secrets`       | `name`, `label`, `description?` (see _Network_)                                                                                   | to use them   |
+| `menus`         | `menu` (`editor.context`, `projectView.context`, `editorTab.context`, `tools`), `command`, `when?`                                | no            |
+| `keymaps`       | `command`, `key`, `mac?` (`Ctrl+Alt+C`; a chord: `Meta+K Meta+C`)                                                                 | no            |
+| `statusBar`     | `id`, `text`, `tooltip?`, `command?`, `align?`, `priority?`                                                                       | no            |
+| `settings`      | `schema` (JSON file), `title?` — one table, see _Settings_                                                                        | no            |
+| `views`         | `id`, `title`, `icon?` (an icon name, or an SVG of the package), `location` (`left`, `right`, `bottom`), `web?` (see _Web views_) | without `web` |
+| `customEditors` | `id`, `title`, `patterns` (file names), `priority` (`default`, `option`), `layout?`, `web?`                                       | without `web` |
+| `fileIcons`     | `id`, `patterns` (file names), `icon` (SVG), `iconDark?` — whatever icon theme is in use                                          | no            |
+| `fileTemplates` | `id`, `name`, `extension`, `path` (the new file's content; template variables work) — New menu                                    | no            |
 
 Declared contributions are live as soon as the plugin is enabled — commands
 show in Find Action, menus and the status bar, shortcuts work, themes and icon
@@ -149,6 +151,20 @@ themes can be applied, settings pages are there — **before** any plugin code
 is loaded. Menus, shortcuts and status bar items refer to the plugin's
 declared commands. A plugin shortcut never takes a keystroke the IDE (or the
 user) already uses; the user can rebind it in the keymap editor.
+
+A `when` clause (on commands and menus) can test whether the open project
+contains a file or folder: `when = "workspaceContains:.devcontainer/devcontainer.json"`.
+The path is exact (no globs) and relative to the project root; in a workspace the
+key is true when any of its projects contains the path. It updates when
+files change. An IDE that doesn't know the key treats it as
+false: the plugin still installs and the key reads as false there.
+
+### Background associations
+
+`[[contributes.documentIndexers]]` declares file `extensions` and requires the optional
+`document-indexer` export. It publishes cross-file associations (definitions, references,
+aliases and gutter markers) in background batches, not on the editing path. See
+[Background document indexers](../docs/plugins/indexing.md).
 
 ### Activation
 
@@ -183,7 +199,7 @@ machine. Users can revoke optional capabilities in Settings › Plugins.
 | `project.read`      | low    | `Project::root`, `read_file`, `find_files`, `host::projects`, `publish_diagnostics` |
 | `editor.read`       | low    | `TextEditor::document`, `selections`                                                |
 | `editor.write`      | medium | `TextEditor::apply_edits`                                                           |
-| `vcs.read`          | low    | `Project::vcs_status` (branch, upstream, ahead/behind, changes)                     |
+| `vcs.read`          | low    | `Project::vcs_status` (branch, upstream, ahead/behind, changes), `vcs_remotes`      |
 | `vcs.write`         | medium | `Project::vcs_fetch` (trusted projects only)                                        |
 | `storage`           | low    | `host::storage` (1 MiB per plugin)                                                  |
 | `events`            | low    | file opened/saved, editor focused, repository changed events                        |
@@ -191,7 +207,7 @@ machine. Users can revoke optional capabilities in Settings › Plugins.
 | `process:<program>` | high   | `Project::run_process`, language servers, debug adapters, runs                      |
 | `net:<host>`        | medium | `host::fetch` to that host (`*.example.com`: its subdomains)                        |
 | `secrets`           | medium | `{{secret:<name>}}` in request headers, `host::secret_is_set`                       |
-| `clipboard`         | medium | the clipboard API in the plugin's web views (keyboard copy / paste work without it) |
+| `clipboard`         | medium | `host::copy_to_clipboard` and the clipboard API in the plugin's web views           |
 
 `process:` capabilities are also derived from what the contributions start: a
 language's `language-servers` and `debugger` commands and a run detector's
@@ -299,12 +315,14 @@ then run `openidea-plugin check`.
 | `TextEditor::apply_edits(version, edits)`                                | `editor.text-editor.apply-edits` | One undoable change, only if the document is still at `version` — else `Error::Stale` and nothing changes. `transform_selections` retries once.                                                                      |
 | `Project::root()`, `read_file(path)`                                     | `workspace.project`              | Absolute or project-relative; `..`/symlinks escaping the root are rejected; UTF-8 only, ≤ 16 MiB; unsaved editor contents win.                                                                                       |
 | `host::projects()`                                                       | `workspace.projects`             | Every open project (for scheduled work without a window).                                                                                                                                                            |
-| `Project::vcs_status()`, `vcs_fetch()`                                   | `vcs`                            | Fetch runs git, so only in trusted projects; call it inside a task.                                                                                                                                                  |
+| `Project::vcs_status()`, `vcs_remotes()`, `vcs_fetch()`                  | `vcs`                            | `vcs_remotes` returns `(name, url)` pairs; fetch runs git, so only in trusted projects (call it inside a task).                                                                                                      |
 | `host::subscribe(kind)`                                                  | `events.subscribe`               | For the session, across idle reclaim (an event activates the plugin). Or declare `on-event:<kind>`.                                                                                                                  |
 | `host::begin_task(title, cancellable)` → `Task`                          | `tasks.begin`                    | Shown with the background tasks; `report`, `is_cancelled`; the call may run 60 s instead of 5 s while it is open; dropping it ends it.                                                                               |
 | `host::storage::{get, set, delete, keys}`                                | `storage`                        | Survives restarts; the instance's memory does not. Deleted on uninstall.                                                                                                                                             |
 | `host::set_status_item(id, item)`, `remove_status_item`                  | `ui`                             | `text`, `tooltip`, `command` (one of yours, run on click); at most 8; kept while the plugin is idle.                                                                                                                 |
 | `host::notify(level, title, body)`                                       | `ui.show-notification`           | Balloon in the window the command or events came from (every window otherwise).                                                                                                                                      |
+| `host::copy_to_clipboard(text)`                                          | `ui.copy-to-clipboard`           | Copies `text` to the system clipboard. Needs `clipboard`.                                                                                                                                                            |
+| `host::open_url(url)`                                                    | `ui.open-url`                    | Opens an `http://` or `https://` URL in the user's default browser.                                                                                                                                                  |
 | `host::log(level, msg)`                                                  | `log`                            | IDE log, tagged with the plugin id. `eprintln!` output is logged too and shown when the plugin crashes.                                                                                                              |
 | `Project::find_files(glob, limit)`                                       | `workspace.project.find-files`   | Project-relative glob (`**/*Mapper.xml`); honours `.gitignore`; at most `limit` paths.                                                                                                                               |
 | `host::publish_diagnostics(path, items)`                                 | `diagnostics.publish`            | Replaces this plugin's problems for the file (editor squiggles and the Problems view); an empty list clears them.                                                                                                    |
@@ -313,6 +331,7 @@ then run `openidea-plugin check`.
 | `host::refresh_view(view)`                                               | `views.refresh`                  | The view (or custom editors) render again; call it when the content changed.                                                                                                                                         |
 | `host::post_view_message(view, text)`                                    | `views.post-message`             | To the script of the view's `html` body.                                                                                                                                                                             |
 | `host::open_terminal(title, program, args)`                              | `views.open-terminal`            | A terminal tab in the invoking window running the approved `process:<program>` in the project root: output that keeps coming, interactive sessions.                                                                  |
+| `host::open_location(path, line, column)`                                | `views.open-location`            | Opens a file inside the project in an editor of the invoking window, the caret at `line`/`column` (0-based, UTF-16): a view's links to code. Needs `project.read`.                                                   |
 | `host::setting(key)`, `setting_bool`, `setting_string`, `setting_number` | `settings.get`                   | The user's value (project over global) or the schema's default.                                                                                                                                                      |
 
 `run-command` receives an optional string argument: `executeAction("plugin.<plugin id>.<command id>", "arg")`
@@ -765,7 +784,7 @@ granted, and starts the approved program.
   the package at its root or in its only folder, or a folder's `plugin.toml`;
   a zip without a `plugin.toml` there, such as an IntelliJ plugin, is refused; IntelliJ
   theme plugins are imported instead: _Import IntelliJ Theme from File…_ and _Import Theme
-  from IntelliJ IDE…_, see [`docs/plugins/themes.md`](../docs/plugins/themes.md)). The install
+  from JetBrains IDE…_, see [`docs/plugins/themes.md`](../docs/plugins/themes.md)). The install
   page lists every capability and whether the package is signed by a publisher
   the marketplace trusts; nothing is copied until you accept.
 - **Versions:** installed plugins live in `<app-data>/plugins/<id>/<version>/`
@@ -915,8 +934,8 @@ the API itself follows _Evolving the plugin API_ below.
 
 ## 10. Evolving the plugin API
 
-While the plugin system is a preview the API may still change freely. Once it
-is declared stable wasmtime decides what stays compatible: it resolves interface names
+Released versions are frozen: 1.0.0 shipped with OpenIDEA 0.1.36 and 1.1.0
+with 0.1.37. wasmtime decides what stays compatible: it resolves interface names
 by semver (a component importing `openidea:plugin/x@1.0.0` links against a
 host defining `@1.1.0`, and the host finds its exports the same way), but
 function types must match exactly — a record with another field count, or a
@@ -941,6 +960,8 @@ only grows:
    its `openidea:plugin/*` imports and exports, `PluginEngine::check_component`).
    Installing and `openidea-plugin check` refuse another major or a newer
    minor with a message that says to update the IDE or rebuild with the SDK.
+   They also link the component, so one that imports a function this host
+   lacks under the same version (built from unreleased WIT) is refused too.
 5. **One version number**: the `wit/` package version, `ENGINE_VERSION` and
    `API_VERSION` agree, and the SDK's `wit/` copy is identical to `wit/`.
 6. **1.x calls are synchronous and pass documents whole.** Host calls block
@@ -951,10 +972,16 @@ only grows:
 
 Checked automatically:
 
-- SDK `tests/api_frozen.rs`: `tests/api/<version>/` holds the WIT of each
+- SDK `tests/api_frozen.rs`: `tests/api/released/` holds the WIT of the latest
   released version; every interface, type, function and world import or
-  export in it must still exist unchanged in `wit/` (rules 1–3). Copy `wit/`
-  there when releasing; there is no snapshot before the first release.
+  export in it must still exist unchanged in `wit/` (rules 1–3). Under the
+  released version `wit/` must match it exactly, so additions start with a
+  version bump. Each snapshot passed this check against the one before, so
+  one snapshot covers every release.
+- Releasing: `pnpm release:prepare <version>` makes the release commit's
+  changes; when the `wit/` version changed, it copies `wit/*.wit` over
+  `tests/api/released/`. The release workflow refuses a tag whose `wit/`
+  version differs from the snapshot's.
 - `crates/ide-plugin/tests/api_compat.rs`: the versions agree, the SDK's copy
   matches, the version check (rules 4, 5); a simulated next-minor host (every
   import stubbed at the newer version, plus extra functions and an extra

@@ -6,6 +6,7 @@
 //! `plugins/build.sh <dir>` after changing their source or `wit/`.
 
 use ide_core::error::ErrorKind;
+use ide_core::ipc_path::to_ipc;
 use ide_host::plugins::*;
 use ide_plugin::{EditorContext, HostError, Invocation, Limits};
 use parking_lot::Mutex;
@@ -214,7 +215,7 @@ fn fixture(limits: Limits) -> Fixture {
     std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::write(project.join("src/notes.txt"), "one two three\nfour five\n").unwrap();
     std::fs::write(tmp.path().join("secret.txt"), "top secret").unwrap();
-    let project = project.canonicalize().unwrap();
+    let project = dunce::canonicalize(project).unwrap();
     let events: Events = Arc::default();
     let sink = {
         let events = events.clone();
@@ -359,7 +360,7 @@ fn read_file_is_confined_to_the_project() {
     let inv = Invocation { client: None, workspace_root: None, editor: None };
     let err = f.host.run_command("misbehave", "read", Some("src/notes.txt"), inv).unwrap_err().message;
     assert!(err.contains("no project is open"), "{err}");
-    assert_eq!(f.run("misbehave", "root", None).unwrap().unwrap(), f.project.to_string_lossy());
+    assert_eq!(f.run("misbehave", "root", None).unwrap().unwrap(), to_ipc(&f.project));
     assert_eq!(f.status("misbehave"), PluginStatus::Active);
 }
 
@@ -1740,7 +1741,7 @@ fn official_checkstyle_checks_on_save() {
     let java = f.project.join("src/A.java");
     std::fs::write(&java, "class A {\n\tint x;\n}\n").unwrap();
     let saved = |f: &Fixture| {
-        f.host.post_events(Some("main"), vec![WorkbenchEvent::FileSaved(java.to_string_lossy().into_owned())]);
+        f.host.post_events(Some("main"), vec![WorkbenchEvent::FileSaved(to_ipc(&java))]);
         f.host.flush_events_at(Instant::now() + Duration::from_secs(3));
     };
     saved(&f);
@@ -1793,7 +1794,7 @@ fn official_license_header_reports_fixes_and_scans() {
         f.workspace.diagnostics.lock().get(&("openidea.license-header".into(), path.to_path_buf())).cloned()
     };
 
-    f.host.post_events(Some("main"), vec![WorkbenchEvent::FileOpened(a.to_string_lossy().into_owned())]);
+    f.host.post_events(Some("main"), vec![WorkbenchEvent::FileOpened(to_ipc(&a))]);
     f.host.flush_events_at(Instant::now() + Duration::from_secs(3));
     assert!(f.host.wait_events(Duration::from_secs(20)));
     let d = diagnostics(&a).expect("published on open");
@@ -1818,7 +1819,7 @@ fn official_license_header_reports_fixes_and_scans() {
     f.host.run_command("openidea.license-header", "scan", None, f.inv()).unwrap();
     assert_eq!(diagnostics(&b).map(|d| d.len()), Some(1), "found by the scan");
     std::fs::write(&a, "// Copyright (c) 2026 X\nfn a() {}\n").unwrap();
-    f.host.post_events(Some("main"), vec![WorkbenchEvent::FileSaved(a.to_string_lossy().into_owned())]);
+    f.host.post_events(Some("main"), vec![WorkbenchEvent::FileSaved(to_ipc(&a))]);
     f.host.flush_events_at(Instant::now() + Duration::from_secs(3));
     assert!(f.host.wait_events(Duration::from_secs(20)));
     assert_eq!(diagnostics(&a).map(|d| d.len()), Some(0), "cleared once the header is there");
@@ -2043,6 +2044,139 @@ fn pinned_programs_fill_views_and_open_terminals() {
     let (_, title, _, args) = open("build").expect("a terminal");
     assert_eq!(title, "tail build");
     assert_eq!(args, ["follow", "build", "--lines=5"]);
+}
+
+#[test]
+fn views_open_project_files_at_a_line() {
+    let f = fixture(Limits::default());
+    let info = f.install(&sample("jobs"));
+    assert_eq!(info.status, PluginStatus::Inactive, "{:?}", info.error);
+    std::fs::write(f.project.join("jobs.log"), "build\ndeploy\nfailed\n").unwrap();
+    let press = |button: &str| {
+        f.take_events();
+        let result = f.host.view_event("jobs", "jobs", ide_plugin::ViewEvent::Button { id: button.into() }, f.inv());
+        let opened = f.take_events().into_iter().find_map(|(client, e)| match e {
+            PluginEvent::OpenLocation { path, line, column, .. } => Some((client, path.0, line, column)),
+            _ => None,
+        });
+        (result, opened)
+    };
+
+    let (result, opened) = press("log");
+    assert!(result.is_ok(), "{result:?}");
+    let (client, path, line, column) = opened.expect("a location");
+    assert_eq!((client.as_deref(), line, column), (Some("main"), 2, 4));
+    assert_eq!(path.canonicalize().unwrap(), f.project.join("jobs.log").canonicalize().unwrap());
+
+    let (result, opened) = press("outside");
+    assert!(result.is_err(), "a path outside the project is refused");
+    assert!(opened.is_none());
+
+    f.host.set_capability("jobs", "project.read", false).unwrap();
+    let (result, opened) = press("log");
+    assert!(result.unwrap_err().message.contains("project.read"), "needs project.read");
+    assert!(opened.is_none());
+}
+
+#[test]
+fn vcs_remotes_clipboard_and_open_url() {
+    let f = fixture(Limits::default());
+    let info = f.install(&sample("jobs"));
+    assert_eq!(info.status, PluginStatus::Inactive, "{:?}", info.error);
+
+    // Not a git repository yet: `vcs-remotes` returns an empty list.
+    assert_eq!(f.run("jobs", "remotes", None).unwrap().as_deref(), Some(""));
+
+    git(&f.project, &["init", "-b", "main"]);
+    git(&f.project, &["remote", "add", "origin", "git@github.com:l0ng-ai/openidea.git"]);
+    git(&f.project, &["remote", "add", "upstream", "https://github.com/org/openidea"]);
+    assert_eq!(
+        f.run("jobs", "remotes", None).unwrap().as_deref(),
+        Some("origin=git@github.com:l0ng-ai/openidea.git\nupstream=https://github.com/org/openidea")
+    );
+
+    f.host.set_capability("jobs", "vcs.read", false).unwrap();
+    assert!(f.run("jobs", "remotes", None).unwrap_err().contains("vcs.read"), "needs vcs.read");
+
+    // `ui.copy-to-clipboard` requires `clipboard` and addresses the calling window.
+    f.take_events();
+    f.run("jobs", "copy", Some("https://github.com/l0ng-ai/openidea")).unwrap();
+    let copied = f.take_events().into_iter().find_map(|(client, e)| match e {
+        PluginEvent::CopyToClipboard { plugin_id, text } => Some((client, plugin_id, text)),
+        _ => None,
+    });
+    assert_eq!(copied, Some((Some("main".into()), "jobs".into(), "https://github.com/l0ng-ai/openidea".into())));
+
+    f.host.set_capability("jobs", "clipboard", false).unwrap();
+    f.take_events();
+    assert!(f.run("jobs", "copy", Some("secret")).unwrap_err().contains("clipboard"), "needs clipboard");
+    assert!(f.take_events().iter().all(|(_, e)| !matches!(e, PluginEvent::CopyToClipboard { .. })));
+
+    // `ui.open-url` accepts http(s) URLs and rejects other schemes.
+    f.take_events();
+    f.run("jobs", "open-url", Some("https://github.com/l0ng-ai/openidea/blob/main/README.md#L1")).unwrap();
+    let opened = f.take_events().into_iter().find_map(|(client, e)| match e {
+        PluginEvent::OpenUrl { plugin_id, url } => Some((client, plugin_id, url)),
+        _ => None,
+    });
+    assert_eq!(
+        opened,
+        Some(
+            (Some("main".into()), "jobs".into(), "https://github.com/l0ng-ai/openidea/blob/main/README.md#L1".into(),)
+        )
+    );
+
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", ""] {
+        f.take_events();
+        let err = f.run("jobs", "open-url", Some(bad)).unwrap_err();
+        assert!(err.contains("http:// or https://"), "{bad:?}: {err}");
+        assert!(f.take_events().iter().all(|(_, e)| !matches!(e, PluginEvent::OpenUrl { .. })));
+    }
+}
+
+#[test]
+fn views_can_use_an_svg_icon_from_the_package() {
+    let f = fixture(Limits::default());
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#08f"/></svg>"##;
+    let package = |dir: &str, icon: &str, svg: &str| {
+        let pkg = tmp.path().join(dir);
+        for (path, text) in [("panel/index.html", "<p>panel</p>"), ("icons/panel.svg", svg)] {
+            std::fs::create_dir_all(pkg.join(path).parent().unwrap()).unwrap();
+            std::fs::write(pkg.join(path), text).unwrap();
+        }
+        std::fs::write(
+            pkg.join("plugin.toml"),
+            format!(
+                r#"id = "panel-icon"
+name = "Panel Icon"
+version = "1.0.0"
+engines.openidea = "^1.0"
+
+[[contributes.views]]
+id = "panel"
+title = "Panel"
+icon = "{icon}"
+location = "bottom"
+web = "panel/index.html"
+"#
+            ),
+        )
+        .unwrap();
+        pkg
+    };
+
+    assert!(f.host.install_from_dir(&package("missing", "icons/missing.svg", clean), &Consent::all()).is_err());
+    let scripted = clean.replace("<rect", "<script>alert(1)</script><rect");
+    assert!(f.host.install_from_dir(&package("scripted", "icons/panel.svg", &scripted), &Consent::all()).is_err());
+
+    let info = f.install(&package("clean", "icons/panel.svg", clean));
+    assert!(info.error.is_none(), "{:?}", info.error);
+    let view = f.host.ui_items("views").into_iter().find(|v| v.key == "panel").expect("the view");
+    assert_eq!(view.decl["icon"].as_str(), Some("icons/panel.svg"));
+    let assets = f.host.assets("panel-icon", "viewIcon/panel").unwrap();
+    assert_eq!(assets.len(), 1);
+    assert!(assets[0].1.contains("<rect"));
 }
 
 /// A plugin with web views and no code: its pages and their files are

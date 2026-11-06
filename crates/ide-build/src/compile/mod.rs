@@ -174,7 +174,9 @@ fn detect_dir(dir: &Path, model: &BuildModel, root: &Path) -> Option<BuildSystem
     let rel = rel_str(root, dir);
     if model.maven.as_ref().is_some_and(|m| m.projects.iter().any(|p| p.dir == rel)) || has(dir, &["pom.xml"]) {
         Some(BuildSystem::Maven)
-    } else if has(dir, &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]) {
+    } else if model.gradle_for_module(root, dir).is_some()
+        || has(dir, &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"])
+    {
         Some(BuildSystem::Gradle)
     } else if has(dir, &["Cargo.toml"]) {
         Some(BuildSystem::Cargo)
@@ -191,16 +193,13 @@ fn detect_dir(dir: &Path, model: &BuildModel, root: &Path) -> Option<BuildSystem
     }
 }
 
-/// `root/rel`, without a trailing separator for the root itself.
-/// `root` / `rel`, joined per `/`-separated component: on Windows a single join of
-/// `a/b` keeps the `/`, and such a path does not compare equal to the same directory
-/// as other tools (JDT LS) spell it.
+/// Resolves a workspace-relative or absolute directory with native path separators.
 fn subdir(root: &Path, rel: &str) -> PathBuf {
-    rel.split('/').filter(|part| !part.is_empty()).fold(root.to_path_buf(), |path, part| path.join(part))
+    root.join(rel).components().collect()
 }
 
 fn rel_str(root: &Path, dir: &Path) -> String {
-    dir.strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default()
+    dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().replace('\\', "/")
 }
 
 /// Directories from `file`'s folder up to `root` (inclusive).
@@ -221,7 +220,14 @@ pub fn plan(
     let project_name = root.file_name().map_or_else(|| "project".to_owned(), |n| n.to_string_lossy().into_owned());
     let module_dir = match file {
         Some(f) => {
-            let dir = ancestors_within(root, f)
+            let scope = model
+                .gradle
+                .iter()
+                .flat_map(|g| std::iter::once(root.join(&g.dir)).chain(g.projects.iter().map(|p| root.join(&p.dir))))
+                .filter(|dir| f.starts_with(dir))
+                .max_by_key(|dir| dir.components().count())
+                .unwrap_or_else(|| root.to_path_buf());
+            let dir = ancestors_within(&scope, f)
                 .find(|d| detect_dir(d, model, root).is_some())
                 .ok_or_else(|| IdeError::not_found(format!("{} is not in a module", f.display())))?;
             Some(dir.to_path_buf())
@@ -231,7 +237,7 @@ pub fn plan(
     let dir = module_dir.clone().unwrap_or_else(|| root.to_path_buf());
     // A folder of sibling projects has no build file itself; its Maven projects are built one by one.
     let system = detect_dir(&dir, model, root)
-        .or_else(|| if model.gradle.is_some() { Some(BuildSystem::Gradle) } else { None })
+        .or((!model.gradle.is_empty()).then_some(BuildSystem::Gradle))
         .or_else(|| model.maven.as_ref().filter(|m| !m.projects.is_empty()).map(|_| BuildSystem::Maven))
         .ok_or_else(|| {
             IdeError::not_found("no supported build system (.NET, Maven, Gradle, Cargo, Go, TypeScript, CMake) found")
@@ -258,7 +264,12 @@ pub fn plan(
     Ok(BuildPlan { system, title, steps })
 }
 
-fn maven_steps(root: &Path, model: &BuildModel, kind: BuildKind, module: Option<&Path>) -> IdeResult<Vec<BuildStep>> {
+pub(super) fn maven_steps(
+    root: &Path,
+    model: &BuildModel,
+    kind: BuildKind,
+    module: Option<&Path>,
+) -> IdeResult<Vec<BuildStep>> {
     let fallback;
     let m = match &model.maven {
         Some(m) => m,
@@ -300,14 +311,16 @@ fn maven_steps(root: &Path, model: &BuildModel, kind: BuildKind, module: Option<
 }
 
 fn gradle_steps(root: &Path, model: &BuildModel, kind: BuildKind, module: Option<&Path>) -> IdeResult<Vec<BuildStep>> {
-    let fallback;
-    let g = match &model.gradle {
-        Some(g) => g,
-        None => {
-            fallback = crate::gradle::load(root).ok_or_else(|| IdeError::not_found("no Gradle build found"))?;
-            &fallback
-        }
-    };
+    if module.is_none() && !model.gradle.is_empty() {
+        return Ok(model.gradle.iter().flat_map(|g| gradle_step(root, g, kind, None)).collect());
+    }
+    let g = module
+        .and_then(|m| model.gradle_for_module(root, m))
+        .ok_or_else(|| IdeError::not_found("module does not belong to a linked Gradle build"))?;
+    Ok(gradle_step(root, g, kind, module))
+}
+
+fn gradle_step(root: &Path, g: &crate::GradleModel, kind: BuildKind, module: Option<&Path>) -> Vec<BuildStep> {
     let prefix = module
         .and_then(|m| {
             let rel = rel_str(root, m);
@@ -326,7 +339,7 @@ fn gradle_steps(root: &Path, model: &BuildModel, kind: BuildKind, module: Option
     let mut s = BuildStep::new(&g.command, &["--console=plain"], &subdir(root, &g.dir), Format::Gradle);
     s.args.extend(tasks);
     s.env = g.env.clone();
-    Ok(vec![s])
+    vec![s]
 }
 
 fn cargo_steps(dir: &Path, kind: BuildKind) -> Vec<BuildStep> {
@@ -405,18 +418,7 @@ fn go_steps(dir: &Path, kind: BuildKind) -> Vec<BuildStep> {
 
 /// `pnpm` / `yarn` / `bun` / `npm`, from the lock file next to `package.json` or above it.
 fn package_manager(dir: &Path) -> &'static str {
-    for d in dir.ancestors() {
-        if d.join("pnpm-lock.yaml").is_file() {
-            return "pnpm";
-        } else if d.join("yarn.lock").is_file() {
-            return "yarn";
-        } else if d.join("bun.lockb").is_file() || d.join("bun.lock").is_file() {
-            return "bun";
-        } else if d.join("package-lock.json").is_file() {
-            return "npm";
-        }
-    }
-    "npm"
+    ide_core::project_roots::package_manager(dir)
 }
 
 fn has_build_script(dir: &Path) -> bool {
@@ -974,6 +976,80 @@ fn launch_class_dirs(system: BuildSystem, module: &Path, test: bool) -> Vec<Path
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn independent_gradle_builds_keep_their_launchers_and_task_paths() {
+        let wrapper = if cfg!(windows) { "gradlew.bat" } else { "gradlew" };
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in ["a", "b"] {
+            std::fs::create_dir_all(root.join(dir).join("app/src/main/java")).unwrap();
+            std::fs::write(root.join(dir).join("settings.gradle"), "include 'app'").unwrap();
+            std::fs::write(root.join(dir).join("app/build.gradle"), "plugins { id 'java' }").unwrap();
+            std::fs::write(root.join(dir).join(wrapper), "").unwrap();
+        }
+        let settings = ide_core::settings::GradleSettings {
+            linked_projects: Some(vec!["a".into(), "b".into()]),
+            ..Default::default()
+        };
+        let mut model = crate::load_linked(root, &root.join("cache"), None, &Default::default(), &settings);
+        model.gradle[0].env.insert("JAVA_HOME".into(), "/jdk-a".into());
+        model.gradle[1].env.insert("JAVA_HOME".into(), "/jdk-b".into());
+        let all = super::plan(root, &model, super::BuildKind::Build, None, None).unwrap();
+        assert_eq!(all.steps.len(), 2);
+        assert_eq!(all.steps[0].cwd, root.join("a"));
+        assert_eq!(all.steps[1].cwd, root.join("b"));
+        let module = super::plan(root, &model, super::BuildKind::Rebuild, Some(&root.join("b/app")), None).unwrap();
+        assert_eq!(module.steps.len(), 1);
+        assert_eq!(module.steps[0].program, root.join("b").join(wrapper).to_string_lossy());
+        assert_eq!(module.steps[0].cwd, root.join("b"));
+        assert_eq!(module.steps[0].env["JAVA_HOME"], "/jdk-b");
+        assert_eq!(module.steps[0].args, ["--console=plain", ":app:clean", ":app:classes", ":app:testClasses"]);
+        // A directly linked build owns its module even when another composite reports it too.
+        let direct = model.gradle[1].projects[0].clone();
+        model.gradle[0].projects.push(direct);
+        assert_eq!(model.gradle_for_module(root, &root.join("b")).unwrap().dir, "b");
+        let mut nested = model.gradle[1].projects[1].clone();
+        nested.path = ":b:app".into();
+        model.gradle[0].projects.push(nested);
+        let nested = super::plan(root, &model, super::BuildKind::Build, Some(&root.join("b/app")), None).unwrap();
+        assert_eq!(nested.steps[0].program, root.join("b").join(wrapper).to_string_lossy());
+        assert_eq!(nested.steps[0].args, ["--console=plain", ":app:classes", ":app:testClasses"]);
+        model.gradle.clear();
+        assert!(super::plan(root, &model, super::BuildKind::Build, Some(&root.join("b/app")), None).is_err());
+    }
+
+    #[test]
+    fn absolute_linked_roots_build_the_project_and_external_source_module() {
+        let wrapper = if cfg!(windows) { "gradlew.bat" } else { "gradlew" };
+        let temp = tempfile::tempdir().unwrap();
+        let base = dunce::canonicalize(temp.path()).unwrap();
+        let root = base.join("workspace");
+        let external = base.join("external");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir_all(external.join("app/src/main/java")).unwrap();
+        std::fs::write(external.join("settings.gradle"), "include 'app'").unwrap();
+        let source = external.join("app/src/main/java/App.java");
+        std::fs::write(&source, "class App {}").unwrap();
+        std::fs::write(external.join(wrapper), "").unwrap();
+        let settings = ide_core::settings::GradleSettings {
+            linked_projects: Some(vec![external.to_string_lossy().into_owned()]),
+            ..Default::default()
+        };
+        let mut model = crate::load_linked(&root, &base.join("cache"), None, &Default::default(), &settings);
+        model.gradle[0].env.insert("JAVA_HOME".into(), "/external-jdk".into());
+        let all = super::plan(&root, &model, super::BuildKind::Build, None, None).unwrap();
+        assert_eq!(all.steps[0].cwd, external);
+        // Linked roots are saved with forward slashes, so on Windows the program mixes separators.
+        assert_eq!(std::path::Path::new(&all.steps[0].program), external.join(wrapper));
+        let module = super::plan(&root, &model, super::BuildKind::Rebuild, Some(&source), None).unwrap();
+        assert_eq!(module.steps[0].cwd, external);
+        assert_eq!(module.steps[0].env["JAVA_HOME"], "/external-jdk");
+        assert_eq!(module.steps[0].args, ["--console=plain", ":app:clean", ":app:classes", ":app:testClasses"]);
+        let other = base.join("unlinked");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("build.gradle"), "").unwrap();
+        assert!(super::plan(&root, &model, super::BuildKind::Build, Some(&other), None).is_err());
+    }
     use super::*;
 
     /// Launch outputs use the platform separator throughout, so they compare equal to

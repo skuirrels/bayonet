@@ -473,7 +473,7 @@ pub async fn plugin_web_read_file(path: PathBuf) -> IdeResult<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
-/// The marketplace's plugins: read again when `refresh`, else the last index read.
+/// The marketplace's plugins: read again when `refresh` or when none was read yet, else the last index read.
 #[tauri::command]
 #[specta::specta]
 pub async fn plugin_market(
@@ -481,7 +481,7 @@ pub async fn plugin_market(
     refresh: bool,
 ) -> IdeResult<Vec<ide_host::plugins::MarketPlugin>> {
     let host = state.plugins.clone();
-    blocking(move || if refresh { host.refresh_market() } else { Ok(host.market_plugins()) }).await
+    blocking(move || host.market_listing(refresh)).await
 }
 
 #[tauri::command]
@@ -632,4 +632,68 @@ pub fn plugin_set_theme(
 #[specta::specta]
 pub fn plugin_set_theme_frame(state: State<'_, AppState>, color: Option<String>) -> IdeResult<()> {
     state.plugins.set_theme_frame(color.as_deref())
+}
+
+use ide_host::plugins::index_ops::NavigationFiles;
+
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_navigation_files(window: Window, state: State<'_, AppState>) -> IdeResult<NavigationFiles> {
+    ide_host::plugins::index_ops::plugin_navigation_files(&state.host, state.plugins.clone(), window.label()).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn plugin_navigation_invalidate(
+    window: Window,
+    state: State<'_, AppState>,
+    paths: Option<Vec<PathBuf>>,
+) -> IdeResult<()> {
+    ide_host::plugins::index_ops::plugin_navigation_invalidate(
+        &state.host,
+        state.plugins.clone(),
+        window.label(),
+        paths,
+    )
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_navigation_index(
+    window: Window,
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    request: ide_core::RequestId,
+) -> IdeResult<()> {
+    ide_host::plugins::index_ops::plugin_navigation_index(
+        &state.host,
+        state.plugins.clone(),
+        window.label(),
+        paths,
+        request,
+    )
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_navigation_goto(
+    window: Window,
+    state: State<'_, AppState>,
+    doc: ide_core::DocId,
+    pos: ide_core::Pos,
+) -> IdeResult<Option<ide_plugin::indexing::NavigationResult>> {
+    ide_host::plugins::index_ops::plugin_navigation_goto(&state.host, state.plugins.clone(), window.label(), doc, pos)
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_navigation_markers(
+    window: Window,
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+) -> IdeResult<Vec<ide_plugin::indexing::FileMarkers>> {
+    ide_host::plugins::index_ops::plugin_navigation_markers(&state.host, state.plugins.clone(), window.label(), paths)
+        .await
 }

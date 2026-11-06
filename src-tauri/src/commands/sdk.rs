@@ -20,8 +20,41 @@ pub async fn sdk_detect(window: Window, state: State<'_, AppState>, kind: SdkKin
 /// The interpreter the project uses: the configured one, else its virtualenv.
 #[tauri::command]
 #[specta::specta]
-pub fn sdk_python_effective(window: Window, state: State<'_, AppState>) -> IdeResult<Option<ide_core::IpcPath>> {
-    ide_host::ops::sdk::sdk_python_effective(&state.host, window.label())
+pub fn sdk_python_effective(
+    window: Window,
+    state: State<'_, AppState>,
+    near: Option<PathBuf>,
+) -> IdeResult<Option<ide_core::IpcPath>> {
+    ide_host::ops::sdk::sdk_python_effective(&state.host, window.label(), near)
+}
+
+/// The PHP interpreter chosen in Settings › Languages & Frameworks › PHP; `None`: the `php` on `PATH`.
+#[tauri::command]
+#[specta::specta]
+pub fn sdk_php_effective(window: Window, state: State<'_, AppState>) -> IdeResult<Option<ide_core::IpcPath>> {
+    ide_host::ops::sdk::sdk_php_effective(&state.host, window.label())
+}
+
+/// The PHP language level of the project `path` belongs to: the effective one and Auto's.
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_php_language_level(
+    window: Window,
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> IdeResult<ide_host::ops::sdk::PhpLanguageLevels> {
+    ide_host::ops::sdk::sdk_php_language_level(&state.host, window.label(), path).await
+}
+
+/// The Composer project `path` belongs to, when its dependencies need `composer install`.
+#[tauri::command]
+#[specta::specta]
+pub async fn sdk_php_composer_install(
+    window: Window,
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> IdeResult<Option<ide_host::ops::sdk::ComposerInstallState>> {
+    ide_host::ops::sdk::sdk_php_composer_install(&state.host, window.label(), path).await
 }
 
 /// SDK / library source folders shown under "External Libraries" in the Project view,

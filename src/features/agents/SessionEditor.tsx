@@ -1,12 +1,23 @@
 /** An agent task as an editor tab: the conversation, a composer and the task's changed files. */
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  Fragment,
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import clsx from "clsx";
 import { useShallow } from "zustand/react/shallow";
 import type { AgentChange, AgentEntry, AgentImage, AgentLimit, AgentRetry, AgentTask, AgentUsage } from "@/bindings";
 import { executeAction } from "@/platform/actions";
 import { call, commands, onIdeEvent } from "@/platform/ipc";
 import { basename, relativeDir, useProject } from "@/platform/project";
-import { editorService, notifications, type EditorInput } from "@/workbench/contributions";
+import { editorService, notifications, useEditorShown, type EditorInput } from "@/workbench/contributions";
 import {
   Button,
   EmptyState,
@@ -92,16 +103,21 @@ function TaskSession({ id, docked }: { id: string; docked: boolean }) {
     useShallow((s) => path.map((sub, i) => findSubagent(s.entries.get(entriesKey(id, path[i - 1] ?? null)), sub))),
   );
   useEffect(() => {
-    void loadEntries(id).catch(() => undefined);
+    // Loaded entries are kept current by the task's events: reopening the tab needn't fetch them again.
+    if (!useAgents.getState().entries.has(id)) void loadEntries(id).catch(() => undefined);
     void refreshChanges(id);
   }, [id]);
+  // A kept-alive tab stays mounted behind the shown one: it isn't read there, nor searched.
+  const shown = useEditorShown();
   useEffect(() => {
-    if (!docked || !changesOpen) return markVisible(id);
-  }, [id, docked, changesOpen]);
+    if (shown && (!docked || !changesOpen)) return markVisible(id);
+  }, [id, docked, changesOpen, shown]);
   useEffect(() => {
-    if (view) void loadEntries(id, view).catch(() => undefined);
+    if (view && !useAgents.getState().entries.has(entriesKey(id, view))) {
+      void loadEntries(id, view).catch(() => undefined);
+    }
   }, [id, view]);
-  const openSubagent = (sub: string) => setPath((p) => [...p, sub]);
+  const openSubagent = useCallback((sub: string) => setPath((p) => [...p, sub]), []);
   const [finding, setFinding] = useState(false);
   const [findFocus, setFindFocus] = useState(0);
   const [session] = useState<FocusedSession>(() => ({
@@ -145,7 +161,7 @@ function TaskSession({ id, docked }: { id: string; docked: boolean }) {
           entries={viewEntries ?? null}
           subagent={view ? (cards.at(-1) ?? null) : null}
           onOpenSubagent={openSubagent}
-          finding={finding}
+          finding={finding && shown}
           findFocus={findFocus}
           onCloseFind={() => setFinding(false)}
         />
@@ -412,6 +428,9 @@ interface StreamProps {
   onCloseFind: () => void;
 }
 
+/** Entries rendered at a time when a conversation opens at its end. */
+const ENTRY_BATCH = 40;
+
 function Stream({ task, entries, subagent, onOpenSubagent, finding, findFocus, onCloseFind }: StreamProps) {
   const ref = useRef<HTMLDivElement>(null);
   useSelectionBoundary(ref);
@@ -419,9 +438,18 @@ function Stream({ task, entries, subagent, onOpenSubagent, finding, findFocus, o
   const positions = useAgents.getState().scrollPositions;
   const position = useRef(positions.get(key) ?? { top: 0, stick: true });
   const restored = useRef(false);
+  // Opened at the end, the last entries come first and the earlier ones follow in batches:
+  // reopening a long conversation paints at once. A kept offset needs them all.
+  const [shown, setShown] = useState(() => (positions.get(key)?.stick === false ? Infinity : ENTRY_BATCH));
+  const start = finding || !entries ? 0 : Math.max(0, entries.length - shown);
+  useEffect(() => {
+    if (start > 0) startTransition(() => setShown((n) => n + ENTRY_BATCH));
+  }, [start]);
+  // Hidden behind another tab, it has no layout to scroll; shown again, it follows the end again.
+  const visible = useEditorShown();
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || entries === null) return;
+    if (!el || entries === null || !visible) return;
     if (position.current.stick) el.scrollTop = el.scrollHeight;
     else if (!restored.current) el.scrollTop = position.current.top;
     restored.current = true;
@@ -470,16 +498,18 @@ function Stream({ task, entries, subagent, onOpenSubagent, finding, findFocus, o
         {entries === null ? (
           <Spinner />
         ) : (
-          entries.map((entry, i) => (
-            <Entry
-              key={i}
-              task={task}
-              entry={entry}
-              turn={turns?.get(i) ?? null}
-              turnCount={turns?.size ?? 0}
-              onOpenSubagent={onOpenSubagent}
-            />
-          ))
+          entries
+            .slice(start)
+            .map((entry, i) => (
+              <Entry
+                key={start + i}
+                task={task}
+                entry={entry}
+                turn={turns?.get(start + i) ?? null}
+                turnCount={turns?.size ?? 0}
+                onOpenSubagent={onOpenSubagent}
+              />
+            ))
         )}
         {subagent && subagentWorking(subagent.status) && (
           <div className={styles.working}>
@@ -702,7 +732,8 @@ const TOOL_ICONS: Record<string, string> = {
   think: "todo",
 };
 
-function Entry({
+/** Memoized: the earlier entries rendered behind a reopened conversation leave the rest alone. */
+const Entry = memo(function Entry({
   task,
   entry,
   turn,
@@ -723,12 +754,14 @@ function Entry({
       return <Markdown text={entry.text} cwd={task.cwd} />;
     case "thought":
       return (
-        <details className={styles.thought}>
-          <summary>
-            <T>Thinking</T>
-          </summary>
-          <div className={styles.thoughtText}>{entry.text}</div>
-        </details>
+        <div>
+          <details className={styles.thought}>
+            <summary>
+              <T>Thinking</T>
+            </summary>
+            <div className={styles.thoughtText}>{entry.text}</div>
+          </details>
+        </div>
       );
     case "tool":
       return <ToolEntry task={task} entry={entry} />;
@@ -777,7 +810,7 @@ function Entry({
         </div>
       );
   }
-}
+});
 
 function UserMessage({
   task,
@@ -1025,10 +1058,12 @@ function ToolEntry({ task, entry }: { task: AgentTask; entry: Extract<AgentEntry
   );
   if (!entry.output) return <div className={styles.tool}>{head}</div>;
   return (
-    <details className={styles.toolDetails}>
-      <summary className={styles.tool}>{head}</summary>
-      <pre className={styles.output}>{entry.output}</pre>
-    </details>
+    <div>
+      <details className={styles.toolDetails}>
+        <summary className={styles.tool}>{head}</summary>
+        <pre className={styles.output}>{entry.output}</pre>
+      </details>
+    </div>
   );
 }
 
@@ -1189,11 +1224,13 @@ function PermissionLine({ task, entry }: { task: AgentTask; entry: PermissionEnt
   return (
     <div className={styles.permissionLine}>
       <Icon name={!entry.chosen ? "warning" : entry.chosen === "Cancelled" ? "minus" : "check"} size={13} />
-      <span className={styles.permissionTitle} title={shortTitle(task, entry.title)}>
-        {shortTitle(task, entry.title)}
-      </span>
-      <span className={styles.muted}>{entry.chosen ?? <T>Waiting for your answer</T>}</span>
-      {!entry.chosen && <PermissionAnswers task={task} entry={entry} className={styles.permissionAnswers} />}
+      <div className={styles.permissionBody}>
+        <span className={styles.permissionTitle} title={shortTitle(task, entry.title)}>
+          {shortTitle(task, entry.title)}
+        </span>
+        <span className={styles.muted}>{entry.chosen ?? <T>Waiting for your answer</T>}</span>
+        {!entry.chosen && <PermissionAnswers task={task} entry={entry} className={styles.permissionAnswers} />}
+      </div>
     </div>
   );
 }
@@ -1271,11 +1308,7 @@ function SessionComposer({
         toolbar={<ConfigPickers config={task.config} onChange={setOption} />}
         actions={
           <>
-            {busy && (
-              <Button size="small" icon="stop" onClick={() => void cancelTask(task.id)}>
-                Stop
-              </Button>
-            )}
+            {busy && <IconButton icon="stop" title="Stop" size="small" onClick={() => void cancelTask(task.id)} />}
             <SubmitButton
               label={busy ? "Queue" : "Send"}
               pending={sending}

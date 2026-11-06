@@ -33,6 +33,9 @@ import { defineBuiltinUiPoints } from "./points";
 import { startViewUi } from "./uiPoints";
 import { importIntellijTheme, showInstalledIntellijThemes } from "./intellijImport";
 import { IntellijThemesDialogHost } from "./IntellijThemesDialog";
+import { startWorkspaceContains } from "./workspaceContains";
+import { startIndexedMarkers } from "./indexedMarkers";
+import { startPluginNavigation } from "./navigation";
 import { installFromDisk, refreshPlugins, reloadPlugin, SETTINGS_PAGE_ID, updateAllPlugins, usePlugins } from "./store";
 
 function registerPluginsPage(): () => void {
@@ -113,10 +116,19 @@ export function activate(): () => void {
       },
       {
         id: "plugins.importInstalledIntellijTheme",
-        title: "Import Theme from IntelliJ IDE…",
+        title: "Import Theme from JetBrains IDE…",
         category: "Plugins",
         icon: "plugin",
-        keywords: ["intellij", "jetbrains", "theme", "color scheme", "migrate"],
+        keywords: [
+          "intellij",
+          "jetbrains",
+          "pycharm",
+          "webstorm",
+          "android studio",
+          "theme",
+          "color scheme",
+          "migrate",
+        ],
         when: "projectOpen",
         run: () => showInstalledIntellijThemes(),
       },
@@ -133,8 +145,11 @@ export function activate(): () => void {
       },
     ]),
     startPluginBridge(),
+    startPluginNavigation(),
+    startIndexedMarkers(),
     // Plugin custom editors (tab kind) and context menu entries.
     startViewUi((input) => void editorService().openInput(input)),
+    startWorkspaceContains(),
     // Gutter icons from plugins' `line-markers` providers (next to the LSP ones).
     registerEditorContribution({ id: "plugins.lineMarkers", order: 57, extensions: pluginLineMarkerGutter }),
     // Dev plugins (`<project>/.openidea/plugins`) depend on the open project.

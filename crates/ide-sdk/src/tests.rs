@@ -1,6 +1,6 @@
 use crate::apply::{
     apply_to_run_configs, configure_server, jdtls_jdk, maven_command, maven_options, project_jdk, python_interpreter,
-    terminal_activation, tsdk, without_derived,
+    ruff_configuration, terminal_activation, tsdk, without_derived,
 };
 use crate::python::parse_pip_list;
 use crate::{bin_dir, exe, venv_of};
@@ -76,6 +76,23 @@ fn project_venv_is_the_default_interpreter() {
     let mut s = Settings::default();
     s.languages.python.interpreter = "/opt/py/bin/python3".into();
     assert_eq!(python_interpreter(tmp.path(), &s).unwrap(), Path::new("/opt/py/bin/python3"));
+}
+
+#[test]
+fn an_interpreter_outside_detection_is_named_like_a_detected_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("shop");
+    let member = fake_venv(&root.join("backend"), ".venv");
+    let sdk = crate::python_interpreter_sdk(&member, Some(&root)).unwrap();
+    assert_eq!(
+        (sdk.name.as_str(), sdk.version.as_deref(), sdk.source.as_str()),
+        ("Python 3.12 (backend)", Some("3.12.1"), "venv")
+    );
+    let own = fake_venv(&root, ".venv");
+    assert_eq!(crate::python_interpreter_sdk(&own, Some(&root)).unwrap().name, "Python 3.12 (shop)");
+    // Outside the project the folder name says which one it is.
+    let elsewhere = fake_venv(&tmp.path().join("other"), ".venv");
+    assert_eq!(crate::python_interpreter_sdk(&elsewhere, Some(&root)).unwrap().name, "Python 3.12 (.venv)");
 }
 
 #[test]
@@ -466,6 +483,9 @@ fn language_server_settings_disable_add_and_override() {
         (ruff.command.as_str(), ruff.args.as_slice()),
         ("/opt/ruff", &["server".to_string(), "--preview".to_string()][..])
     );
+    s.languages.ruff.configuration_directory = "ruff-config".into();
+    let defined = [server("ruff")];
+    assert!(!language_servers("python", &defined, &s)[0].require_root_marker);
 
     s.language_servers.insert(
         "rust-analyzer".into(),
@@ -506,6 +526,38 @@ fn language_server_settings_disable_add_and_override() {
     let parsed: LanguageServerSettings =
         serde_json::from_value(json!({ "features": ["code-action"], "codeActionKinds": ["refactor"] })).unwrap();
     assert_eq!(parsed.code_action_kinds, Some(vec!["refactor".to_string()]));
+}
+
+#[test]
+fn ruff_configuration_directory_resolves_files_and_validates_pyproject() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let dir = root.join("shared ruff");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(ruff_configuration(root, "").unwrap(), None);
+    assert!(ruff_configuration(root, &dir.to_string_lossy()).unwrap_err().message.contains("has no"));
+
+    let ruff = dir.join("ruff.toml");
+    std::fs::write(&ruff, "line-length = 100\n").unwrap();
+    assert_eq!(ruff_configuration(root, &dir.to_string_lossy()).unwrap(), Some(ruff.clone()));
+    assert_eq!(ruff_configuration(root, &ruff.to_string_lossy()).unwrap(), Some(ruff));
+
+    std::fs::remove_file(dir.join("ruff.toml")).unwrap();
+    let pyproject = dir.join("pyproject.toml");
+    std::fs::write(&pyproject, "[project]\nname = \"x\"\n").unwrap();
+    assert!(ruff_configuration(root, &dir.to_string_lossy()).unwrap_err().message.contains("has no"));
+    std::fs::write(&pyproject, "[tool.ruff]\nline-length = 100\n").unwrap();
+    assert_eq!(ruff_configuration(root, &dir.to_string_lossy()).unwrap(), Some(pyproject.clone()));
+
+    let mut settings = Settings::default();
+    settings.languages.ruff.configuration_directory = dir.to_string_lossy().into_owned();
+    let mut cfg = server("ruff");
+    configure_server(&mut cfg, root, root, &settings);
+    let configured = dir.join("pyproject.toml").to_string_lossy().into_owned();
+    assert_eq!(
+        cfg.settings.as_ref().and_then(|s| s.get("configuration")).and_then(|v| v.as_str()),
+        Some(configured.as_str())
+    );
 }
 
 #[test]
@@ -1272,9 +1324,50 @@ fn php_sources_and_selected_interpreter() {
     assert_eq!(source("/opt/homebrew/opt/php@8.2/bin/php"), "homebrew");
     assert_eq!(source("/home/me/bin/php"), "path");
 
+    use crate::discover::{is_versioned_php_name, newest_first, versioned_php_in};
+    let sdk = |path: &str, version: &str| crate::Sdk {
+        path: std::path::PathBuf::from(path).into(),
+        name: format!("PHP {version}"),
+        version: Some(version.into()),
+        source: "path".into(),
+        home: None,
+        extra: None,
+    };
+    let mut sdks = vec![
+        sdk("/opt/homebrew/bin/php", "8.4.1"),
+        sdk("/opt/homebrew/opt/php@8.1/bin/php", "8.1.31"),
+        sdk("/opt/homebrew/opt/php@8.2/bin/php", "8.2.20"),
+        sdk("/home/me/.phpbrew/php/php-8.3.9/bin/php", "8.3.9"),
+        sdk("/home/me/.phpbrew/php/php-8.3.12/bin/php", "8.3.12"),
+        sdk("/home/me/.phpbrew/php/php-7.4.33/bin/php", "7.4.33"),
+        sdk("/usr/bin/php", "8.4.1"),
+    ];
+    newest_first(&mut sdks);
+    let order: Vec<_> = sdks.iter().map(|s| s.version.clone().unwrap()).collect();
+    assert_eq!(order, ["8.4.1", "8.4.1", "8.3.12", "8.3.9", "8.2.20", "8.1.31", "7.4.33"]);
+    // Stable: on equal versions the PATH install stays first.
+    assert_eq!(sdks[0].path.0, std::path::PathBuf::from("/opt/homebrew/bin/php"));
+    for name in ["php8.1", "php81", "php8", "php8.3.exe"] {
+        assert!(is_versioned_php_name(name), "{name}");
+    }
+    for name in ["php", "php-cgi8.1", "phpize8.1", "phpdbg8.1", "php-fpm8.1", "php8.", "php.8", "php8.1.2x", "phpunit"]
+    {
+        assert!(!is_versioned_php_name(name), "{name}");
+    }
+
     if cfg!(windows) {
         return; // Unix paths
     }
+    let bins = tempfile::tempdir().unwrap();
+    for name in ["php", "php8.3", "php8.1", "php-cgi8.1", "phpize8.1", "phpdbg8.1"] {
+        std::fs::write(bins.path().join(name), "").unwrap();
+    }
+    std::fs::create_dir(bins.path().join("php9.0")).unwrap();
+    assert_eq!(
+        versioned_php_in([bins.path().to_path_buf()]),
+        vec![bins.path().join("php8.1"), bins.path().join("php8.3")]
+    );
+
     let tmp = tempfile::tempdir().unwrap();
     let mut s = Settings::default();
     assert_eq!(crate::apply::php_dir(tmp.path(), &s), None);
@@ -1549,4 +1642,41 @@ fn saving_a_loaded_run_configuration_drops_what_settings_derived() {
         assert!(next[0].env["JAVA_HOME"].ends_with("jdk21"), "{}", next[0].env["JAVA_HOME"]);
         assert_eq!(next[1].args, ["-Dmaven.repo.local=/m3/repo", "-s", "/mine.xml", "test"]);
     }
+}
+
+#[test]
+fn nested_python_configs_get_their_own_virtualenv_but_explicit_settings_stay_project_relative() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let outer = fake_venv(root, ".venv");
+    let nested = fake_venv(&root.join("apps").join("python"), ".venv");
+    let mut config = run("python", "python3", &["main.py"]);
+    config.extras.module = Some("apps/python".into());
+    apply_to_run_configs(std::slice::from_mut(&mut config), root, &Settings::default());
+    assert_eq!(config.env["VIRTUAL_ENV"], nested.parent().unwrap().parent().unwrap().to_string_lossy());
+    // A workspace member without its own virtualenv uses the one at the project root (uv workspaces).
+    let mut member = run("pytest", "python3", &["-m", "pytest"]);
+    member.extras.module = Some("packages/lib".into());
+    apply_to_run_configs(std::slice::from_mut(&mut member), root, &Settings::default());
+    assert_eq!(member.env["VIRTUAL_ENV"], outer.parent().unwrap().parent().unwrap().to_string_lossy());
+    let mut settings = Settings::default();
+    settings.languages.python.interpreter = "custom/bin/python".into();
+    let mut config = run("python", "python3", &["main.py"]);
+    config.extras.module = Some("apps/python".into());
+    apply_to_run_configs(std::slice::from_mut(&mut config), root, &settings);
+    assert_eq!(config.command, root.join("custom/bin/python").to_string_lossy());
+}
+
+#[test]
+fn file_runtime_uses_nearest_virtualenv_and_explicit_project_settings_win() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let outer = fake_venv(root, ".venv");
+    let inner = fake_venv(&root.join("apps/api"), ".venv");
+    let near = root.join("apps/api/src/package");
+    let mut settings = Settings::default();
+    assert_eq!(crate::apply::python_interpreter_near(root, Some(&near), &settings), Some(inner));
+    assert_eq!(crate::apply::python_interpreter_near(root, Some(&root.join("apps/other")), &settings), Some(outer));
+    settings.languages.python.interpreter = "selected/python".into();
+    assert_eq!(crate::apply::python_interpreter_near(root, Some(&near), &settings), Some(root.join("selected/python")));
 }
