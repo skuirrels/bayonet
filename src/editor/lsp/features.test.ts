@@ -21,9 +21,40 @@ describe("semanticRanges", () => {
   it("maps types and modifiers to classes and skips plain variables / unknown types", () => {
     expect(semanticRanges(doc, tokens)).toEqual([
       { from: 8, to: 13, className: "cm-sem-mutable" },
-      { from: 16, to: 19, className: "cm-sem-type" },
+      { from: 16, to: 19, className: "cm-sem-type cm-sem-struct" },
       { from: 21, to: 24, className: "cm-sem-function cm-sem-deprecated" },
       { from: 34, to: 37, className: "cm-sem-constant" },
+    ]);
+  });
+
+  it("maps Roslyn's own token types to Rider's identifier kinds", () => {
+    const types = [
+      "field",
+      "constant",
+      "event",
+      "delegate",
+      "recordStruct",
+      "extensionMethod",
+      "stringEscapeCharacter",
+      "xmlDocCommentName",
+      "variable",
+    ];
+    const input = {
+      tokenTypes: types,
+      tokenModifiers: ["static", "ReassignedVariable"],
+      data: types.flatMap((_, i) => [i === 0 ? 0 : 1, 0, 3, i, i === types.length - 1 ? 0b10 : 0]),
+    };
+    const lines = Text.of(types.map(() => "abc"));
+    expect(semanticRanges(lines, input).map((r) => r.className)).toEqual([
+      "cm-sem-property",
+      "cm-sem-constant",
+      "cm-sem-event",
+      "cm-sem-type cm-sem-struct",
+      "cm-sem-type cm-sem-struct",
+      "cm-sem-function",
+      "cm-sem-escape",
+      "cm-sem-doc-tag",
+      "cm-sem-mutable",
     ]);
   });
 

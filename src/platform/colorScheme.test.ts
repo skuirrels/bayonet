@@ -9,16 +9,23 @@ import { installColorScheme } from "@/editor/core/colorSchemeRuntime";
 describe("color schemes", () => {
   beforeAll(() => _setSchemeSource(readFileSync("src/styles/tokens.css", "utf8")));
   it("reads resolved scheme tokens from tokens.css", () => {
-    expect(schemeTokens("light").get("--syn-keyword")).toBe("#0033b3");
-    expect(schemeTokens("dark").get("--syn-keyword")).toBe("#cf8e6d");
+    expect(schemeTokens("light").get("--syn-keyword")).toBe("#0f54d6");
+    expect(schemeTokens("dark").get("--syn-keyword")).toBe("#6c95eb");
     expect(schemeTokens("light").get("--bg-editor")).not.toMatch(/var\(/);
     const dark = schemeTokens("dark");
     expect(dark.get("--syn-python-builtin")).toBe("#8888c6");
     expect(dark.get("--syn-python-predefined-definition")).toBe("#b200b2");
     expect(dark.get("--syn-python-predefined-usage")).toBe("#b200b2");
-    expect(dark.get("--syn-python-instance-attribute")).toBe("#bcbec4");
+    expect(dark.get("--syn-python-instance-attribute")).toBe("#bdbdbd");
     expect(dark.get("--syn-python-fstring")).toBe("#a5c261");
     expect(dark.get("--syn-python-bytes")).toBe("#a5c261");
+  });
+
+  it("sets statics upright in Rider's schemes and italic in the others", () => {
+    expect(schemeTokens("dark").get("--syn-static-italic")).toBe("normal");
+    expect(schemeTokens("light").get("--syn-static-italic")).toBe("normal");
+    for (const id of ["dark-hc", "one-dark", "solarized-light"] as const)
+      expect(schemeTokens(id).get("--syn-static-italic"), id).toBe("italic");
   });
 
   it("gives PHP variables and function calls their own colours, as PhpStorm (#1532)", () => {
@@ -42,7 +49,7 @@ describe("color schemes", () => {
     root.dataset.theme = "light";
     expect(schemeCss("theme-default", undefined, root)).toBe("");
     const dark = schemeCss("dark", undefined, root);
-    expect(dark).toContain("--syn-keyword: #cf8e6d !important");
+    expect(dark).toContain("--syn-keyword: #6c95eb !important");
     const over = schemeCss("theme-default", { light: { keyword: { foreground: "#ff0000", bold: true } } }, root);
     expect(over).toContain("--syn-keyword: #ff0000 !important");
     // Explicit Bold / regular follow Typography Settings' bold / main weight.
@@ -62,7 +69,7 @@ describe("color schemes", () => {
     try {
       // "Theme default" keeps the plugin theme's own editor colours.
       expect(schemeCss("theme-default", undefined, root)).toBe("");
-      expect(schemeCss("dark", undefined, root)).toContain("--syn-keyword: #cf8e6d !important");
+      expect(schemeCss("dark", undefined, root)).toContain("--syn-keyword: #6c95eb !important");
       delete root.dataset.pluginTheme;
       expect(schemeCss("dark", undefined, root)).toBe("");
     } finally {
@@ -81,7 +88,7 @@ describe("color schemes", () => {
       expect(sheet()).toBe("");
       root.dataset.pluginTheme = "theme-one/one-dark";
       await Promise.resolve();
-      expect(sheet()).toContain("--syn-keyword: #cf8e6d !important");
+      expect(sheet()).toContain("--syn-keyword: #6c95eb !important");
     } finally {
       dispose();
       delete root.dataset.pluginTheme;
@@ -140,12 +147,13 @@ describe("color schemes", () => {
       expect(schemeTokens(id).has("--fw-code")).toBe(false);
       expect(schemeTokens(id).has("--syn-keyword-bold")).toBe(false);
     }
-    // Dark schemes bold matched braces with the configured bold weight, even under the light theme.
-    expect(schemeTokens("dark").get("--matched-brace-weight")).toBe("var(--fw-code-bold)");
+    // One Dark bolds matched braces with the configured bold weight, even under the light theme; Rider's do not.
+    expect(schemeTokens("one-dark").get("--matched-brace-weight")).toBe("var(--fw-code-bold)");
+    expect(schemeTokens("dark").get("--matched-brace-weight")).toBe("inherit");
     expect(schemeTokens("light").get("--matched-brace-weight")).toBe("inherit");
     const root = document.documentElement;
     root.dataset.theme = "light";
-    expect(schemeCss("dark", undefined, root)).toContain("--matched-brace-weight: var(--fw-code-bold) !important");
+    expect(schemeCss("one-dark", undefined, root)).toContain("--matched-brace-weight: var(--fw-code-bold) !important");
   });
 
   it("sets the configured weights on the root and follows settings changes", () => {

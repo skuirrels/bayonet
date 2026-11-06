@@ -59,6 +59,17 @@ const ATTRIBUTE_NAMES: Record<string, string> = {
   MARKDOWN_CODE_SPAN: "mdCode",
   MARKDOWN_LINK_TEXT: "mdLink",
   REGEXP: "regexp",
+  DEFAULT_DOC_COMMENT_TAG: "docCommentTag",
+  // Rider (ReSharper) identifier kinds.
+  "ReSharper.STRUCT_IDENTIFIER": "structName",
+  "ReSharper.ENUM_IDENTIFIER": "structName",
+  "ReSharper.DELEGATE_IDENTIFIER": "structName",
+  "ReSharper.NAMESPACE_IDENTIFIER": "namespace",
+  "ReSharper.EVENT_IDENTIFIER": "event",
+};
+/** Further keys an attribute is exported under, so Rider reads every kind it was imported from. */
+const EXPORT_ALIASES: Record<string, string[]> = {
+  structName: ["ReSharper.ENUM_IDENTIFIER", "ReSharper.DELEGATE_IDENTIFIER"],
 };
 const LANGUAGE_KEYS: Record<string, string> = {
   KEYWORD: "keyword",
@@ -383,7 +394,9 @@ export function exportIcls(
     if (attr.token) opts.push(`<option name="FONT_TYPE" value="${(v.bold ? 1 : 0) + (v.italic ? 2 : 0)}" />`);
     const effect = Object.entries(EFFECTS).find(([, value]) => value === v.effect)?.[0];
     if (effect) opts.push(`<option name="EFFECT_TYPE" value="${effect}" />`);
-    if (opts.length) attributes.push(`    <option name="${key}"><value>${opts.join("")}</value></option>`);
+    if (opts.length)
+      for (const name of [key, ...(EXPORT_ALIASES[attr.id] ?? [])])
+        attributes.push(`    <option name="${name}"><value>${opts.join("")}</value></option>`);
   }
   const parent = custom?.parent ?? (isBuiltinTheme(id) ? themeKind(id) : "dark");
   return `<scheme name="${escapeXml(name)}" version="142" parent_scheme="${parent === "dark" ? "Darcula" : "Default"}">\n  <colors>\n${colors.join("\n")}\n  </colors>\n  <attributes>\n${attributes.join("\n")}\n  </attributes>\n</scheme>\n`;
