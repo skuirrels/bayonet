@@ -8,7 +8,7 @@
  * editor tabs only. One LightEdit window collects them all.
  */
 import { executeAction, type Action } from "@/platform/actions";
-import { t } from "@/platform/i18n";
+import { t, tx } from "@/platform/i18n";
 import { call, commands, isCancelled, isTauri } from "@/platform/ipc";
 import {
   basename,
@@ -114,76 +114,130 @@ export async function openFiles(files: readonly string[]): Promise<void> {
 
 const pathIsDir = (path: string) => call(commands.fsReadDir(path)).then(() => true);
 
-/** Opens dropped paths: files as loose files ({@link openFiles}), the first folder as a project. */
+const SOLUTION_FILE = /\.(?:slnx?|slnf)$/i;
+
+/** Whether `path` names a .NET solution (`.sln`, `.slnx`, `.slnf`), which opens as its folder's project. */
+const isSolutionPath = (path: string) => SOLUTION_FILE.test(path);
+
+/** A project to open: its folder and, when opened from a solution file in it, that solution. */
+interface Target {
+  root: string;
+  solution: string | null;
+}
+
+/** `path` as a project: a solution file is its folder with that solution; null when that failed (reported). */
+async function targetOf(path: string): Promise<Target | null> {
+  if (!isSolutionPath(path)) return { root: path, solution: null };
+  try {
+    const root = await call(commands.dotnetSolutionFolder(path));
+    return root ? { root, solution: path } : { root: path, solution: null };
+  } catch (e) {
+    openFailed(path, e);
+    return null;
+  }
+}
+
+/** Makes `solution` the solution of its folder, now open as this window's project (trusted). */
+async function chooseSolution(solution: string | null | undefined): Promise<void> {
+  if (!solution) return;
+  await call(commands.dotnetChooseSolution(solution)).catch((e) => console.warn(`could not choose ${solution}`, e));
+}
+
+/** Opens `target` here once it is this window's project, then `files`. */
+async function openTargetHere(target: Target, files: readonly string[]): Promise<void> {
+  if (!(await openHere(target.root))) return;
+  await chooseSolution(target.solution);
+  await openInEditor(files);
+}
+
+/**
+ * Opens dropped paths: files as loose files ({@link openFiles}), the first folder or solution
+ * file as a project (like further folders, further solution files are left out).
+ */
 export async function openPaths(
   paths: readonly string[],
   isDir: (path: string) => Promise<boolean> = pathIsDir,
 ): Promise<void> {
   const kinds = await Promise.all(paths.map((p) => isDir(p).catch(() => false)));
-  const files = paths.filter((_, i) => !kinds[i]);
-  const dir = paths.find((_, i) => kinds[i]);
+  const projects = paths.filter((p, i) => kinds[i] || isSolutionPath(p));
+  const files = paths.filter((p, i) => !kinds[i] && !isSolutionPath(p));
   await openFiles(files);
-  if (dir) await openProjectWithPolicy(dir);
+  if (projects[0]) await openProjectWithPolicy(projects[0]);
 }
 
 /**
- * Opens `path`, focusing the window that already has it. `newWindow`: always a
- * new window; otherwise this window unless it already has a project or LightEdit
- * session. `files` then open in the project's editor.
+ * Opens `path` (a folder, or a solution file: its folder with that solution), focusing the
+ * window that already has it. `newWindow`: always a new window; otherwise this window unless
+ * it already has a project or LightEdit session. `files` then open in the project's editor.
  */
 export async function openProjectInWindow(path: string, newWindow: boolean, files: readonly string[] = []) {
   if (desktopOnly()) return;
+  const target = await targetOf(path);
+  if (target) await openTargetInWindow(target, newWindow, files);
+}
+
+async function openTargetInWindow(target: Target, newWindow: boolean, files: readonly string[]) {
   const s = useProject.getState();
   const inNew = newWindow || s.project !== null || s.lightEdit;
   try {
-    const outcome = await call(commands.windowOpenProject(path, inNew, [...files]));
-    if (outcome.kind === "current" && (await openHere(path))) await openInEditor(files);
+    // A window that has or opens the project makes the solution its own.
+    const outcome = await call(commands.windowOpenProject(target.root, inNew, [...files], target.solution));
+    if (outcome.kind === "current") await openTargetHere(target, files);
   } catch (e) {
-    openFailed(path, e);
+    openFailed(target.root, e);
   }
 }
 
 /**
- * Opens `path` following "Open project in" when this window already has a
- * project or LightEdit session, then `files` in its editor.
+ * Opens `path` (a folder, or a solution file: its folder with that solution) following
+ * "Open project in" when this window already has a project or LightEdit session, then
+ * `files` in its editor.
  */
 export async function openProjectWithPolicy(path: string, files: readonly string[] = []): Promise<void> {
   if (desktopOnly()) return;
+  const target = await targetOf(path);
+  if (!target) return;
+  const { root, solution } = target;
   const { project: current, lightEdit } = useProject.getState();
-  if (!current && !lightEdit) return openProjectInWindow(path, false, files);
-  if (!isRemoteWindow() && current?.root === path) return openInEditor(files);
-  if (!isRemoteWindow() && current?.workspace?.projects.includes(path)) {
-    await executeAction("project.reveal", path);
+  if (!current && !lightEdit) return openTargetInWindow(target, false, files);
+  if (!isRemoteWindow() && current?.root === root) {
+    await chooseSolution(solution);
     return openInEditor(files);
   }
-  const mode = await chooseProjectWindow(basename(path));
+  if (!isRemoteWindow() && current?.workspace?.projects.includes(root)) {
+    await chooseSolution(solution);
+    await executeAction("project.reveal", root);
+    return openInEditor(files);
+  }
+  const mode = await chooseProjectWindow(basename(root));
   if (!mode) return;
-  if (mode === "new") return openProjectInWindow(path, true, files);
+  if (mode === "new") return openTargetInWindow(target, true, files);
   if (mode === "attach") {
     try {
       if (!current?.workspace && !(await confirmLeaveProject())) return;
-      const root = await call(commands.workspaceAttach(path));
-      if (root === current?.root) {
+      const workspace = await call(commands.workspaceAttach(root));
+      if (workspace === current?.root) {
         if (!current.workspace) maybeEditorService()?.cancelClose?.();
         const project = await commands.projectCurrent();
         if (project) useProject.setState({ project, settings: project.settings });
       } else {
-        await openProject(root);
+        await openProject(workspace);
       }
-      await executeAction("project.reveal", path);
+      await chooseSolution(solution);
+      await executeAction("project.reveal", root);
       await openInEditor(files);
     } catch (e) {
       maybeEditorService()?.cancelClose?.();
-      openFailed(path, e);
+      openFailed(root, e);
     }
     return;
   }
   try {
-    // A window that already has the project is focused instead.
-    const outcome = await call(commands.windowOpenProject(path, false, [...files]));
-    if (outcome.kind === "current" && (await openHere(path))) await openInEditor(files);
+    // A window that already has the project is focused instead (and makes the solution its own).
+    const outcome = await call(commands.windowOpenProject(root, false, [...files], solution));
+    if (outcome.kind === "current") await openTargetHere(target, files);
   } catch {
-    if (await openHere(path)) await openInEditor(files);
+    await openTargetHere(target, files);
   }
 }
 
@@ -206,6 +260,19 @@ async function pickFolder(title: string): Promise<string | null> {
   return path ?? null;
 }
 
+async function pickSolution(): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    directory: false,
+    multiple: false,
+    title: tx`Open Solution`,
+    defaultPath: defaultProjectDirectory(),
+    filters: [{ name: tx`.NET Solutions`, extensions: ["sln", "slnx", "slnf"] }],
+  });
+  const path = Array.isArray(picked) ? picked[0] : picked;
+  return path ?? null;
+}
+
 async function pickFiles(title: string): Promise<string[]> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({ directory: false, multiple: true, title, defaultPath: defaultProjectDirectory() });
@@ -219,7 +286,10 @@ export async function consumeLaunch(): Promise<void> {
   const files = launch?.files ?? [];
   const positions = launch?.positions ?? [];
   if (launch?.project) {
-    if (await openHere(launch.project)) await openInEditor(files, positions);
+    if (await openHere(launch.project)) {
+      await chooseSolution(launch.solution);
+      await openInEditor(files, positions);
+    }
   } else if (files.length) await openFilesHere(files, positions);
   else if (launch?.diff) await openCliDiff(launch.diff);
   else if (launch?.remote) {
@@ -411,6 +481,18 @@ export function windowActions(): Action[] {
       },
     },
     {
+      id: "file.openSolution",
+      title: "Open Solution…",
+      category: t("app.category.file"),
+      icon: "folder-open",
+      keywords: ["solution", "sln", "slnx", "slnf", "dotnet", ".net", "c#"],
+      run: async (c) => {
+        if (desktopOnly()) return;
+        const path = typeof c.arg === "string" ? c.arg : await pickSolution();
+        if (path) await openProjectWithPolicy(path);
+      },
+    },
+    {
       // Files and folders dropped on the Welcome screen.
       id: "file.openPaths",
       title: "Open Paths",
@@ -439,7 +521,7 @@ export function windowActions(): Action[] {
       },
     },
     {
-      // Used by File › Open… once a folder is picked.
+      // Used by File › Open… once a folder is picked, and by drops: a solution file opens its folder.
       id: "file.openProjectPath",
       title: "Open Project Path",
       category: t("app.category.file"),

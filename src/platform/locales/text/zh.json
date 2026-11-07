@@ -6509,7 +6509,11 @@
   "No run configuration for this AppHost": "此 AppHost 没有运行配置",
   "Thread start": "线程起点",
   "Show times in the editor": "在编辑器中显示耗时",
-  "Sample the process's stacks (dotnet-trace) to see where its threads spend their time. Your own methods open in the editor, which then shows how long each one took.": "对进程的调用栈采样（dotnet-trace），查看其线程把时间花在哪里。你自己的方法可在编辑器中打开，编辑器随后会显示每个方法的耗时。",
+  "Sample the process's stacks to see where its threads spend their time. Your own methods open in the editor, which then shows how long each method and line took.": "对进程的调用栈采样，查看其线程把时间花在哪里。你自己的方法可在编辑器中打开，编辑器随后会显示每个方法和每一行的耗时。",
+  "Collections": "垃圾回收次数",
+  "GC pauses": "GC 暂停",
+  "Longest pause": "最长暂停",
+  "{total} on this line ({share} of thread time), {self} running the line itself rather than what it calls.": "此行耗时 {total}（占线程时间的 {share}），其中 {self} 用于执行此行本身，而非它调用的方法。",
   "In your code": "在你的代码中",
   "Methods in source": "已定位到源码的方法",
   "Trace views": "跟踪视图",
@@ -6833,5 +6837,8 @@
   "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.": "{php} 运行时没有 Xdebug，断点会被跳过。请为此 PHP 安装 Xdebug 3，或选择其他 PHP 解释器。",
   "Open PHP Settings": "打开 PHP 设置",
   "Running in the background": "后台运行中",
-  "Couldn't stop the background task": "无法停止后台任务"
+  "Couldn't stop the background task": "无法停止后台任务",
+  "Open Solution…": "打开解决方案…",
+  "Open Solution": "打开解决方案",
+  ".NET Solutions": ".NET 解决方案"
 }

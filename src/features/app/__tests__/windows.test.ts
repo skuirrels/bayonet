@@ -7,6 +7,8 @@ const windowOpenProject = vi.fn();
 const windowOpenFiles = vi.fn();
 const windowTakeLaunch = vi.fn();
 const wslResolve = vi.fn();
+const dotnetSolutionFolder = vi.fn();
+const dotnetChooseSolution = vi.fn();
 const cancelClose = vi.fn();
 const notify = vi.fn();
 vi.mock("@/platform/remote", async (original) => ({
@@ -37,6 +39,8 @@ vi.mock("@/platform/ipc", async (orig) => {
       windowOpenFiles: (...a: unknown[]) => windowOpenFiles(...a),
       windowTakeLaunch: () => windowTakeLaunch(),
       wslResolve: (p: string) => wslResolve(p),
+      dotnetSolutionFolder: (p: string) => dotnetSolutionFolder(p),
+      dotnetChooseSolution: (p: string) => dotnetChooseSolution(p),
       lightEditOpen: (p: string) => lightEditOpen(p),
       fsReadDir: (p: string) => fsReadDir(p),
     },
@@ -82,7 +86,16 @@ const ok = (data: unknown) => ({ status: "ok", data });
 const projectState = (root: string) => ({ project: { root, name: root, trusted: true, isGit: false, settings: {} } });
 
 beforeEach(() => {
-  for (const f of [windowOpenProject, windowOpenFiles, windowTakeLaunch, wslResolve]) f.mockReset();
+  for (const f of [
+    windowOpenProject,
+    windowOpenFiles,
+    windowTakeLaunch,
+    wslResolve,
+    dotnetSolutionFolder,
+    dotnetChooseSolution,
+  ])
+    f.mockReset();
+  dotnetChooseSolution.mockResolvedValue(ok(null));
   wslResolve.mockResolvedValue(null);
   vi.mocked(connectRemote).mockClear();
   for (const f of [lightEditOpen, fsReadDir, openProject]) f.mockClear();
@@ -99,7 +112,7 @@ describe("openProjectInWindow", () => {
   it("opens in this window when the backend says `current`", async () => {
     windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
     await openProjectInWindow("/p/a", false);
-    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", false, []);
+    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", false, [], null);
     expect(openProject).toHaveBeenCalledWith("/p/a");
   });
 
@@ -119,7 +132,7 @@ describe("openProjectInWindow", () => {
     useProject.setState(projectState("/p/b") as never);
     windowOpenProject.mockResolvedValue(ok({ kind: "opened", label: "project-1" }));
     await openProjectInWindow("/p/a", false);
-    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", true, []);
+    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", true, [], null);
     expect(openProject).not.toHaveBeenCalled();
   });
 
@@ -127,7 +140,7 @@ describe("openProjectInWindow", () => {
     useProject.setState({ lightEdit: true });
     windowOpenProject.mockResolvedValue(ok({ kind: "opened", label: "project-1" }));
     await openProjectInWindow("/p/a", false);
-    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", true, []);
+    expect(windowOpenProject).toHaveBeenCalledWith("/p/a", true, [], null);
   });
 
   it("does nothing locally when another window was focused", async () => {
@@ -163,7 +176,7 @@ describe("replacing a project in this window", () => {
     vi.mocked(isRemoteWindow).mockReturnValue(true);
     windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
     await openProjectWithPolicy("/same");
-    expect(windowOpenProject).toHaveBeenCalledWith("/same", false, []);
+    expect(windowOpenProject).toHaveBeenCalledWith("/same", false, [], null);
     expect(openProject).toHaveBeenCalledWith("/same");
   });
 });
@@ -216,7 +229,7 @@ describe("loose files (LightEdit)", () => {
     useProject.setState({ settings: { general: { openProjectIn: "new" } } } as never);
     await openPaths(["/x/a.txt", "/work/app"], async (p) => p === "/work/app");
     expect(lightEditOpen).toHaveBeenCalledWith("/x/a.txt");
-    expect(windowOpenProject).toHaveBeenCalledWith("/work/app", true, []);
+    expect(windowOpenProject).toHaveBeenCalledWith("/work/app", true, [], null);
   });
 
   it("opens a dropped folder alone exactly as before", async () => {
@@ -225,6 +238,19 @@ describe("loose files (LightEdit)", () => {
     expect(windowOpenFiles).not.toHaveBeenCalled();
     expect(lightEditOpen).not.toHaveBeenCalled();
     expect(openProject).toHaveBeenCalledWith("/work/app");
+  });
+
+  it("opens a dropped solution file as its folder's project, not as a loose file", async () => {
+    dotnetSolutionFolder.mockResolvedValue(ok("/work/app"));
+    windowOpenFiles.mockResolvedValue(ok(["/x/a.txt"]));
+    windowOpenProject.mockResolvedValue(ok({ kind: "opened", label: "project-1" }));
+    useProject.setState({ settings: { general: { openProjectIn: "new" } } } as never);
+    await openPaths(["/x/a.txt", "/work/app/App.slnx", "/work/b/B.sln"], async () => false);
+    expect(dotnetSolutionFolder).toHaveBeenCalledWith("/work/app/App.slnx");
+    expect(windowOpenFiles).toHaveBeenCalledWith(["/x/a.txt"]);
+    // The new window makes the solution its own once it has opened (and trusted) the project.
+    expect(windowOpenProject).toHaveBeenCalledWith("/work/app", true, [], "/work/app/App.slnx");
+    expect(dotnetChooseSolution).not.toHaveBeenCalled();
   });
 
   it("classifies paths through the file system by default", async () => {
@@ -248,7 +274,7 @@ describe("Open Containing Folder as Project", () => {
     activePath = "/x/notes/a.txt";
     windowOpenProject.mockResolvedValue(ok({ kind: "opened", label: "project-1" }));
     await openLightEditFileAsProject();
-    expect(windowOpenProject).toHaveBeenCalledWith("/x/notes", true, ["/x/notes/a.txt"]);
+    expect(windowOpenProject).toHaveBeenCalledWith("/x/notes", true, ["/x/notes/a.txt"], null);
     expect(openProject).not.toHaveBeenCalled();
   });
 
@@ -257,7 +283,7 @@ describe("Open Containing Folder as Project", () => {
     activePath = "/x/notes/a.txt";
     windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
     await openLightEditFileAsProject();
-    expect(windowOpenProject).toHaveBeenCalledWith("/x/notes", false, ["/x/notes/a.txt"]);
+    expect(windowOpenProject).toHaveBeenCalledWith("/x/notes", false, ["/x/notes/a.txt"], null);
     expect(openProject).toHaveBeenCalledWith("/x/notes");
     expect(useProject.getState()).toMatchObject({ lightEdit: false, project: { root: "/x/notes" } });
     expect(opened).toEqual(["/x/notes/a.txt (focus)"]);
@@ -268,6 +294,71 @@ describe("Open Containing Folder as Project", () => {
     activePath = "/p/a.txt";
     await openLightEditFileAsProject();
     expect(windowOpenProject).not.toHaveBeenCalled();
+  });
+});
+
+describe("solutions", () => {
+  const run = (id: string, arg?: unknown) =>
+    windowActions()
+      .find((a) => a.id === id)!
+      .run({ arg } as never);
+
+  it("opens a .sln or .slnx file as its folder, then makes it the solution", async () => {
+    windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
+    for (const file of ["/work/app/App.sln", "/work/app/App.SLNX"]) {
+      dotnetSolutionFolder.mockResolvedValueOnce(ok("/work/app"));
+      await run("file.openSolution", file);
+      expect(dotnetSolutionFolder).toHaveBeenLastCalledWith(file);
+      expect(dotnetChooseSolution).toHaveBeenLastCalledWith(file);
+    }
+    expect(windowOpenProject).toHaveBeenCalledWith("/work/app", false, [], "/work/app/App.sln");
+    expect(openProject).toHaveBeenCalledTimes(1);
+    expect(openProject).toHaveBeenCalledWith("/work/app");
+  });
+
+  it("keeps the solution unchosen when opening is cancelled", async () => {
+    dotnetSolutionFolder.mockResolvedValue(ok("/work/app"));
+    windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
+    openProject.mockRejectedValueOnce(new IpcError({ kind: "cancelled", message: "Project opening cancelled" }));
+    await run("file.openSolution", "/work/app/App.sln");
+    expect(dotnetChooseSolution).not.toHaveBeenCalled();
+  });
+
+  it("opens a folder named like a solution as that folder", async () => {
+    dotnetSolutionFolder.mockResolvedValue(ok(null));
+    windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
+    await run("file.openProjectPath", "/work/Odd.sln");
+    expect(openProject).toHaveBeenCalledWith("/work/Odd.sln");
+    expect(dotnetChooseSolution).not.toHaveBeenCalled();
+  });
+
+  it("leaves other paths to the folder flow", async () => {
+    windowOpenProject.mockResolvedValue(ok({ kind: "current" }));
+    await run("file.openProjectPath", "/work/app");
+    expect(dotnetSolutionFolder).not.toHaveBeenCalled();
+    expect(openProject).toHaveBeenCalledWith("/work/app");
+  });
+
+  it("switches the solution of the project already open here", async () => {
+    useProject.setState(projectState("/work/app") as never);
+    dotnetSolutionFolder.mockResolvedValue(ok("/work/app"));
+    await run("file.openSolution", "/work/app/Legacy.sln");
+    expect(windowOpenProject).not.toHaveBeenCalled();
+    expect(dotnetChooseSolution).toHaveBeenCalledWith("/work/app/Legacy.sln");
+  });
+
+  it("makes a launched project's solution its own once open", async () => {
+    windowTakeLaunch.mockResolvedValue({ project: "/work/app", files: [], solution: "/work/app/App.sln" });
+    await consumeLaunch();
+    expect(openProject).toHaveBeenCalledWith("/work/app");
+    expect(dotnetChooseSolution).toHaveBeenCalledWith("/work/app/App.sln");
+  });
+
+  it("reports a solution that cannot be opened", async () => {
+    dotnetSolutionFolder.mockResolvedValue({ status: "error", error: { kind: "notFound", message: "gone" } });
+    await run("file.openSolution", "/work/app/Gone.sln");
+    expect(windowOpenProject).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ level: "error", body: "gone" }));
   });
 });
 

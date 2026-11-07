@@ -48,5 +48,8 @@
   "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.": "{php} runs without Xdebug, so breakpoints are skipped. Install Xdebug 3 for this PHP or choose another PHP interpreter.",
   "Open PHP Settings": "Open PHP Settings",
   "Running in the background": "Running in the background",
-  "Couldn't stop the background task": "Couldn't stop the background task"
+  "Couldn't stop the background task": "Couldn't stop the background task",
+  "Open Solution…": "Open Solution…",
+  "Open Solution": "Open Solution",
+  ".NET Solutions": ".NET Solutions"
 }

@@ -429,6 +429,37 @@ pub struct TraceProfile {
     pub root: FlameNode,
     /// Where the frames of the solution's own code are declared (filled in by the host).
     pub sources: Vec<FrameSource>,
+    /// Time per source line, where the trace's PDBs give lines (traces the .NET
+    /// diagnostics helper read; Speedscope files carry none).
+    pub lines: Vec<TraceLine>,
+    /// Garbage collections during the trace, oldest first (helper traces only).
+    pub collections: Vec<GcCollection>,
+}
+
+/// Time on one source line: `self_ms` while the line itself ran, `total_ms` with what it called.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceLine {
+    pub path: IpcPath,
+    /// 0-based.
+    pub line: u32,
+    pub self_ms: f64,
+    pub total_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GcCollection {
+    /// Since the start of the trace.
+    pub start_ms: f64,
+    pub pause_ms: f64,
+    pub generation: u32,
+    /// Why it ran, as the runtime names it (`AllocSmall`, `Induced`, `LowMemory`).
+    pub reason: String,
+    /// `NonConcurrentGC`, `BackgroundGC` or `ForegroundGC`.
+    pub kind: String,
+    pub heap_before_mb: f64,
+    pub heap_after_mb: f64,
 }
 
 /// The declaration a trace frame's method comes from.
@@ -500,14 +531,48 @@ impl Tree {
         }
     }
 
-    fn into_node(self, name: String, frames: &[SpeedscopeFrame], min: f64) -> FlameNode {
+    /// Adds a stack as both trace formats write it: grouping frames at the root are
+    /// left out, and a `CPU_TIME` leaf counts as its caller's own time.
+    fn add_trace_stack(&mut self, names: &[&str], stack: &[usize], weight: f64) {
+        let name = |f: usize| names.get(f).copied();
+        let mut frames: Vec<usize> =
+            stack.iter().copied().skip_while(|f| name(*f).is_some_and(is_grouping_frame)).collect();
+        if frames.len() > 1 && frames.last().and_then(|f| name(*f)) == Some(CPU_TIME_FRAME) {
+            frames.pop();
+        }
+        if !frames.is_empty() {
+            self.add(&frames, weight);
+        }
+    }
+
+    fn into_profile(
+        self,
+        names: &[&str],
+        path: &Path,
+        duration_ms: f64,
+        threads: u32,
+        min_fraction: f64,
+    ) -> TraceProfile {
+        let min = self.total * min_fraction;
+        TraceProfile {
+            path: path.to_path_buf().into(),
+            duration_ms: duration_ms.round() as u32,
+            threads,
+            root: self.into_node("All threads".to_owned(), names, min),
+            sources: Vec::new(),
+            lines: Vec::new(),
+            collections: Vec::new(),
+        }
+    }
+
+    fn into_node(self, name: String, frames: &[&str], min: f64) -> FlameNode {
         let child_total: f64 = self.children.values().map(|c| c.total).sum();
         let mut children: Vec<FlameNode> = self
             .children
             .into_iter()
             .filter(|(_, c)| c.total >= min)
             .map(|(f, c)| {
-                let name = frames.get(f).map_or_else(|| format!("frame {f}"), |fr| fr.name.clone());
+                let name = frames.get(f).map_or_else(|| format!("frame {f}"), |n| (*n).to_owned());
                 c.into_node(name, frames, min)
             })
             .collect();
@@ -538,19 +603,10 @@ fn is_grouping_frame(name: &str) -> bool {
 pub fn flame_graph(json: &str, path: &Path, min_fraction: f64) -> IdeResult<TraceProfile> {
     let s: Speedscope =
         serde_json::from_str(json).map_err(|e| IdeError::invalid(format!("not a Speedscope file: {e}")))?;
+    let names: Vec<&str> = s.shared.frames.iter().map(|f| f.name.as_str()).collect();
     let mut tree = Tree::default();
     let mut duration: f64 = 0.0;
     let threads = s.profiles.len() as u32;
-    let name = |f: usize| s.shared.frames.get(f).map(|fr| fr.name.as_str());
-    let strip = |stack: &[usize]| -> Vec<usize> {
-        let mut frames: Vec<usize> =
-            stack.iter().copied().skip_while(|f| name(*f).is_some_and(is_grouping_frame)).collect();
-        // dotnet-trace marks on-CPU samples with a `CPU_TIME` leaf: that time is the caller's own.
-        if frames.len() > 1 && frames.last().and_then(|f| name(*f)) == Some(CPU_TIME_FRAME) {
-            frames.pop();
-        }
-        frames
-    };
     for profile in &s.profiles {
         match profile {
             SpeedscopeProfile::Evented { start_value, end_value, events } => {
@@ -560,10 +616,7 @@ pub fn flame_graph(json: &str, path: &Path, min_fraction: f64) -> IdeResult<Trac
                 for e in events {
                     let span = e.at - last;
                     if span > 0.0 && !stack.is_empty() {
-                        let frames = strip(&stack);
-                        if !frames.is_empty() {
-                            tree.add(&frames, span);
-                        }
+                        tree.add_trace_stack(&names, &stack, span);
                     }
                     last = e.at;
                     match e.kind.as_str() {
@@ -579,24 +632,44 @@ pub fn flame_graph(json: &str, path: &Path, min_fraction: f64) -> IdeResult<Trac
             }
             SpeedscopeProfile::Sampled { samples, weights } => {
                 for (sample, w) in samples.iter().zip(weights) {
-                    let frames = strip(sample);
-                    if !frames.is_empty() {
-                        tree.add(&frames, *w);
-                    }
+                    tree.add_trace_stack(&names, sample, *w);
                 }
                 duration = duration.max(weights.iter().sum());
             }
         }
     }
-    let min = tree.total * min_fraction;
-    let root = tree.into_node("All threads".to_owned(), &s.shared.frames, min);
-    Ok(TraceProfile {
-        path: path.to_path_buf().into(),
-        duration_ms: duration.round() as u32,
-        threads,
-        root,
-        sources: Vec::new(),
-    })
+    Ok(tree.into_profile(&names, path, duration, threads, min_fraction))
+}
+
+/// A trace the .NET diagnostics helper read, as a flame graph with its line times and
+/// collections. Nodes under `min_fraction` of the total are left out.
+pub fn helper_profile(a: &crate::helper::Analysis, path: &Path, min_fraction: f64) -> TraceProfile {
+    let names: Vec<&str> = a.frames.iter().map(String::as_str).collect();
+    let mut tree = Tree::default();
+    for s in &a.stacks {
+        tree.add_trace_stack(&names, &s.frames, s.ms);
+    }
+    let mut profile = tree.into_profile(&names, path, a.duration_ms, a.threads.max(1), min_fraction);
+    profile.lines = a
+        .lines
+        .iter()
+        .filter(|l| l.line > 0)
+        .map(|l| TraceLine { path: l.file.clone().into(), line: l.line - 1, self_ms: l.self_ms, total_ms: l.total_ms })
+        .collect();
+    profile.collections = a
+        .collections
+        .iter()
+        .map(|c| GcCollection {
+            start_ms: c.start_ms,
+            pause_ms: c.pause_ms,
+            generation: c.generation,
+            reason: c.reason.clone(),
+            kind: c.kind.clone(),
+            heap_before_mb: c.heap_before_mb,
+            heap_after_mb: c.heap_after_mb,
+        })
+        .collect();
+    profile
 }
 
 // ---------------------------------------------------------------- metrics
@@ -816,6 +889,27 @@ mod tests {
         assert_eq!((spin.name.as_str(), spin.total_ms, spin.self_ms), ("Spin", 8, 6));
         // Native time stays a frame of its own.
         assert_eq!(spin.children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["UNMANAGED_CODE_TIME"]);
+    }
+
+    #[test]
+    fn reads_a_helper_analysis() {
+        let a: crate::helper::Analysis = serde_json::from_str(
+            r#"{"durationMs":3000.4,"threads":1,
+              "frames":["Process64 App (1)","Threads","Thread (7)","app!Program.Main()","app!Calc.Spin(int32)","CPU_TIME"],
+              "stacks":[{"frames":[0,1,2,3,4,5],"ms":7.5},{"frames":[0,1,2,3,5],"ms":2.5}],
+              "lines":[{"file":"/s/Calc.cs","line":12,"selfMs":7.5,"totalMs":7.5},{"file":"/s/Program.cs","line":0,"selfMs":1,"totalMs":1}],
+              "collections":[{"startMs":5,"pauseMs":0.5,"generation":0,"reason":"AllocSmall","kind":"NonConcurrentGC","heapBeforeMb":8,"heapAfterMb":1}]}"#,
+        )
+        .unwrap();
+        let p = helper_profile(&a, Path::new("/t.nettrace"), 0.0);
+        assert_eq!(p.duration_ms, 3000);
+        let main = &p.root.children[0];
+        assert_eq!((main.name.as_str(), main.total_ms, main.self_ms), ("app!Program.Main()", 10, 3));
+        assert_eq!((main.children[0].name.as_str(), main.children[0].self_ms), ("app!Calc.Spin(int32)", 8));
+        // 1-based PDB lines become 0-based; line 0 (no line) is dropped.
+        assert_eq!(p.lines.len(), 1);
+        assert_eq!((p.lines[0].line, p.lines[0].self_ms), (11, 7.5));
+        assert_eq!(p.collections[0].reason, "AllocSmall");
     }
 
     #[test]

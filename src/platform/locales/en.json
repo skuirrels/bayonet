@@ -177,6 +177,7 @@
   "menu.file.newScratchFile": "New Scratch File…",
   "menu.file.openInNewWindow": "Open in New Window…",
   "menu.file.openProject": "Open…",
+  "menu.file.openSolution": "Open Solution…",
   "menu.file.save": "Save All",
   "menu.file.settings": "Settings…",
   "menu.find": "Find",

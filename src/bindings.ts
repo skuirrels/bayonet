@@ -838,9 +838,10 @@ export const commands = {
 	/**
 	 *  Opens `path` in a new window (`new_window`) or tells the caller to open it
 	 *  itself (`current`). A project already open in some window is focused instead.
-	 *  `files` then open in that project's editor.
+	 *  `files` then open in that project's editor; `solution`, a solution file in `path`, becomes
+	 *  the project's solution there.
 	 */
-	windowOpenProject: (path: string, newWindow: boolean, files: string[]) => typedError<OpenOutcome, IdeError>(__TAURI_INVOKE("window_open_project", { path, newWindow, files })),
+	windowOpenProject: (path: string, newWindow: boolean, files: string[], solution: string | null) => typedError<OpenOutcome, IdeError>(__TAURI_INVOKE("window_open_project", { path, newWindow, files, solution })),
 	/**
 	 *  Loose `files` opened from a window without a local project: a file inside a local project
 	 *  open in some window goes to that window, the others to the LightEdit window (this one,
@@ -919,6 +920,11 @@ export const commands = {
 	diff?: DiffFilesLaunch | null,
 	/**  Deployment windows: the server and local selection to compare. */
 	deployment?: DeploymentLaunch | null,
+	/**
+	 *  A solution file in `project`'s folder that becomes its solution once the project is open
+	 *  (boxed: most launches have none).
+	 */
+	solution?: IpcPath | null,
 } | null>("window_take_launch"),
 	windowCloseContext: () => __TAURI_INVOKE<CloseContext>("window_close_context"),
 	/**  Projects open in project windows, in window order (title bar project widget). */
@@ -1003,8 +1009,18 @@ export const commands = {
 	 *  with paths mapped into this project.
 	 */
 	coverageImport: (path: IpcPath) => typedError<CoverageSuite, IdeError>(__TAURI_INVOKE("coverage_import", { path })),
-	/**  Solution files at the project root, `.slnx` before `.sln` before `.slnf`. */
+	/**  Solution files at the project root: the one opened last first, then `.slnx` before `.sln` before `.slnf`. */
 	dotnetSolutions: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_solutions")),
+	/**
+	 *  The folder that opens as the project for the solution file `path` (File › Open Solution…,
+	 *  a drop on the Welcome screen); None when `path` is not one (a folder named `App.sln`).
+	 */
+	dotnetSolutionFolder: (path: string) => typedError<string | null, IdeError>(__TAURI_INVOKE("dotnet_solution_folder", { path })),
+	/**
+	 *  Makes the solution file `path` its folder's solution, once that folder is open as the
+	 *  project; the window that has it open reloads it.
+	 */
+	dotnetChooseSolution: (path: string) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_choose_solution", { path })),
 	/**  The solution at `path`: its folders, projects and solution items. */
 	dotnetSolution: (path: IpcPath) => typedError<Solution, IdeError>(__TAURI_INVOKE("dotnet_solution", { path })),
 	/**  Searches the package sources of the project's `nuget.config`. */
@@ -4371,6 +4387,19 @@ export type FunctionBreakpoint = {
 	enabled: boolean,
 };
 
+export type GcCollection = {
+	/**  Since the start of the trace. */
+	startMs: number | null,
+	pauseMs: number | null,
+	generation: number,
+	/**  Why it ran, as the runtime names it (`AllocSmall`, `Induced`, `LowMemory`). */
+	reason: string,
+	/**  `NonConcurrentGC`, `BackgroundGC` or `ForegroundGC`. */
+	kind: string,
+	heapBeforeMb: number | null,
+	heapAfterMb: number | null,
+};
+
 export type GeneralSettings = {
 	reopenLastProject?: boolean,
 	confirmExit?: boolean,
@@ -5515,6 +5544,11 @@ export type Launch = {
 	diff?: DiffFilesLaunch | null,
 	/**  Deployment windows: the server and local selection to compare. */
 	deployment?: DeploymentLaunch | null,
+	/**
+	 *  A solution file in `project`'s folder that becomes its solution once the project is open
+	 *  (boxed: most launches have none).
+	 */
+	solution?: IpcPath | null,
 };
 
 export type LaunchConfig = {
@@ -8482,6 +8516,15 @@ export type ToolStatus =
 /**  The executable chosen in settings. */
 "custom" | "missing";
 
+/**  Time on one source line: `self_ms` while the line itself ran, `total_ms` with what it called. */
+export type TraceLine = {
+	path: IpcPath,
+	/**  0-based. */
+	line: number,
+	selfMs: number | null,
+	totalMs: number | null,
+};
+
 export type TraceProfile = {
 	path: IpcPath,
 	durationMs: number,
@@ -8490,6 +8533,13 @@ export type TraceProfile = {
 	root: FlameNode,
 	/**  Where the frames of the solution's own code are declared (filled in by the host). */
 	sources: FrameSource[],
+	/**
+	 *  Time per source line, where the trace's PDBs give lines (traces the .NET
+	 *  diagnostics helper read; Speedscope files carry none).
+	 */
+	lines: TraceLine[],
+	/**  Garbage collections during the trace, oldest first (helper traces only). */
+	collections: GcCollection[],
 };
 
 export type TransferError = {

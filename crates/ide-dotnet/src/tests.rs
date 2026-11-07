@@ -151,6 +151,56 @@ fn find_prefers_slnx_then_sln() {
 }
 
 #[test]
+fn an_opened_solution_is_found_first_and_kept_out_of_git() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in ["App.sln", "App.slnx", "Other.sln"] {
+        std::fs::write(root.join(name), "").unwrap();
+    }
+    let names =
+        || find(root).into_iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert_eq!(names(), ["App.slnx", "App.sln", "Other.sln"]);
+
+    assert_eq!(solution_folder(&root.join("Other.sln")), Some(root));
+    assert!(!root.join(".openidea").exists(), "finding the folder writes nothing");
+    choose_solution(&root.join("Other.sln")).unwrap();
+    assert_eq!(names(), ["Other.sln", "App.slnx", "App.sln"]);
+    let ignore = std::fs::read_to_string(root.join(".openidea/.gitignore")).unwrap();
+    assert_eq!(ignore.lines().filter(|l| *l == "/solution.local").count(), 1);
+
+    choose_solution(&root.join("App.sln")).unwrap();
+    assert_eq!(names(), ["App.sln", "App.slnx", "Other.sln"]);
+    let ignore = std::fs::read_to_string(root.join(".openidea/.gitignore")).unwrap();
+    assert_eq!(ignore.lines().filter(|l| *l == "/solution.local").count(), 1);
+
+    // Choosing it again restores an ignore entry that went missing.
+    std::fs::write(root.join(".openidea/.gitignore"), "/shelf/\n").unwrap();
+    choose_solution(&root.join("App.sln")).unwrap();
+    let ignore = std::fs::read_to_string(root.join(".openidea/.gitignore")).unwrap();
+    assert_eq!(ignore, "/shelf/\n/solution.local\n");
+
+    solution_replaced(&root.join("App.sln"), &root.join("App.slnx")).unwrap();
+    assert_eq!(names()[0], "App.slnx");
+    solution_replaced(&root.join("Other.sln"), &root.join("Other.slnx")).unwrap();
+    assert_eq!(names()[0], "App.slnx");
+
+    std::fs::remove_file(root.join("App.slnx")).unwrap();
+    assert_eq!(names(), ["App.sln", "Other.sln"]);
+}
+
+#[test]
+fn only_solution_files_open_as_solutions() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("App.csproj"), "").unwrap();
+    std::fs::create_dir(dir.path().join("Folder.sln")).unwrap();
+    for name in ["App.csproj", "Folder.sln", "Missing.slnx"] {
+        assert_eq!(solution_folder(&dir.path().join(name)), None);
+        assert!(choose_solution(&dir.path().join(name)).is_err());
+    }
+    assert!(!dir.path().join(".openidea").exists());
+}
+
+#[test]
 fn malformed_files_are_errors_not_empty_solutions() {
     let dir = tempfile::tempdir().unwrap();
     let sln = dir.path().join("Bad.sln");

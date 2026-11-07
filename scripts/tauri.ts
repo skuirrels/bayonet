@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { claimSession, preferredVitePort, withDevConfig, worktreeId, worktreeRoot } from "./dev-session.ts";
 import type { DevSession } from "./dev-session.ts";
 
@@ -46,11 +47,21 @@ async function runCli(args: string[]): Promise<number> {
   }
 }
 
+// `cargo run` launches the dev binary through this runner, which wraps it in a Bayonet.app
+// so the Dock shows the product name and icon. A runner the developer set themselves wins.
+function applyMacosDevBundle() {
+  const runner = fileURLToPath(new URL("./macos-dev-runner.sh", import.meta.url));
+  for (const triple of ["AARCH64_APPLE_DARWIN", "X86_64_APPLE_DARWIN"]) {
+    process.env[`CARGO_TARGET_${triple}_RUNNER`] ??= runner;
+  }
+}
+
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   if (args[0] !== "dev" || args.includes("--help") || args.includes("-h") || args.includes("--release")) {
     return runCli(args);
   }
+  if (process.platform === "darwin") applyMacosDevBundle();
   const session: DevSession = {
     worktree: worktreeRoot,
     identifier: worktreeId(worktreeRoot),

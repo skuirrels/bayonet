@@ -244,6 +244,62 @@ export function heatByFile(trace: TraceProfile): Record<string, MethodHeat[]> {
   return out;
 }
 
+export interface LineHeat {
+  /** 0-based. */
+  line: number;
+  selfMs: number;
+  totalMs: number;
+  /** Shares of all thread time, 0–1. */
+  totalShare: number;
+  selfShare: number;
+  level: number;
+}
+
+/**
+ * The source lines of each file with their time, where the trace has lines (one the
+ * .NET diagnostics helper read), hottest first within a file. Lines under the
+ * heat threshold are left out.
+ */
+export function lineHeatByFile(trace: TraceProfile): Record<string, LineHeat[]> {
+  const total = trace.root.totalMs || 1;
+  const out: Record<string, LineHeat[]> = {};
+  for (const l of trace.lines) {
+    // Floats arrive as `number | null` (a NaN would be null).
+    const totalMs = l.totalMs ?? 0;
+    const selfMs = l.selfMs ?? 0;
+    const totalShare = totalMs / total;
+    const level = heatLevel(totalShare);
+    if (level === 0) continue;
+    (out[l.path] ??= []).push({ line: l.line, selfMs, totalMs, totalShare, selfShare: selfMs / total, level });
+  }
+  for (const list of Object.values(out)) list.sort((a, b) => a.line - b.line);
+  return out;
+}
+
+export interface GcSummary {
+  count: number;
+  /** Collections per generation (0, 1, 2). */
+  byGeneration: [number, number, number];
+  pauseMs: number;
+  /** Pause time as a share of the trace's duration, 0–1. */
+  pauseShare: number;
+  longestPauseMs: number;
+}
+
+export function gcSummary(trace: TraceProfile): GcSummary | null {
+  const gcs = trace.collections;
+  if (!gcs.length) return null;
+  const byGeneration: [number, number, number] = [0, 0, 0];
+  let pauseMs = 0;
+  let longestPauseMs = 0;
+  for (const c of gcs) {
+    byGeneration[Math.min(c.generation, 2) as 0 | 1 | 2]++;
+    pauseMs += c.pauseMs ?? 0;
+    longestPauseMs = Math.max(longestPauseMs, c.pauseMs ?? 0);
+  }
+  return { count: gcs.length, byGeneration, pauseMs, pauseShare: pauseMs / (trace.durationMs || 1), longestPauseMs };
+}
+
 // ---------------------------------------------------------------- formatting
 
 /** `1.24 s`, `86.3 ms`, `4 ms`: three significant figures. */

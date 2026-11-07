@@ -15,6 +15,7 @@ type Entry =
 
 const ACTIONS: { id: string; label: string; icon: IconName }[] = [
   { id: "file.openProject", label: "Open…", icon: "folder" },
+  { id: "file.openSolution", label: "Open Solution…", icon: "folder" },
   { id: "vcs.clone", label: "Clone Repository…", icon: "branch" },
   { id: "remote.connect", label: "Remote Development…", icon: "terminal" },
 ];
@@ -72,7 +73,7 @@ export function ProjectPopup({ anchor, onClose }: ProjectPopupProps) {
     if (!e) return;
     onClose();
     if (e.kind === "action") void executeAction(e.id);
-    else if (e.open) void call(commands.windowOpenProject(e.m.project.path, false, [])).catch(() => undefined);
+    else if (e.open) void call(commands.windowOpenProject(e.m.project.path, false, [], null)).catch(() => undefined);
     else void openRecent(e.m.project);
   };
 

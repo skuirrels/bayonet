@@ -10,6 +10,7 @@ pub mod binlog;
 pub mod diagnostics;
 pub mod ef;
 pub mod generators;
+pub mod helper;
 pub mod msbuild;
 pub mod nuget;
 mod project;
@@ -124,8 +125,64 @@ pub fn format_of(path: &Path) -> Option<SolutionFormat> {
     }
 }
 
-/// Solution files directly in `dir`, `.slnx` before `.sln` before `.slnf`, then by name.
+/// Solution files directly in `dir`: the one chosen last ([`choose_solution`]) first, then
+/// `.slnx` before `.sln` before `.slnf`, then by name.
 pub fn find(dir: &Path) -> Vec<PathBuf> {
+    let mut found = by_format(dir);
+    if let Some(i) = chosen(dir).and_then(|c| found.iter().position(|p| *p == c)) {
+        let chosen = found.remove(i);
+        found.insert(0, chosen);
+    }
+    found
+}
+
+/// Per-user file (git-ignored) naming the solution the user opened, relative to the root.
+const CHOSEN_FILE: &str = "solution.local";
+
+fn chosen(dir: &Path) -> Option<PathBuf> {
+    let name = std::fs::read_to_string(ide_core::project_dir::path(dir, CHOSEN_FILE)).ok()?;
+    let name = name.trim();
+    (!name.is_empty() && !name.contains(['/', '\\'])).then(|| dir.join(name))
+}
+
+/// Whether `path` is a solution file on disk (`.sln`, `.slnx` or `.slnf`).
+pub fn is_solution_file(path: &Path) -> bool {
+    format_of(path).is_some() && path.is_file()
+}
+
+/// The folder that opens as the project for the solution file `path`; None for any other path.
+pub fn solution_folder(path: &Path) -> Option<&Path> {
+    is_solution_file(path).then(|| path.parent()).flatten()
+}
+
+/// Makes the solution file `path` its folder's solution, which [`find`] then lists first.
+pub fn choose_solution(path: &Path) -> IdeResult<()> {
+    let (Some(dir), Some(name)) = (solution_folder(path), path.file_name()) else {
+        return Err(IdeError::invalid(format!("{} is not a solution file", path.display())));
+    };
+    remember(dir, &name.to_string_lossy())
+}
+
+/// After `old` was converted to `new` (SLN-6): a chosen `old` becomes `new`.
+pub fn solution_replaced(old: &Path, new: &Path) -> IdeResult<()> {
+    let (Some(dir), Some(name)) = (new.parent(), new.file_name()) else { return Ok(()) };
+    if old.parent() == Some(dir) && chosen(dir).as_deref() == Some(old) {
+        remember(dir, &name.to_string_lossy())?;
+    }
+    Ok(())
+}
+
+fn remember(dir: &Path, name: &str) -> IdeResult<()> {
+    ide_core::project_dir::ignore(dir, &[&format!("/{CHOSEN_FILE}")])?;
+    let file = ide_core::project_dir::path(dir, CHOSEN_FILE);
+    if std::fs::read_to_string(&file).is_ok_and(|current| current.trim() == name) {
+        return Ok(());
+    }
+    std::fs::write(file, format!("{name}\n"))?;
+    Ok(())
+}
+
+fn by_format(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<(SolutionFormat, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()

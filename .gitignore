@@ -49,3 +49,7 @@ pycharm-screenshots/
 
 # Installers built by scripts/release-kit (release/<version>/)
 /release
+
+# Build output of the .NET diagnostics helper (the IDE builds it from source)
+/dotnet/*/bin/
+/dotnet/*/obj/

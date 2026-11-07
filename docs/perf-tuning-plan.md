@@ -61,6 +61,8 @@ Most gaps cannot be closed by parsing CLI text. The MIT-licensed libraries that 
 
 Proposal: build `Bayonet.Diagnostics`, a small .NET 10 console app speaking JSON-RPC over stdio (the repo already has `ide-jsonrpc`), shipped framework-dependent next to the IDE. It produces compact, pre-aggregated, columnar results so the UI never parses raw traces. The existing CLI paths stay as a fallback when the sidecar is unavailable. This also starts the `Bayonet.Host` the spec already plans.
 
+**Status: skeleton done** (`dotnet/Bayonet.Diagnostics`, client in `crates/ide-dotnet/src/helper.rs`). The IDE embeds its sources and builds them with the installed SDK on first use, into `tools/dotnet-diagnostics/<fingerprint>` under local data, so nothing binary is checked in. Methods: `trace/collect` (attach), `trace/launch` (start suspended on a diagnostic port, so startup is recorded) and `trace/analyze` (thread-time stacks as dotnet-trace computes them, time per source line from portable PDBs, and every GC). The CPU Trace tab records through it and falls back to `dotnet-trace` when it cannot be built. Not yet used: `trace/launch` (waits for A1), allocations, contention, thread pool and request events (A3, A4).
+
 ## 4. Proposed features
 
 Priorities: **A** builds the core tuning loop and should come first; **B** makes it excel; **C** differentiates.
@@ -71,7 +73,7 @@ A **Profile** button beside Run and Debug on every .NET run configuration and te
 
 ### A2. Source-linked call tree, flame graph and editor heat
 
-**Status: first cut done** on the existing `dotnet-trace` data, without the sidecar (see `docs/porting.md`, CPU Trace). Method-level only: Speedscope frames carry no IL offsets, so line-level self time waits for the sidecar's nettrace and PDB reading.
+**Status: done** (see `docs/porting.md`, CPU Trace). Traces the sidecar records have line-level times from the PDBs; `dotnet-trace` Speedscope traces (the fallback) stay method-level, as their frames carry no IL offsets.
 
 - Call tree (top-down), butterfly view (callers and callees of one method) and hot-spot list, with source navigation from every row and flame cell (PRF-2).
 - In the editor: a heat strip in the gutter and an inline hint per method (`412 ms self · 18 %`), coloured on one scale, for the latest profile of that file. Toggle off from the editor context menu. Reuses the coverage gutter mechanism.
