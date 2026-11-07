@@ -964,6 +964,8 @@ export interface ProjectViewRootEntry {
   id?: string;
   /** Nodes listed before the folder's contents (a project's Dependencies). */
   prepend?: readonly ProjectViewRootEntry[];
+  /** A group node standing for this path elsewhere in the tree: opening it selects that node (a project reference). */
+  reveal?: string;
 }
 
 export interface ProjectViewRootContribution extends ProjectViewRootEntry {

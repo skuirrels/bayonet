@@ -247,7 +247,7 @@ mod tests {
             output_type: Some("Exe".into()),
             target_frameworks: vec!["net10.0".into()],
             is_test: false,
-            project_references: Vec::new(),
+            ..ProjectInfo::default()
         };
         assert!(is_apphost(&info(&["Aspire.AppHost.Sdk"])));
         assert!(is_apphost(&info(&["Microsoft.NET.Sdk", "Aspire.AppHost.Sdk"])));

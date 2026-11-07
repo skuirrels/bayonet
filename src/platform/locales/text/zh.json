@@ -2594,6 +2594,7 @@
   "no file is open in the editor": "编辑器中没有打开的文件",
   "no symbols": "没有符号",
   "not found": "未找到",
+  "not restored": "未还原",
   "not installed in this project": "此项目中未安装",
   "or click a line number to set a breakpoint.": "或点击行号设置断点。",
   "per module, the JDK of its Java version": "按模块使用与其 Java 版本匹配的 JDK",

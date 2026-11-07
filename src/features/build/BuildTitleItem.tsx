@@ -6,12 +6,14 @@ import { BUILD_RUNNING } from "./store";
 import styles from "./Build.module.css";
 
 /** Run configuration kinds a project build precedes; scripts (Python, shell, Node…) have nothing to compile. */
-const COMPILED_KINDS = new Set(["", "spring-boot", "application", "maven", "gradle"]);
+const COMPILED_KINDS = new Set(["", "spring-boot", "application", "maven", "gradle", "dotnet", "dotnet-test"]);
 
-/** IDEA's main toolbar hammer, left of the run widget: Maven / Gradle projects, unless a script configuration is selected. */
+/** IDEA's and Rider's main toolbar hammer, left of the run widget: Maven / Gradle projects and .NET solutions, unless a script configuration is selected. */
 export function BuildTitleItem() {
   const shown = useContextKeys(
-    (c) => (!!c["build.maven"] || !!c["build.gradle"]) && COMPILED_KINDS.has(String(c["run.selectedKind"] ?? "")),
+    (c) =>
+      (!!c["build.maven"] || !!c["build.gradle"] || !!c["dotnet.solutionOpen"]) &&
+      COMPILED_KINDS.has(String(c["run.selectedKind"] ?? "")),
   );
   const running = useContextKeys((c) => !!c[BUILD_RUNNING]);
   if (!shown) return null;

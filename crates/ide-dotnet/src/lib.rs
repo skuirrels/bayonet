@@ -7,6 +7,7 @@
 pub mod aspire;
 pub mod avalonia;
 pub mod binlog;
+pub mod dependencies;
 pub mod diagnostics;
 pub mod ef;
 pub mod generators;

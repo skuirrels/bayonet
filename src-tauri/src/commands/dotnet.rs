@@ -395,6 +395,17 @@ pub async fn dotnet_project_references(
     ide_host::ops::dotnet::dotnet_project_references(&state.host, window.label(), project).await
 }
 
+/// Each project's frameworks, packages and project references for the Solution view.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_dependencies(
+    window: Window,
+    state: State<'_, AppState>,
+    projects: Vec<IpcPath>,
+) -> IdeResult<Vec<Option<ide_dotnet::dependencies::ProjectDependencies>>> {
+    ide_host::ops::dotnet::dotnet_dependencies(&state.host, window.label(), projects).await
+}
+
 /// Adds and removes project references.
 #[tauri::command]
 #[specta::specta]

@@ -524,6 +524,7 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         dotnet::dotnet_ef_migrations,
         dotnet::dotnet_ef_command,
         dotnet::dotnet_project_references,
+        dotnet::dotnet_dependencies,
         dotnet::dotnet_edit_references,
         web::web_browsers,
         web::web_url,

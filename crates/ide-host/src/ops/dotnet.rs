@@ -530,6 +530,19 @@ pub async fn dotnet_project_references(host: &Host, _window: &str, project: IpcP
     host.blocking(move || Ok(templates::project_references(&project)?.into_iter().map(IpcPath::from).collect())).await
 }
 
+/// The Dependencies of each project (SLN-1), in the order given; a project that cannot
+/// be read gets none.
+pub async fn dotnet_dependencies(
+    host: &Host,
+    _window: &str,
+    projects: Vec<IpcPath>,
+) -> IdeResult<Vec<Option<ide_dotnet::dependencies::ProjectDependencies>>> {
+    host.blocking(move || {
+        Ok(projects.into_iter().map(|p| ide_dotnet::dependencies::read_dependencies(&PathBuf::from(p)).ok()).collect())
+    })
+    .await
+}
+
 /// Adds and removes project references of `project`.
 pub async fn dotnet_edit_references(
     host: &Host,

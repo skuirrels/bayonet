@@ -54,6 +54,7 @@ import { xamlEditor } from "./xaml/editor";
 import { activateXamlPreview, xamlLiveText } from "./xaml/preview";
 import { SOLUTION_ROOT_ID, solutionProjects, solutionRoot, touchesSolution } from "./solution";
 import { loadGeneratedDirs, resetGenerated, sourcesChanged, watchGenerated } from "./generated";
+import { loadDependencies, touchesDependencies } from "./dependencies";
 import { watchContinuous } from "./tests/continuous";
 import { manageUserSecrets, targetProject } from "./secrets";
 import { publishProject, runInContainer } from "./publish";
@@ -145,17 +146,24 @@ export function activate(): () => void {
       if (!path) return clear();
       const solution = await call(commands.dotnetSolution(path));
       if (id !== seq) return;
-      const dirs = await loadGeneratedDirs(solutionProjects(solution.items)).catch((e: unknown) => {
-        console.warn("solution: no folders for generated sources", e);
-        return {};
-      });
+      const projects = solutionProjects(solution.items);
+      const [dirs, deps] = await Promise.all([
+        loadGeneratedDirs(projects).catch((e: unknown) => {
+          console.warn("solution: no folders for generated sources", e);
+          return {};
+        }),
+        loadDependencies(projects).catch((e: unknown) => {
+          console.warn("solution: cannot read project dependencies", e);
+          return {};
+        }),
+      ]);
       if (id !== seq) return;
-      const key = JSON.stringify([solution, dirs]);
+      const key = JSON.stringify([solution, dirs, deps]);
       if (key === shown) return;
       const first = !shown;
       disposeRoot();
       shown = key;
-      disposeRoot = registerProjectViewRoot(solutionRoot(solution, dirs));
+      disposeRoot = registerProjectViewRoot(solutionRoot(solution, dirs, deps));
       setSolution(solution);
       void loadEfProjects();
       void loadAppHosts(solutionProjects(solution.items))
@@ -578,7 +586,7 @@ export function activate(): () => void {
       clearTimeout(packagesTimer);
       packagesTimer = setTimeout(() => void loadInstalled(), REFRESH_DELAY * 3);
     }
-    if (!touchesSolution(paths)) return;
+    if (!touchesSolution(paths) && !touchesDependencies(paths)) return;
     clearTimeout(timer);
     timer = setTimeout(() => void refresh(), REFRESH_DELAY);
   });

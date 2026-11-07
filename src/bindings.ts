@@ -1140,6 +1140,8 @@ export const commands = {
 	dotnetEfCommand: (project: IpcPath, operation: EfOperation) => typedError<EfCommand, IdeError>(__TAURI_INVOKE("dotnet_ef_command", { project, operation })),
 	/**  The projects a project references. */
 	dotnetProjectReferences: (project: IpcPath) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_project_references", { project })),
+	/**  Each project's frameworks, packages and project references for the Solution view. */
+	dotnetDependencies: (projects: IpcPath[]) => typedError<(ProjectDependencies | null)[], IdeError>(__TAURI_INVOKE("dotnet_dependencies", { projects })),
 	/**  Adds and removes project references. */
 	dotnetEditReferences: (project: IpcPath, add: IpcPath[], remove: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_edit_references", { project, add, remove })),
 	/**  The browsers installed on this machine. */
@@ -4368,6 +4370,17 @@ export type FrameSource = {
 	endLine: number,
 };
 
+export type FrameworkDependencies = {
+	/**  The target framework as the project names it (`net10.0`); empty when it names none. */
+	framework: string,
+	/**  Shared frameworks: `Microsoft.NETCore.App` first, then `Microsoft.AspNetCore.App`… */
+	frameworkReferences: string[],
+	/**  Packages the project references first, then the ones they bring in, each by id. */
+	packages: PackageDependency[],
+	/**  Referenced project files, by name. */
+	projects: IpcPath[],
+};
+
 export type FrameworkPackages = {
 	framework: string,
 	packages: InstalledPackage[],
@@ -6247,6 +6260,16 @@ export type PackageAudit = {
 	problems: string[],
 };
 
+export type PackageDependency = {
+	id: string,
+	/**  The version restore picked, else the version or range as written. */
+	version: string | null,
+	/**  Referenced by the project itself, not only brought in by another package. */
+	topLevel: boolean,
+	/**  Ids (as in `packages`) of the packages this one depends on. */
+	dependencies: string[],
+};
+
 /**  A text file of a package the UI generated, at its `/`-separated path in the package. */
 export type PackageFile = {
 	path: string,
@@ -6769,6 +6792,13 @@ export type ProjectContext = {
 export type ProjectContexts = {
 	contexts: ProjectContext[],
 	active: number,
+};
+
+export type ProjectDependencies = {
+	/**  Read from `project.assets.json`; `false` = from the project file, before a restore. */
+	restored: boolean,
+	/**  One per target framework, in the project's order. */
+	frameworks: FrameworkDependencies[],
 };
 
 export type ProjectFileSet = 
