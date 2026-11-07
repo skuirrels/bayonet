@@ -173,5 +173,6 @@ workflow and [`CLAUDE.md`](CLAUDE.md) the layout and rules of the codebase.
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) for bundled third-party assets.
 Database tool window notes, including Oracle Instant Client setup, are in
 [`docs/databases.md`](docs/databases.md).
+Java language server choices and their capabilities are in [`docs/java.md`](docs/java.md).
 
 <sub>Not affiliated with JetBrains or Microsoft. IntelliJ IDEA and Rider are trademarks of JetBrains s.r.o. .NET is a trademark of Microsoft Corporation.</sub>
