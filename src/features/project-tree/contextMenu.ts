@@ -133,7 +133,7 @@ function submenu(id: string, label: string, entries: Entry[], icon?: string): Me
 }
 
 /**
- * IDEA's ProjectViewPopupMenu: New / clipboard / find / Refactor / edit /
+ * IDEA's ProjectViewPopupMenu: New / Edit (clipboard, Delete) / find / Refactor / code /
  * Run group / Open In / Local History / Git / Compare / Mark Directory as.
  * Items that cannot apply to the selection are hidden (or disabled, like IDEA's
  * clipboard group), so the project root and Scratches get a shorter menu.
@@ -163,46 +163,56 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
   if (!leadItems.some((i) => "id" in i && i.id === "new"))
     push({ id: "new", label: "New", submenu: newItems }, { kind: "separator" });
 
-  // Cut / Copy / Copy Path/Reference… / Paste
+  // Edit › Cut / Copy / Copy Path/Reference… / Paste / Delete…
   push(
-    {
-      id: "cut",
-      label: "Cut",
-      icon: "cut",
-      shortcut: keyLabel("project.cut"),
-      disabled: !nonRoot.length,
-      run: () => copySelection(true),
-    },
-    {
-      id: "copy",
-      label: "Copy",
-      icon: "copy",
-      shortcut: keyLabel("project.copy"),
-      disabled: !nonRoot.length,
-      run: () => copySelection(false),
-    },
-    {
-      id: "copyPath",
-      label: "Copy Path/Reference…",
-      submenu: [
-        {
-          id: "abs",
-          label: "Absolute Path",
-          shortcut: keyLabel("project.copyAbsolutePath"),
-          run: () => void copyPaths("absolute", nodes),
-        },
-        { id: "name", label: "File Name", run: () => void copyPaths("name", nodes) },
-        { id: "rel", label: "Path From Content Root", run: () => void copyPaths("relative", nodes) },
-      ],
-    },
-    {
-      id: "paste",
-      label: "Paste",
-      icon: "paste",
-      shortcut: keyLabel("project.paste"),
-      disabled: !canPaste(),
-      run: () => void paste(folder),
-    },
+    submenu("edit", "Edit", [
+      {
+        id: "cut",
+        label: "Cut",
+        icon: "cut",
+        shortcut: keyLabel("project.cut"),
+        disabled: !nonRoot.length,
+        run: () => copySelection(true),
+      },
+      {
+        id: "copy",
+        label: "Copy",
+        icon: "copy",
+        shortcut: keyLabel("project.copy"),
+        disabled: !nonRoot.length,
+        run: () => copySelection(false),
+      },
+      {
+        id: "copyPath",
+        label: "Copy Path/Reference…",
+        submenu: [
+          {
+            id: "abs",
+            label: "Absolute Path",
+            shortcut: keyLabel("project.copyAbsolutePath"),
+            run: () => void copyPaths("absolute", nodes),
+          },
+          { id: "name", label: "File Name", run: () => void copyPaths("name", nodes) },
+          { id: "rel", label: "Path From Content Root", run: () => void copyPaths("relative", nodes) },
+        ],
+      },
+      {
+        id: "paste",
+        label: "Paste",
+        icon: "paste",
+        shortcut: keyLabel("project.paste"),
+        disabled: !canPaste(),
+        run: () => void paste(folder),
+      },
+      { kind: "separator" },
+      {
+        id: "delete",
+        label: "Delete…",
+        shortcut: keyLabel("project.delete"),
+        disabled: !nonRoot.length,
+        run: () => void deleteSelection(nodes),
+      },
+    ]),
     { kind: "separator" },
   );
 
@@ -260,7 +270,7 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
     { kind: "separator" },
   );
 
-  // Reformat Code / Optimize Imports / Delete…
+  // Reformat Code / Optimize Imports
   push(
     singleFile &&
       getAction("code.reformatFile") && {
@@ -276,13 +286,6 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
         shortcut: keyLabel("project.optimizeImports"),
         run: () => void delegate("code.optimizeImportsFile", { path: singleFile.path }),
       },
-    {
-      id: "delete",
-      label: "Delete…",
-      shortcut: keyLabel("project.delete"),
-      disabled: !nonRoot.length,
-      run: () => void deleteSelection(nodes),
-    },
     { kind: "separator" },
   );
 

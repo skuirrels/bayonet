@@ -93,7 +93,9 @@ function PopupInner({
     () => [
       offsetMw(offset),
       flip({ padding: 6 }),
-      shift({ padding: 6 }),
+      // crossAxis: slide a popup that doesn't fit on either side back into view (a context
+      // menu opened low moves up) rather than letting `size` shrink it into a scroller.
+      shift({ padding: 6, crossAxis: true }),
       sizeMw({
         padding: 6,
         apply({ rects, elements, availableHeight }) {

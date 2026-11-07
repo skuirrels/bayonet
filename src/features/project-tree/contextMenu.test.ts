@@ -89,10 +89,7 @@ describe("project view context menu", () => {
     expect(labels(items)).toEqual([
       "New",
       "-",
-      "Cut",
-      "Copy",
-      "Copy Path/Reference…",
-      "Paste",
+      "Edit",
       "-",
       "Jump to Source",
       "Find Usages",
@@ -103,7 +100,6 @@ describe("project view context menu", () => {
       "-",
       "Reformat Code",
       "Optimize Imports",
-      "Delete…",
       "-",
       "Run 'a'",
       "-",
@@ -116,6 +112,7 @@ describe("project view context menu", () => {
       "-",
       "Compare With…",
     ]);
+    expect(sub(items, "Edit")).toEqual(["Cut", "Copy", "Copy Path/Reference…", "Paste", "-", "Delete…"]);
     expect(sub(items, "Refactor")).toEqual(["Rename…", "Move File…", "Copy File…", "-", "Safe Delete…"]);
     expect(sub(items, "Open In")).toEqual([revealLabel(), "Terminal"]);
     expect(sub(items, "Git")?.slice(0, 4)).toEqual(["Commit File…", "Add", "-", "Annotate with Git Blame"]);
@@ -179,7 +176,8 @@ describe("project view context menu", () => {
     const l = labels(items);
     expect(l).not.toContain("Refactor");
     expect(l).not.toContain("Mark Directory as");
-    const resolved = resolveMenuItems(items);
+    const edit = resolveMenuItems(items).find((r) => r.label === "Edit")!;
+    const resolved = resolveMenuItems(edit.submenu!);
     for (const label of ["Cut", "Copy", "Delete…"])
       expect(resolved.find((r) => r.label === label)?.disabled).toBe(true);
   });
