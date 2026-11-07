@@ -25,6 +25,7 @@ export type ToggleOption = {
 
 export const OPTION_LABELS: Array<[ToggleOption, string]> = [
   ["showHidden", "Show Hidden Files"],
+  ["showDotfiles", "Show Dotfiles"],
   ["showExcluded", "Show Excluded Files"],
   ["showMembers", "Show Members"],
   ["compact", "Compact Middle Packages"],
@@ -71,7 +72,7 @@ export function useProjectHeaderMenu(): MenuItem[] {
           option("showUnityGenerated", "Show Generated Files", options),
         ]
       : []),
-    ...OPTION_LABELS.slice(0, 5).map(([key, label]) => option(key, label, options)),
+    ...OPTION_LABELS.slice(0, 6).map(([key, label]) => option(key, label, options)),
     { kind: "separator" },
     ...SORT_LABELS.map(([sortBy, label]): MenuItem => ({
       id: `sort.${sortBy}`,
@@ -81,7 +82,7 @@ export function useProjectHeaderMenu(): MenuItem[] {
     })),
     { kind: "separator" },
     { kind: "header", label: "Behavior" },
-    ...OPTION_LABELS.slice(5).map(([key, label]) => option(key, label, options)),
+    ...OPTION_LABELS.slice(6).map(([key, label]) => option(key, label, options)),
   ];
 }
 

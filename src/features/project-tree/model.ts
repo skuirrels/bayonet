@@ -12,8 +12,10 @@ export interface TreeOptions {
   unityRoot?: string;
   showUnityMeta: boolean;
   showUnityGenerated: boolean;
-  /** Show ignored names (`files.ignoredNames`: `.git`, `.DS_Store`, …). Dotfiles are always shown. */
+  /** Show ignored names (`files.ignoredNames`: `.git`, `.DS_Store`, …). */
   showHidden: boolean;
+  /** Show names starting with a dot (`.env`, `.gitignore`, `.github`). */
+  showDotfiles: boolean;
   /** Show entries matched by .gitignore / exclude settings (dimmed). */
   showExcluded: boolean;
   /** Merge single-child folder chains (`com/acme/orders` → `com.acme.orders`). */
@@ -29,6 +31,7 @@ export const DEFAULT_TREE_OPTIONS: TreeOptions = {
   showUnityMeta: false,
   showUnityGenerated: false,
   showHidden: false,
+  showDotfiles: false,
   showExcluded: true,
   compact: true,
   foldersFirst: true,
@@ -92,6 +95,7 @@ export function unityPathVisible(path: string, opts: TreeOptions): boolean {
 
 export function isVisible(entry: FileEntry, opts: TreeOptions): boolean {
   if (!unityPathVisible(entry.path, opts)) return false;
+  if (!opts.showDotfiles && entry.name.startsWith(".")) return false;
   // Ignored names are also excluded on the backend; only "Show Hidden" brings them back.
   if (isIgnoredName(entry.name)) return opts.showHidden;
   if (!opts.showExcluded && entry.ignored) return false;

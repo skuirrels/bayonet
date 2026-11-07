@@ -290,6 +290,7 @@ describe("project view modes", () => {
   });
 
   it("shows library folders inside the project in both places, read-only", async () => {
+    store.setViewOption("showDotfiles", true);
     const site = "/p/.venv/lib/site-packages";
     for (const dir of ["/p", "/p/.venv", "/p/.venv/lib", site, `${site}/req`]) await loadDir(dir);
     const m = currentModel();
