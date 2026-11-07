@@ -18,6 +18,12 @@ vi.mock("@/bindings", () => ({
     }),
   },
 }));
+vi.mock("@tauri-apps/api/core", async (orig) => ({
+  ...(await orig<object>()),
+  Channel: class {
+    onmessage = () => {};
+  },
+}));
 vi.mock("@/platform/ipc", () => ({ call: <T>(p: Promise<T>) => p, isTauri: () => true, nextRequestId: () => 1 }));
 vi.mock("@/features/code-insight/ipc", () => ({
   withDocument: async <T>(path: string, fn: (doc: number) => Promise<T>) => {

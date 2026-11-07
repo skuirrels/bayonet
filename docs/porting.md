@@ -56,6 +56,19 @@ changes can keep flowing in.
     in a search field.
   - The new Polish and Portuguese catalogues drop upstream's .NET run configuration
     strings and use the Bayonet names, as fr/ko/zh do.
+- **2026-11-06, `88ecaf9c` (v0.1.38 and 79 commits).**
+  - **csharp-ls decompiled definitions** (`c3e8f20f`). Upstream's `csharp:` metadata
+    documents are a branch beside our `roslyn-source-generated` one in `virtual_document`.
+    Roslyn's own decompiled files stay on disk under `MetadataAsSource` (read-only through
+    `is_metadata_source`), so this only changes the csharp-ls fallback. The banner keeps
+    our generated-source text and adds upstream's "Decompiled assembly" text for `csharp:`.
+  - **References scope** (`a6d17543`). `lspReferences` gained `libraries` and a partial
+    results channel. Change Signature and continuous testing pass `false` and an unused
+    channel; `libraries` only narrows Java searches.
+  - **Update source.** Upstream's GitHub/CNB update source setting stays removed, as our
+    own update feed replaced it (`0c64b515`); its strings are dropped from en/zh.
+  - `release.yml` stays deleted (its Windows portable zip, #1864, is not in our release
+    kit). `tauri.conf.json`, the README and the Korean Bayonet title stay ours.
 
 ## What was renamed
 

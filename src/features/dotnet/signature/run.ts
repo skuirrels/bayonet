@@ -4,6 +4,7 @@
  * dialog, the server's references, then the backend's rewrite of the
  * declaration and every call, applied as one workspace edit.
  */
+import { Channel } from "@tauri-apps/api/core";
 import type { EditorView } from "@codemirror/view";
 import type { Location, SkippedSite } from "@/bindings";
 import { whenSynced } from "@/editor/api";
@@ -55,7 +56,9 @@ export async function changeCSharpSignature(view: EditorView): Promise<boolean> 
   const name = sig.name;
   try {
     const refs = await withDocument(target.path, (doc) =>
-      lspRequest(() => commands.lspReferences(nextRequestId(), doc, sig.nameRange.start, true, true)),
+      lspRequest(() =>
+        commands.lspReferences(nextRequestId(), doc, sig.nameRange.start, true, true, false, new Channel()),
+      ),
     );
     const locations: Location[] = [{ path: target.path, range: sig.nameRange }, ...refs.locations];
     const rewrite = await call(commands.changeSignature(sig, change, locations));
