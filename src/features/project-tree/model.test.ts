@@ -51,14 +51,22 @@ describe("buildModel", () => {
     const m = buildModel(ROOT, base, DEFAULT_TREE_OPTIONS);
     expect(m.roots).toHaveLength(1);
     expect(m.roots[0]).toMatchObject({ key: "/r", label: "acme", root: true, dir: true });
-    expect(labels(m, "/r")).toEqual(["src", "build", ".gitignore", "README.md"]);
+    expect(labels(m, "/r")).toEqual(["src", "build", "README.md"]);
     expect(m.children.has("/r/src")).toBe(false);
     expect(m.byKey.get("/r/build")?.ignored).toBe(true);
   });
 
-  it("filters IDE-hidden names and excluded entries by option", () => {
-    const opts: TreeOptions = { ...DEFAULT_TREE_OPTIONS, showHidden: true, showExcluded: false };
+  it("filters IDE-hidden names, dotfiles and excluded entries by option", () => {
+    const opts: TreeOptions = { ...DEFAULT_TREE_OPTIONS, showHidden: true, showDotfiles: true, showExcluded: false };
     expect(labels(buildModel(ROOT, base, opts), "/r")).toEqual(["src", ".git", ".gitignore", "README.md"]);
+  });
+
+  it("hides dotfiles by default; ignored dotted names need both options", () => {
+    expect(labels(buildModel(ROOT, base, DEFAULT_TREE_OPTIONS), "/r")).toEqual(["src", "build", "README.md"]);
+    const dots = { ...DEFAULT_TREE_OPTIONS, showDotfiles: true };
+    expect(labels(buildModel(ROOT, base, dots), "/r")).toEqual(["src", "build", ".gitignore", "README.md"]);
+    const hiddenOnly = { ...DEFAULT_TREE_OPTIONS, showHidden: true };
+    expect(labels(buildModel(ROOT, base, hiddenOnly), "/r")).toEqual(["src", "build", "README.md"]);
   });
 
   it("sorts names naturally, optionally mixing folders and files", () => {
@@ -133,7 +141,7 @@ describe("buildModel", () => {
     const m = buildModel(ROOT, base, DEFAULT_TREE_OPTIONS, { parent: "/r", kind: "file" });
     const kids = m.children.get("/r")!;
     expect(kids[0]).toMatchObject({ placeholder: "file", path: "/r" });
-    expect(kids).toHaveLength(5);
+    expect(kids).toHaveLength(4);
   });
 });
 

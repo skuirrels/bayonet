@@ -284,12 +284,13 @@ describe("project view modes", () => {
     await deleteSelection([file]);
     await expect((await import("./fs")).projectFs("/p").readDir("/py/lib/python3.12")).resolves.toHaveLength(1);
     const ids = contextMenuItems([file]).map((i) => ("id" in i ? i.id : i.kind));
-    expect(ids).not.toContain("delete");
+    expect(ids).not.toContain("edit");
     expect(ids).not.toContain("new");
     expect(ids).toContain("copyPath");
   });
 
   it("shows library folders inside the project in both places, read-only", async () => {
+    store.setViewOption("showDotfiles", true);
     const site = "/p/.venv/lib/site-packages";
     for (const dir of ["/p", "/p/.venv", "/p/.venv/lib", site, `${site}/req`]) await loadDir(dir);
     const m = currentModel();
@@ -315,10 +316,10 @@ describe("project view modes", () => {
     await deleteSelection([projectFile, libFile]);
     await expect((await import("./fs")).projectFs("/p").readDir(`${site}/req`)).resolves.toHaveLength(1);
     const ids = contextMenuItems([projectFile]).map((i) => ("id" in i ? i.id : i.kind));
-    expect(ids).not.toContain("delete");
+    expect(ids).not.toContain("edit");
     expect(ids).not.toContain("rename");
     expect(contextMenuItems([m.byKey.get("/p/.venv/pyvenv.cfg")!]).map((i) => ("id" in i ? i.id : i.kind))).toContain(
-      "delete",
+      "edit",
     );
   });
 
