@@ -20,6 +20,13 @@ Full MIT notices are preserved in [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICEN
 | One Light UI           | [GitHub / Atom, a27bce3](https://github.com/atom/one-light-ui/tree/a27bce35088ecd323e44f5c2510bcf2d4e9efcf8)        | `styles/ui-variables.less`, `styles/ui-variables-custom.less`                                                          |
 | One Dark UI            | [GitHub / Atom, 18c2143](https://github.com/atom/one-dark-ui/tree/18c2143d41e17b337fff6dc7024562c4d999be17)         | `styles/ui-variables.less`, `styles/ui-variables-custom.less`                                                          |
 
+Islands Light and Islands Dark keep IntelliJ's Islands UI, but their editor
+colours are Rider 2026.2's own _Rider Light_ and _Rider Islands Dark_ schemes
+(`colorSchemes/RiderLight.xml` and `RiderIslandsDark.xml` in Rider's
+`rider-theme-pack` plugin). Python, PHP and Markdown keep PyCharm's and
+PhpStorm's language colours. Struct, enum, delegate, namespace and event
+colours apply to C# only, as ReSharper's distinctions.
+
 ## Mapping into OpenIDEA
 
 `src/platform/themes.ts` registers the stable ids. `data-theme` retains the

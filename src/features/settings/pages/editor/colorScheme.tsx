@@ -140,16 +140,26 @@ const SAMPLE: Seg[][] = [
   [["# TODO: localize", "todo"]],
 ];
 
+function schemeItalic(id: string, customs: CustomColorSchemes, attr: AttributeDef): boolean | undefined {
+  if (!attr.italicOnly) return undefined;
+  const value = resolvedSchemeTokens(id, customs).get(`--syn-${attr.token}-italic`);
+  return value === undefined ? undefined : value === "italic";
+}
+
 function AttributeEditor({
   attr,
   value,
+  schemeItalic,
   onChange,
 }: {
   attr: AttributeDef;
   value: TextAttributesOverride | undefined;
+  /** The scheme's own italic for an italic-only attribute, when the scheme sets one. */
+  schemeItalic?: boolean;
   onChange: (v: TextAttributesOverride | undefined) => void;
 }) {
   const v = value ?? {};
+  const defaultItalic = schemeItalic ?? attr.defaultItalic ?? true;
   const set = (patch: Partial<TextAttributesOverride>) => {
     const next: TextAttributesOverride = { ...v, ...patch };
     for (const k of Object.keys(next) as Array<keyof TextAttributesOverride>) if (next[k] === undefined) delete next[k];
@@ -160,8 +170,8 @@ function AttributeEditor({
       {attr.italicOnly && (
         <div className={styles.attrRow}>
           <Checkbox
-            checked={v.italic ?? attr.defaultItalic ?? true}
-            onChange={(b) => set({ italic: b === (attr.defaultItalic ?? true) ? undefined : b })}
+            checked={v.italic ?? defaultItalic}
+            onChange={(b) => set({ italic: b === defaultItalic ? undefined : b })}
             label="Italic"
           />
         </div>
@@ -289,6 +299,7 @@ function ColorSchemePage() {
     () => ({ ...previewVars(id, mine, customs, language), ...fontWeightVars(weight, boldFontWeight) }) as CSSProperties,
     [id, mine, customs, language, weight, boldFontWeight],
   );
+  const italic = useMemo(() => attr && schemeItalic(id, customs, attr), [id, customs, attr]);
   const update = (attrId: string, v: TextAttributesOverride | undefined) => {
     const next: Overrides = { ...(overrides ?? {}) };
     const forScheme = { ...(next[id] ?? {}) };
@@ -458,6 +469,7 @@ function ColorSchemePage() {
             key={`${id}/${attr.id}`}
             attr={attr}
             value={mine?.[attr.id]}
+            schemeItalic={italic}
             onChange={(v) => update(attr.id, v)}
           />
         ) : (
