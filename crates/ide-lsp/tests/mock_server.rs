@@ -519,6 +519,47 @@ async fn registered_file_watchers_choose_the_changes_a_server_hears_of() {
     h.mgr.shutdown_all().await;
 }
 
+/// Files an ignore rule leaves out (`obj/project.assets.json`) reach only the servers whose
+/// registered watchers match them, never the language-file fallback.
+#[tokio::test(flavor = "multi_thread")]
+async fn ignored_files_reach_only_registered_watchers() {
+    let h = harness(&[("mock", incremental_caps())]);
+    h.open("a.mk", "x");
+    h.wait_status("mock", ServerStatus::Ready).await;
+    let s = h.launcher.state("mock");
+    let notified = || s.notified("workspace/didChangeWatchedFiles");
+    let obj = h.root.join("app/obj");
+    // Unregistered, the server hears of none of them, its own language's files included.
+    h.mgr.ignored_files_changed(&[obj.join("gen.mk")], &[], &[]);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(notified().is_empty());
+
+    s.peer()
+        .request::<_, Value>(
+            "client/registerCapability",
+            json!({ "registrations": [{ "id": "w", "method": "workspace/didChangeWatchedFiles", "registerOptions": { "watchers": [
+                { "globPattern": { "baseUri": uri_of(&h.root.join("app")), "pattern": "{**/*.mk,**/*.json}" } },
+            ] } }] }),
+            None,
+        )
+        .await
+        .unwrap();
+    h.mgr.ignored_files_changed(
+        &[obj.join("project.assets.json"), obj.join("cache.bin")],
+        &[obj.join("gen.mk")],
+        &[h.root.join("other/obj/project.assets.json")],
+    );
+    eventually(|| !notified().is_empty()).await;
+    assert_eq!(
+        notified()[0]["changes"],
+        json!([
+            { "uri": uri_of(&obj.join("project.assets.json")), "type": 1 },
+            { "uri": uri_of(&obj.join("gen.mk")), "type": 2 },
+        ])
+    );
+    h.mgr.shutdown_all().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn initialize_and_incremental_sync() {
     let h = harness(&[("mock", incremental_caps())]);

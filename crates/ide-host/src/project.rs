@@ -334,6 +334,8 @@ impl Host {
                     phpstan.files_removed(batch.removed.iter());
                     lsp.project_files_changed(batch.created.iter().chain(&batch.removed));
                     lsp.watched_files_changed(&batch.created, &batch.modified, &batch.removed, &batch.excluded_dirs);
+                    let ignored_files = &batch.ignored_files;
+                    lsp.ignored_files_changed(&ignored_files.created, &ignored_files.modified, &ignored_files.removed);
                     if composer_changed(&root, changed.iter().chain(&batch.removed)) {
                         lsp.reconfigure_soon();
                     }
@@ -1135,6 +1137,8 @@ impl Project {
             let on_change = Box::new(move |batch: &ide_vfs::FsBatch| {
                 if let Some(lsp) = lsp.upgrade() {
                     lsp.watched_files_changed(&batch.created, &batch.modified, &batch.removed, &batch.excluded_dirs);
+                    let ignored_files = &batch.ignored_files;
+                    lsp.ignored_files_changed(&ignored_files.created, &ignored_files.modified, &ignored_files.removed);
                 }
             });
             // Not project files: nothing else hears of them.

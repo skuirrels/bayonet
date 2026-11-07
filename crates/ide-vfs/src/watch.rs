@@ -678,11 +678,18 @@ impl EventFilter {
                 // itself — reporting one extra file removal is harmless.
                 let self_excluded = (is_dir || change == Change::Removed)
                     && (self.excludes.read().is_match(rel) || self.gitignore.is_ignored_self(&path, true));
-                if !self_excluded && (self.excludes.read().is_excluded(rel) || self.gitignore.is_ignored(&path, is_dir))
-                {
+                let excluded = !self_excluded && self.excludes.read().is_excluded(rel);
+                if excluded || (!self_excluded && self.gitignore.is_ignored(&path, is_dir)) {
                     // Only a file appearing or going changes what the folder lists.
                     if change != Change::Modified {
                         excluded_dirs.extend(path.parent().map(Path::to_path_buf));
+                    }
+                    if !is_dir && !excluded {
+                        match change {
+                            Change::Created => batch.ignored_files.created.push(path.clone()),
+                            Change::Removed => batch.ignored_files.removed.push(path.clone()),
+                            _ => batch.ignored_files.modified.push(path.clone()),
+                        }
                     }
                     if !is_dir && self.is_ignored_file(&path, rel) {
                         batch.ignored.push(path);
@@ -930,19 +937,28 @@ mod tests {
         assert!(batch.created.is_empty() && batch.modified.is_empty() && batch.removed.is_empty(), "{batch:?}");
         assert_eq!(batch.excluded_dirs, vec![root.clone(), root.join("dist"), root.join("target/debug")]);
         assert_eq!(batch.ignored, vec![root.join("debug.log")], "only the ignored file outside ignored folders");
+        // Language servers may watch ignored files (Roslyn, `obj/project.assets.json`),
+        // not those the exclude settings leave out.
+        assert_eq!(batch.ignored_files.created, vec![root.join("debug.log"), root.join("dist/app.js")]);
 
         // An ignored file's edit and removal reach the index too (nothing else changes).
         let modify = EventKind::Modify(ModifyKind::Data(DataChange::Content));
         let batch = filter.batch(&[ev(modify, vec![root.join("debug.log")])]);
         assert_eq!(batch.ignored, vec![root.join("debug.log")]);
         assert!(!batch.is_empty() && batch.excluded_dirs.is_empty());
+        // An edit inside an ignored folder only goes to the language servers.
+        let batch = filter.batch(&[ev(modify, vec![root.join("dist/app.js")])]);
+        assert_eq!(batch.ignored_files.modified, vec![root.join("dist/app.js")]);
+        assert!(!batch.is_empty() && batch.ignored.is_empty() && batch.excluded_dirs.is_empty());
         std::fs::remove_file(root.join("debug.log")).unwrap();
+        std::fs::remove_file(root.join("dist/app.js")).unwrap();
         let batch = filter.batch(&[
             ev(EventKind::Remove(RemoveKind::File), vec![root.join("debug.log")]),
             ev(EventKind::Remove(RemoveKind::File), vec![root.join("dist/app.js")]),
         ]);
         // A removed path can't tell file from folder: it goes out as a removal, as before.
         assert_eq!(batch.removed, vec![root.join("debug.log")]);
+        assert_eq!(batch.ignored_files.removed, vec![root.join("dist/app.js")]);
 
         // Sibling files in unignored directories still come through.
         let batch = filter.batch(&[ev(create_file, vec![root.join("src/main.rs")])]);

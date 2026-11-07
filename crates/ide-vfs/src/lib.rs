@@ -335,6 +335,24 @@ pub struct FsBatch {
     /// History, deployment or `fsChanged`), but the index lists them and open editors
     /// follow them, like IDEA, where only ignored folders leave the project.
     pub ignored: Vec<PathBuf>,
+    /// Every file left out by an ignore rule rather than the exclude settings: `ignored`
+    /// and the files inside ignored folders (`obj/project.assets.json`), by change. Only
+    /// language servers whose file watchers ask for them hear of them; Roslyn reloads a
+    /// project once its restore has written the assets file.
+    pub ignored_files: FileChanges,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileChanges {
+    pub created: Vec<PathBuf>,
+    pub modified: Vec<PathBuf>,
+    pub removed: Vec<PathBuf>,
+}
+
+impl FileChanges {
+    pub fn is_empty(&self) -> bool {
+        self.created.is_empty() && self.modified.is_empty() && self.removed.is_empty()
+    }
 }
 
 impl FsBatch {
@@ -345,6 +363,7 @@ impl FsBatch {
             && self.vcs.is_empty()
             && self.excluded_dirs.is_empty()
             && self.ignored.is_empty()
+            && self.ignored_files.is_empty()
     }
 }
 
