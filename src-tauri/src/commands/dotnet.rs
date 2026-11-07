@@ -2,19 +2,48 @@
 
 use crate::state::AppState;
 use ide_core::RequestId;
-use ide_core::{IdeResult, IpcPath};
+use ide_core::{IdeError, IdeResult, IpcPath};
 use ide_dotnet::Solution;
 use ide_dotnet::nuget::{InstalledPackages, PackageAudit, PackageSearch};
 use ide_dotnet::templates::{ProjectTemplate, TemplateValue};
 use ide_dotnet::testing::{TestEvent, TestProject, TestSelection};
+use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
-use tauri::{State, Window};
+use tauri::{AppHandle, State, Window};
 
-/// Solution files at the project root, `.slnx` before `.sln` before `.slnf`.
+/// Solution files at the project root: the one opened last first, then `.slnx` before `.sln` before `.slnf`.
 #[tauri::command]
 #[specta::specta]
 pub async fn dotnet_solutions(window: Window, state: State<'_, AppState>) -> IdeResult<Vec<IpcPath>> {
     ide_host::ops::dotnet::dotnet_solutions(&state.host, window.label()).await
+}
+
+/// The folder that opens as the project for the solution file `path` (File › Open Solution…,
+/// a drop on the Welcome screen); None when `path` is not one (a folder named `App.sln`).
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_solution_folder(path: PathBuf) -> IdeResult<Option<IpcPath>> {
+    blocking(move || {
+        let file = canonical(&path)?;
+        Ok(ide_dotnet::solution_folder(&file).map(IpcPath::from))
+    })
+    .await
+}
+
+/// Makes the solution file `path` its folder's solution, once that folder is open as the
+/// project; the window that has it open reloads it.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_choose_solution(app: AppHandle, path: PathBuf) -> IdeResult<()> {
+    blocking(move || crate::windows::choose_solution(&app, &canonical(&path)?)).await
+}
+
+fn canonical(path: &Path) -> IdeResult<PathBuf> {
+    dunce::canonicalize(path).map_err(|e| IdeError::not_found(format!("{}: {e}", path.display())))
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> IdeResult<T> + Send + 'static) -> IdeResult<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| IdeError::internal(e.to_string()))?
 }
 
 /// The solution at `path`: its folders, projects and solution items.

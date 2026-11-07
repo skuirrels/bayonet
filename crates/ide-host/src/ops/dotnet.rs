@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use super::Channel;
 
-/// Solution files at the project root, `.slnx` before `.sln` before `.slnf`.
+/// Solution files at the project root: the one opened last first, then `.slnx` before `.sln` before `.slnf`.
 pub async fn dotnet_solutions(host: &Host, window: &str) -> IdeResult<Vec<IpcPath>> {
     let root = host.project(window)?.root.clone();
     host.blocking(move || Ok(ide_dotnet::find(&root).into_iter().map(IpcPath::from).collect())).await
@@ -271,6 +271,7 @@ pub async fn dotnet_migrate_solution(host: &Host, window: &str, solution: IpcPat
             ));
         }
         nuget::run(dotnet.as_deref(), &root, &templates::sln_migrate_args(&solution))?;
+        ide_dotnet::solution_replaced(&solution, &target)?;
         Ok(IpcPath::from(target))
     })
     .await

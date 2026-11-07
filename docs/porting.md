@@ -143,11 +143,20 @@ signed per-platform update feeds. `RELEASING.md` has the steps, the settings and
   project root (`crates/ide-dotnet`, `src/features/dotnet`). It opens first when the user
   has never chosen a pane, and shows the plain project when there is no solution.
   Projects leave out `bin` and `obj` unless hidden files are shown.
+- **Opening a solution (SLN-1).** File › Open Solution… (also on the title bar's project
+  popup), a `.sln`, `.slnx` or `.slnf` dropped on the Welcome screen, or one passed on the
+  command line or with Finder's Open With opens the solution's folder as the project. Once the
+  project is open (and trusted), the window keeps that choice in `.openidea/solution.local`
+  (git-ignored), so the Solution pane, Build, Run, Unit Tests and NuGet use that solution, also
+  after a restart or from Open Recent. A window that already has the folder open switches to
+  it. From Finder or the command line, a solution in a subfolder of a project open in a window
+  opens there as a file. Without a choice, the root's `.slnx` comes first, then `.sln`, then
+  `.slnf`. In a multi-project workspace the Solution pane still reads the workspace root only.
 
 ## .NET inner loop (phase 2)
 
 - **Build.** `BuildSystem::Dotnet` in `crates/ide-build/src/compile/` builds the root
-  solution (`.slnx` first) or, for Build Module, the file's project, with `dotnet build`
+  solution (the opened one, else `.slnx` first) or, for Build Module, the file's project, with `dotnet build`
   (`--no-incremental` for Rebuild, `publish -c Release` for Build Artifacts). MSBuild
   messages become Problems and editor diagnostics. The `dotnet` host comes from
   Settings › .NET when one is set.

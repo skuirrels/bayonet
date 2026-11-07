@@ -301,7 +301,7 @@ pub(crate) fn dispatch_menu_action(app: &tauri::AppHandle, id: &str) {
         // No window left (macOS keeps the menu bar): handle the few that make sense.
         None => match route.action.as_str() {
             "app.quit" => app.exit(0),
-            "window.new" | "file.openProject" => windows::spawn_window(app, None),
+            "window.new" | "file.openProject" | "file.openSolution" => windows::spawn_window(app, None),
             menu::OPEN_RECENT_ACTION => windows::spawn_window(app, route.arg.map(Into::into)),
             _ => {}
         },

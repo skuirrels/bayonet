@@ -13,7 +13,8 @@ use tauri::{AppHandle, State, WebviewWindow};
 
 /// Opens `path` in a new window (`new_window`) or tells the caller to open it
 /// itself (`current`). A project already open in some window is focused instead.
-/// `files` then open in that project's editor.
+/// `files` then open in that project's editor; `solution`, a solution file in `path`, becomes
+/// the project's solution there.
 #[tauri::command]
 #[specta::specta]
 pub async fn window_open_project(
@@ -21,8 +22,9 @@ pub async fn window_open_project(
     path: PathBuf,
     new_window: bool,
     files: Vec<PathBuf>,
+    solution: Option<PathBuf>,
 ) -> IdeResult<OpenOutcome> {
-    windows::open_project_window(&app, &path, new_window, files)
+    windows::open_project_window(&app, &path, new_window, files, solution)
 }
 
 /// Loose `files` opened from a window without a local project: a file inside a local project

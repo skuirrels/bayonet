@@ -177,6 +177,7 @@
   "menu.file.newScratchFile": "新建临时文件…",
   "menu.file.openInNewWindow": "在新窗口中打开…",
   "menu.file.openProject": "打开…",
+  "menu.file.openSolution": "打开解决方案…",
   "menu.file.save": "全部保存",
   "menu.file.settings": "设置…",
   "menu.find": "查找",

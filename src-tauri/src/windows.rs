@@ -63,6 +63,10 @@ pub struct Launch {
     /// Deployment windows: the server and local selection to compare.
     #[serde(default)]
     pub deployment: Option<DeploymentLaunch>,
+    /// A solution file in `project`'s folder that becomes its solution once the project is open
+    /// (boxed: most launches have none).
+    #[serde(default)]
+    pub solution: Option<Box<ide_core::IpcPath>>,
 }
 
 /// Local files to compare with a deployment server (Sync with Deployed).
@@ -484,6 +488,63 @@ pub fn continue_quit(app: &AppHandle, closed: Option<&str>) {
     }
 }
 
+/// Run in a window whose solution changed under it (the user opened another one).
+const RELOAD_SOLUTION_ACTION: &str = "dotnet.reloadSolution";
+
+/// Makes the solution file `solution` its folder's solution ([`ide_dotnet::choose_solution`]);
+/// a window that has the folder open reloads it.
+pub fn choose_solution(app: &AppHandle, solution: &Path) -> IdeResult<()> {
+    ide_dotnet::choose_solution(solution)?;
+    if let Some(w) = solution.parent().and_then(|root| find_project_window(app, root)) {
+        let route = crate::menu::MenuRoute { action: RELOAD_SOLUTION_ACTION.into(), arg: None };
+        if let Err(e) = app.emit_to(w.label(), crate::menu::MENU_EVENT, route) {
+            tracing::warn!("cannot reload the solution of {}: {e}", w.label());
+        }
+    }
+    Ok(())
+}
+
+fn choose_solution_logged(app: &AppHandle, solution: &Path) {
+    if let Err(e) = choose_solution(app, solution) {
+        tracing::warn!("cannot make {} the solution: {}", solution.display(), e.message);
+    }
+}
+
+/// A folder opened for a solution file in it, by [`solutions_as_folders`]: (folder, solution).
+type SolutionOf = (PathBuf, PathBuf);
+
+/// Solution files among `paths` (from [`resolve`]) open their folder as a project, with that
+/// solution. One in a subfolder of a project open in a window stays a file, opening there.
+fn solutions_as_folders(
+    paths: Vec<(PathBuf, bool)>,
+    windows: &[(String, Holds)],
+) -> (Vec<(PathBuf, bool)>, Vec<SolutionOf>) {
+    let roots: Vec<&PathBuf> = windows
+        .iter()
+        .filter_map(|(_, h)| match h {
+            Holds::Project(root) => Some(root),
+            _ => None,
+        })
+        .collect();
+    let mut solutions = Vec::new();
+    let paths = paths
+        .into_iter()
+        .map(|(path, is_dir)| {
+            let Some(folder) = (!is_dir).then(|| ide_dotnet::solution_folder(&path)).flatten() else {
+                return (path, is_dir);
+            };
+            let open = roots.iter().any(|r| r.as_path() == folder);
+            if !open && roots.iter().any(|r| folder.starts_with(r)) {
+                return (path, is_dir);
+            }
+            let folder = folder.to_path_buf();
+            solutions.push((folder.clone(), path));
+            (folder, true)
+        })
+        .collect();
+    (paths, solutions)
+}
+
 /// The window whose open project is `root` (already canonical).
 pub fn find_project_window(app: &AppHandle, root: &Path) -> Option<WebviewWindow> {
     let state = app.try_state::<AppState>()?;
@@ -634,25 +695,27 @@ pub fn create_main_window(app: &AppHandle) -> IdeResult<WebviewWindow> {
 
 /// Creates a new project window; `project` is opened by its frontend on load.
 pub fn create_window(app: &AppHandle, project: Option<PathBuf>) -> IdeResult<WebviewWindow> {
-    create_window_with(app, project, Vec::new(), false)
+    create_window_with(app, project, Vec::new(), None, false)
 }
 
-/// [`create_window`] that also opens `files` (without `project`: in LightEdit).
+/// [`create_window`] that also opens `files` (without `project`: in LightEdit) and makes
+/// `solution` the project's solution once it is open.
 fn create_window_with(
     app: &AppHandle,
     project: Option<PathBuf>,
     files: Vec<PathBuf>,
+    solution: Option<PathBuf>,
     restoring: bool,
 ) -> IdeResult<WebviewWindow> {
     let title = project.as_deref().or(files.first().map(PathBuf::as_path)).and_then(Path::file_name);
     let title = title.map(|n| n.to_string_lossy().into_owned());
-    let files = files.into_iter().map(Into::into).collect();
-    create_window_for(app, title, Launch { project: project.map(Into::into), files, ..Default::default() }, restoring)
+    let launch = Launch { solution: solution.map(|s| Box::new(s.into())), ..path_launch_of(project, files) };
+    create_window_for(app, title, launch, restoring)
 }
 
 /// Restoring a saved group preserves its membership and selected tab.
 pub fn create_restored_window(app: &AppHandle, project: PathBuf) -> IdeResult<WebviewWindow> {
-    create_window_with(app, Some(project), Vec::new(), true)
+    create_window_with(app, Some(project), Vec::new(), None, true)
 }
 
 fn create_window_for(
@@ -710,13 +773,13 @@ fn create_window_for(
 /// `create_window` off the event-loop thread (building a window from a
 /// main-thread callback can deadlock on Windows).
 pub fn spawn_window(app: &AppHandle, project: Option<PathBuf>) {
-    spawn_window_with(app, project, Vec::new());
+    spawn_window_with(app, project, Vec::new(), None);
 }
 
-fn spawn_window_with(app: &AppHandle, project: Option<PathBuf>, files: Vec<PathBuf>) {
+fn spawn_window_with(app: &AppHandle, project: Option<PathBuf>, files: Vec<PathBuf>, solution: Option<PathBuf>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = create_window_with(&app, project, files, false) {
+        if let Err(e) = create_window_with(&app, project, files, solution, false) {
             tracing::warn!("cannot open window: {}", e.message);
         }
     });
@@ -735,12 +798,14 @@ pub enum OpenOutcome {
 }
 
 /// Opens folder `path` as a project and then `files` in its editor; see [`OpenOutcome`]
-/// (`Current`: the caller opens both itself).
+/// (`Current`: the caller opens both itself). `solution`, a solution file in `path`, becomes
+/// the project's solution in the window that has or opens it (the caller's, for `Current`).
 pub fn open_project_window(
     app: &AppHandle,
     path: &Path,
     new_window: bool,
     files: Vec<PathBuf>,
+    solution: Option<PathBuf>,
 ) -> IdeResult<OpenOutcome> {
     // Before touching the share: a stat on `\\wsl.localhost` is what makes it slow.
     if let Some(remote) = wsl_launch(path) {
@@ -748,7 +813,11 @@ pub fn open_project_window(
     }
     let root = dunce::canonicalize(path).map_err(|e| IdeError::not_found(format!("{}: {e}", path.display())))?;
     tracing::info!("open_project_window {} new_window={new_window}", root.display());
+    let solution = solution.map(|s| dunce::canonicalize(&s).unwrap_or(s));
     if let Some(w) = find_project_window(app, &root) {
+        if let Some(solution) = &solution {
+            choose_solution_logged(app, solution);
+        }
         if files.is_empty() {
             focus(&w);
         } else {
@@ -759,7 +828,7 @@ pub fn open_project_window(
     if !new_window {
         return Ok(OpenOutcome::Current);
     }
-    let window = create_window_with(app, Some(root), files, false)?;
+    let window = create_window_with(app, Some(root), files, solution, false)?;
     Ok(OpenOutcome::Opened { label: window.label().to_owned() })
 }
 
@@ -769,7 +838,7 @@ pub fn open_project_window(
 /// detach an editor tab out of its window.
 pub fn open_file_in_new_window(app: &AppHandle, project: Option<PathBuf>, file: PathBuf) -> IdeResult<OpenOutcome> {
     tracing::info!("open_file_in_new_window {} project={:?}", file.display(), project);
-    let window = create_window_with(app, project, vec![file], false)?;
+    let window = create_window_with(app, project, vec![file], None, false)?;
     Ok(OpenOutcome::Opened { label: window.label().to_owned() })
 }
 
@@ -778,7 +847,7 @@ pub fn open_file_in_new_window(app: &AppHandle, project: Option<PathBuf>, file: 
 pub fn open_files_window(app: &AppHandle, caller: &str, files: Vec<PathBuf>) -> Vec<ide_core::IpcPath> {
     let files = files.into_iter().map(|f| dunce::canonicalize(&f).unwrap_or(f)).collect();
     let (steps, here) = plan_open_files(caller, files, &window_holds(app, Some(caller)));
-    run_open(app, steps);
+    run_open(app, steps, &[]);
     here.into_iter().map(Into::into).collect()
 }
 
@@ -1021,7 +1090,9 @@ pub fn open_paths(app: &AppHandle, paths: Vec<PathBuf>) {
         });
     }
     let preferred = target_window(app).map(|w| w.label().to_owned());
-    run_open(app, plan_open(resolve(existing), &window_holds(app, preferred.as_deref())));
+    let windows = window_holds(app, preferred.as_deref());
+    let (paths, solutions) = solutions_as_folders(resolve(existing), &windows);
+    run_open(app, plan_open(paths, &windows), &solutions);
 }
 
 /// What each window holds, `preferred` first.
@@ -1037,14 +1108,23 @@ fn window_holds(app: &AppHandle, preferred: Option<&str>) -> Vec<(String, Holds)
 /// [`open_paths`] while the app is starting, before the `main` window exists: it takes them as its launch.
 pub fn open_paths_at_launch(app: &AppHandle, paths: Vec<PathBuf>) {
     let main = pending_holds(app.state::<WindowsState>().pending(MAIN).as_ref());
-    run_open(app, plan_open(resolve(paths), &[(MAIN.to_owned(), main)]));
+    let windows = [(MAIN.to_owned(), main)];
+    let (paths, solutions) = solutions_as_folders(resolve(paths), &windows);
+    run_open(app, plan_open(paths, &windows), &solutions);
 }
 
-fn run_open(app: &AppHandle, steps: Vec<OpenStep>) {
+/// Runs `steps`; a folder opened for a solution file in it (`solutions`) gets that solution.
+fn run_open(app: &AppHandle, steps: Vec<OpenStep>, solutions: &[SolutionOf]) {
     let windows = app.state::<WindowsState>();
+    let solution_of =
+        |root: &Path| solutions.iter().find(|(folder, _)| folder == root).map(|(_, solution)| solution.clone());
     for step in steps {
         match step {
             OpenStep::Focus(label) => {
+                let root = app.try_state::<AppState>().and_then(|s| s.project(&label).ok()).map(|p| p.root.clone());
+                if let Some(solution) = root.and_then(|r| solution_of(&r)) {
+                    choose_solution_logged(app, &solution);
+                }
                 if let Some(w) = app.get_webview_window(&label) {
                     focus(&w);
                 }
@@ -1053,14 +1133,19 @@ fn run_open(app: &AppHandle, steps: Vec<OpenStep>) {
                 Some(w) => send_files(app, &w, files),
                 None => windows.add_files(&label, files),
             },
-            OpenStep::Launch(label, launch) => {
+            OpenStep::Launch(label, mut launch) => {
+                let project = launch.project.as_ref().map(|p| PathBuf::from(p.clone()));
+                launch.solution = project.and_then(|p| solution_of(&p)).map(|s| Box::new(s.into()));
                 windows.set_launch(&label, launch);
                 if let Some(w) = app.get_webview_window(&label) {
                     let _ = app.emit_to(&label, LAUNCH_EVENT, ());
                     focus(&w);
                 }
             }
-            OpenStep::New(project, files) => spawn_window_with(app, project, files),
+            OpenStep::New(project, files) => {
+                let solution = project.as_deref().and_then(solution_of);
+                spawn_window_with(app, project, files, solution)
+            }
             OpenStep::NewRemote(remote) => {
                 let app = app.clone();
                 // Off the event-loop thread, like `spawn_window`.
@@ -1082,8 +1167,14 @@ pub fn opened_paths(urls: &[tauri::Url]) -> Vec<PathBuf> {
     urls.iter().filter_map(|u| u.to_file_path().ok()).collect()
 }
 
-/// What a window opens for a command-line path: a folder as its project, a file in LightEdit.
+/// What a window opens for a command-line path: a folder as its project, a solution file's
+/// folder as its project (with that solution), any other file in LightEdit.
 pub fn path_launch(path: PathBuf) -> Launch {
+    if let Ok(file) = dunce::canonicalize(&path)
+        && let Some(root) = ide_dotnet::solution_folder(&file)
+    {
+        return Launch { solution: Some(Box::new(file.as_path().into())), ..launch_for(root.to_path_buf(), true) };
+    }
     let is_dir = path.is_dir();
     launch_for(path, is_dir)
 }
@@ -1624,6 +1715,56 @@ mod tests {
         let file = std::env::current_exe().unwrap();
         let launch = path_launch(file.clone());
         assert_eq!((launch.project, launch.files), (None, vec![file.into()]));
+    }
+
+    #[test]
+    fn a_command_line_solution_opens_its_folder_with_that_solution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        for name in ["App.slnx", "Legacy.sln"] {
+            std::fs::write(root.join(name), "").unwrap();
+        }
+        let launch = path_launch(root.join("Legacy.sln"));
+        assert_eq!((launch.project, launch.files.len()), (Some(root.clone().into()), 0));
+        assert_eq!(launch.solution, Some(Box::new(root.join("Legacy.sln").into())));
+        // Chosen once the window has opened (and trusted) the project, not before.
+        assert!(!root.join(".openidea").exists());
+    }
+
+    #[test]
+    fn opened_solution_files_open_their_folder_unless_inside_an_open_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dunce::canonicalize(dir.path()).unwrap();
+        let (repo, app, other) = (base.join("repo"), base.join("repo/src/app"), base.join("other"));
+        for d in [&app, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for f in [repo.join("Repo.sln"), app.join("App.slnx"), other.join("Other.sln"), other.join("notes.txt")] {
+            std::fs::write(f, "").unwrap();
+        }
+        let windows = [w("project-1", Holds::Project(repo.clone()))];
+        let paths = vec![
+            (repo.join("Repo.sln"), false),
+            (app.join("App.slnx"), false),
+            (other.join("Other.sln"), false),
+            (other.join("notes.txt"), false),
+            (base.join("Folder.sln"), true),
+        ];
+        let (paths, solutions) = solutions_as_folders(paths, &windows);
+        assert_eq!(
+            paths,
+            [
+                (repo.clone(), true),
+                (app.join("App.slnx"), false),
+                (other.clone(), true),
+                (other.join("notes.txt"), false),
+                (base.join("Folder.sln"), true),
+            ]
+        );
+        assert_eq!(solutions, [(repo.clone(), repo.join("Repo.sln")), (other.clone(), other.join("Other.sln"))]);
+        let steps = plan_open(paths, &windows);
+        assert_eq!(steps[0], OpenStep::Focus("project-1".into()));
+        assert!(steps.contains(&OpenStep::Files("project-1".into(), vec![app.join("App.slnx")])));
     }
 
     #[test]
