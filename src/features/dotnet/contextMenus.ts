@@ -6,10 +6,11 @@ import { commands } from "@/bindings";
 import type { Solution } from "@/bindings";
 import { executeAction, type Action } from "@/platform/actions";
 import { call } from "@/platform/ipc";
-import { useProject } from "@/platform/project";
 import { tx } from "@/platform/i18n";
-import type { MenuItem } from "@/ui";
+import { copyText, type MenuItem } from "@/ui";
 import { maybeEditorService, menuGroupItems, notifications } from "@/workbench/contributions";
+import { revealLabel } from "@/features/project-tree/contextMenu";
+import { revealablePath } from "@/features/project-tree/operations";
 import { isEfProject } from "./ef/ef";
 import type { SolutionProject } from "./projects/store";
 import { useUnitTests } from "./tests/store";
@@ -28,23 +29,10 @@ function openFile(path: string) {
     .catch(() => undefined);
 }
 
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (e) {
-    notifications().notify({
-      group: "dotnet",
-      level: "error",
-      title: tx("Cannot access the clipboard"),
-      body: e instanceof Error ? e.message : String(e),
-    });
-  }
-}
-
 async function reveal(path: string) {
   try {
     const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-    await revealItemInDir(path);
+    await revealItemInDir(revealablePath(path));
   } catch (e) {
     notifications().notify({
       group: "dotnet",
@@ -95,16 +83,9 @@ function openInMenu(path: string, dir: string): MenuItem {
   };
 }
 
-function revealLabel() {
-  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-  if (/Win/i.test(ua)) return "Explorer";
-  if (/Linux/i.test(ua)) return "Files";
-  return "Finder";
-}
-
 /** The solution node's menu, in Rider's order. */
 export function solutionMenuItems(solution: Solution): MenuItem[] {
-  const root = useProject.getState().project?.root ?? solution.path.slice(0, solution.path.lastIndexOf("/"));
+  const dir = solution.path.slice(0, solution.path.lastIndexOf("/"));
   const add: MenuItem = {
     id: "add",
     label: "Add",
@@ -154,7 +135,7 @@ export function solutionMenuItems(solution: Solution): MenuItem[] {
       ],
     },
     { kind: "separator" },
-    { kind: "action", action: "vcs.localHistory", arg: root, label: "Show Local History" },
+    { kind: "action", action: "vcs.localHistory", arg: dir, label: "Show Local History" },
     { kind: "separator" },
     { kind: "action", action: "analyze.inspectCode" },
     { kind: "action", action: "code.cleanup", label: "Reformat and Cleanup…" },
@@ -167,7 +148,7 @@ export function solutionMenuItems(solution: Solution): MenuItem[] {
       ],
     },
     copyPathMenu(solution.path),
-    openInMenu(solution.path, root),
+    openInMenu(solution.path, dir),
     { id: "diagrams", label: "Diagrams", submenu: [{ kind: "action", action: "dotnet.projectDiagram" }] },
     { kind: "separator" },
     { kind: "action", action: "dotnet.manageSdk" },

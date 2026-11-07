@@ -364,6 +364,15 @@ fn goto_method(kind: GotoKind) -> (&'static str, &'static str, &'static str) {
     }
 }
 
+/// What a server without registered file watchers hears of a change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unwatched {
+    /// Its languages' files below its root.
+    ByLanguage,
+    /// Nothing.
+    Skip,
+}
+
 impl LspManager {
     pub fn new(project_root: PathBuf, languages: Arc<LanguageRegistry>, sink: SharedSink) -> Arc<Self> {
         Self::with_launcher(project_root, languages, sink, Arc::new(ProcessLauncher))
@@ -2296,14 +2305,14 @@ impl LspManager {
         removed: &[PathBuf],
         excluded_dirs: &[PathBuf],
     ) {
-        self.notify_watchers(created, modified, removed, excluded_dirs, true);
+        self.notify_watchers(created, modified, removed, excluded_dirs, Unwatched::ByLanguage);
     }
 
     /// Files an ignore rule leaves out (`obj/project.assets.json` below a git-ignored `obj/`),
     /// for the servers whose registered file watchers match them only: Roslyn reloads a
     /// project once its restore has written the assets file.
     pub fn ignored_files_changed(&self, created: &[PathBuf], modified: &[PathBuf], removed: &[PathBuf]) {
-        self.notify_watchers(created, modified, removed, &[], false);
+        self.notify_watchers(created, modified, removed, &[], Unwatched::Skip);
     }
 
     fn notify_watchers(
@@ -2312,7 +2321,7 @@ impl LspManager {
         modified: &[PathBuf],
         removed: &[PathBuf],
         excluded_dirs: &[PathBuf],
-        unwatched: bool,
+        unwatched: Unwatched,
     ) {
         use file_watch::Change;
         if created.is_empty() && modified.is_empty() && removed.is_empty() && excluded_dirs.is_empty() {
@@ -2326,7 +2335,7 @@ impl LspManager {
                 .flat_map(|(paths, change)| paths.iter().map(move |p| (p, change)));
             let watchers = run.watchers.read();
             let changes: Vec<(&PathBuf, Change)> = if watchers.is_empty() {
-                if !unwatched {
+                if unwatched == Unwatched::Skip {
                     continue;
                 }
                 let languages = s.languages();

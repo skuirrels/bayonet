@@ -160,7 +160,7 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
   const leadItems = menuGroupItems("projectViewLead", { ...menuGroupContext(nodes), newItems });
   const offered = new Set(leadItems.flatMap(actionIds));
   push(...leadItems);
-  if (!leadItems.some((i) => i.kind !== "separator" && i.kind !== "header" && i.kind !== "action" && i.id === "new"))
+  if (!leadItems.some((i) => "id" in i && i.id === "new"))
     push({ id: "new", label: "New", submenu: newItems }, { kind: "separator" });
 
   // Cut / Copy / Copy Path/Reference… / Paste

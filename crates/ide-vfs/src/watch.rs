@@ -684,7 +684,7 @@ impl EventFilter {
                     if change != Change::Modified {
                         excluded_dirs.extend(path.parent().map(Path::to_path_buf));
                     }
-                    if !is_dir && !excluded {
+                    if !is_dir && !excluded && !inside_package(rel) {
                         match change {
                             Change::Created => batch.ignored_files.created.push(path.clone()),
                             Change::Removed => batch.ignored_files.removed.push(path.clone()),
@@ -706,6 +706,18 @@ impl EventFilter {
         batch.excluded_dirs = excluded_dirs.into_iter().collect();
         (batch, rule_dirs.into_iter().collect())
     }
+}
+
+/// A file inside an installed npm package (`node_modules/<pkg>/…`): like VS Code, language
+/// servers don't hear of these, which `npm install` writes by the ten thousand.
+fn inside_package(rel: &Path) -> bool {
+    let mut parts = rel.components().map(|c| c.as_os_str());
+    while let Some(part) = parts.next() {
+        if part == "node_modules" {
+            return parts.count() > 1;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -959,6 +971,20 @@ mod tests {
         // A removed path can't tell file from folder: it goes out as a removal, as before.
         assert_eq!(batch.removed, vec![root.join("debug.log")]);
         assert_eq!(batch.ignored_files.removed, vec![root.join("dist/app.js")]);
+
+        // Installed npm packages stay away from them, the folder's own files don't.
+        std::fs::write(root.join(".gitignore"), "dist\n*.log\nnode_modules\n").unwrap();
+        let filter = EventFilter::new(root.clone(), &["**/target".into()]);
+        let modules = root.join("node_modules");
+        std::fs::create_dir_all(modules.join("left-pad")).unwrap();
+        for f in [".package-lock.json", "left-pad/index.js"] {
+            std::fs::write(modules.join(f), "x").unwrap();
+        }
+        let batch = filter.batch(&[
+            ev(create_file, vec![modules.join(".package-lock.json")]),
+            ev(create_file, vec![modules.join("left-pad/index.js")]),
+        ]);
+        assert_eq!(batch.ignored_files.created, vec![modules.join(".package-lock.json")]);
 
         // Sibling files in unignored directories still come through.
         let batch = filter.batch(&[ev(create_file, vec![root.join("src/main.rs")])]);
