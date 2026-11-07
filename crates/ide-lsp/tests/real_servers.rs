@@ -1377,3 +1377,59 @@ async fn roslyn_completion_latency() {
 
     tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }
+
+/// Opening a solution that was never restored: Roslyn restores it itself, then reloads each
+/// project once the client reports its `obj/project.assets.json` (in a git-ignored folder).
+/// Until then the test projects' framework types stay unresolved. Needs what
+/// `roslyn_end_to_end` needs.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_reloads_projects_it_restored() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let program = root.join("src/Fixture.Cli/Program.cs");
+    mgr.did_open(DocId::next(), &program, &LanguageId::new("csharp"), 1, &std::fs::read_to_string(&program).unwrap());
+
+    let assets: Vec<_> = ["src/Fixture.Core", "tests/Fixture.Core.XunitTests"]
+        .iter()
+        .map(|p| root.join(p).join("obj/project.assets.json"))
+        .collect();
+    retry("restore", Duration::from_secs(180), || {
+        let restored = assets.iter().all(|a| a.is_file())
+            && events
+                .lock()
+                .iter()
+                .any(|e| matches!(e, IdeEvent::Task { title, done: true, .. } if title == "Restore"));
+        async move { restored.then_some(()) }
+    })
+    .await;
+    let test = root.join("tests/Fixture.Core.XunitTests/UnitTest1.cs");
+    let errors = || {
+        events.lock().iter().rev().find_map(|e| match e {
+            IdeEvent::Diagnostics { path, items, .. } if path.0 == test => {
+                Some(items.iter().filter(|d| d.severity == ide_core::Severity::Error).count())
+            }
+            _ => None,
+        })
+    };
+    retry("unresolved xunit types", Duration::from_secs(60), || {
+        let e = errors();
+        async move { e.filter(|n| *n > 0) }
+    })
+    .await;
+
+    mgr.ignored_files_changed(&assets, &[], &[]);
+    retry("reloaded projects", Duration::from_secs(120), || {
+        let e = errors();
+        async move { (e == Some(0)).then_some(()) }
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
+}

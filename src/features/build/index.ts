@@ -84,7 +84,8 @@ export function activate(): () => void {
         icon: "build-rebuild",
         when: WHEN,
         keywords: ["clean", "compile"],
-        run: () => void startBuild("rebuild"),
+        // A project view path rebuilds that module only (Rider's Rebuild Selected Projects).
+        run: ({ arg }) => void startBuild("rebuild", typeof arg === "string" && arg ? arg : null),
       },
       {
         id: "build.buildArtifacts",

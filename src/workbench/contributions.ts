@@ -1017,6 +1017,12 @@ export function projectViewRoots(map: ReadonlyMap<string, ProjectViewRootContrib
 export type ContextMenuId =
   | "editor"
   | "projectView"
+  /**
+   * The top of the project view menu (Rider's .NET project items). An item with id `new`
+   * takes the place of New › (Rider's Add ›), which `newItems` hold; actions offered here
+   * are not repeated by the `projectView` groups below.
+   */
+  | "projectViewLead"
   /** A project view group node (a solution, a solution folder); `paths` are the node keys. */
   | "projectViewGroup"
   | "editorTab"
@@ -1057,6 +1063,8 @@ export interface MenuGroupContext {
   line?: number;
   /** The tab's input, when the menu is for an editor tab without a path. */
   input?: EditorInput;
+  /** `projectViewLead`: the New › items for the selection's folder. */
+  newItems?: MenuItem[];
 }
 
 export interface MenuGroupContribution {

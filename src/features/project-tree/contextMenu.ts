@@ -156,7 +156,12 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
     push({ kind: "action", action: "workspace.removeProject", arg: single.path }, { kind: "separator" });
   }
 
-  push({ id: "new", label: "New", submenu: newMenuItems(folder) }, { kind: "separator" });
+  const newItems = newMenuItems(folder);
+  const leadItems = menuGroupItems("projectViewLead", { ...menuGroupContext(nodes), newItems });
+  const offered = new Set(leadItems.flatMap(actionIds));
+  push(...leadItems);
+  if (!leadItems.some((i) => "id" in i && i.id === "new"))
+    push({ id: "new", label: "New", submenu: newItems }, { kind: "separator" });
 
   // Cut / Copy / Copy Path/Reference… / Paste
   push(
@@ -282,7 +287,11 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
   );
 
   // Contributed groups (Run / Debug '…', More Run/Debug ›), each followed by a separator.
-  push(...menuGroupItems("projectView", menuGroupContext(nodes)));
+  push(
+    ...menuGroupItems("projectView", menuGroupContext(nodes)).filter(
+      (i) => !actionIds(i).some((id) => offered.has(id)),
+    ),
+  );
 
   // Open In ›
   push(
@@ -419,6 +428,13 @@ export function contextMenuItems(nodes: ProjectNode[]): MenuItem[] {
     });
   }
   return items;
+}
+
+/** The actions `item` runs, its submenu's included. */
+function actionIds(item: MenuItem): string[] {
+  if (item.kind === "action") return [item.action];
+  if (item.kind === "separator" || item.kind === "header") return [];
+  return item.submenu?.flatMap(actionIds) ?? [];
 }
 
 /** Library sources (External Libraries) are read-only: copy, find and reveal only. */
