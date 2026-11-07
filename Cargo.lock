@@ -4217,6 +4217,7 @@ dependencies = [
  "ide-dotnet",
  "ide-jsonrpc",
  "ide-language",
+ "libc",
  "memchr",
  "parking_lot",
  "portable-pty",

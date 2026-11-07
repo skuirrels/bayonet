@@ -37,6 +37,7 @@ import {
   stopSession,
   useRun,
   type RunSession,
+  isLive,
 } from "./store";
 import {
   currentServiceSession,
@@ -210,7 +211,7 @@ export async function cleanupRemovedProject(removedRoot: string): Promise<void> 
 // ---------------------------------------------------------------------------
 // Tree
 
-const busy = (s: RunSession) => s.status === "running" || s.status === "starting";
+const busy = (s: RunSession) => isLive(s);
 
 export function sessionStatus(s: RunSession | undefined): string | undefined {
   if (!s) return undefined;
