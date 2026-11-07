@@ -119,10 +119,11 @@ signed per-platform update feeds. `RELEASING.md` has the steps, the settings and
 
 ## Still to do
 
-- The app icon and splash mark are Bayonet's own (a "B" on a violet frame, source in
+- The app icon and splash mark are Bayonet's own, in the JetBrains product-icon style: a
+  black square with "BN" and a bar on a rounded violet tile (source in
   `src-tauri/icons/source/bayonet.svg`; regenerate with `pnpm tauri icon` on that file,
-  then delete the Android, iOS and 64x64 outputs it adds). The "B" is stroked at the same
-  weight as the frame's lettering. The wordmarks (`bayonet-wordmark.svg`, `-dark.svg`)
+  then delete the Android, iOS and 64x64 outputs it adds). "BN" is Inter ExtraBold,
+  outlined with fontTools like the wordmark. The wordmarks (`bayonet-wordmark.svg`, `-dark.svg`)
   set "Bayonet" in Inter Bold at 66 px, outlined with fontTools from the variable Inter
   the UI already ships (`@fontsource-variable/inter`, weight 700). The Windows
   icons come from `bayonet-windows.svg` (a larger mark) via `pnpm gen:windows-icons`.
