@@ -209,6 +209,35 @@ describe("project view context menu", () => {
     expect(labels(contextMenuItems([node(`${ROOT}/a.py`), node(`${ROOT}/b.py`)]))).toContain("Compare Files");
   });
 
+  it("puts lead groups first: their `new` item replaces New, their actions are not repeated", () => {
+    const dispose = [
+      registerActions([{ id: "build.buildModule", title: "Build Module", run: () => undefined }]),
+      registerMenuGroup({
+        id: "test.lead",
+        menus: ["projectViewLead"],
+        items: (_menu, ctx) => [
+          { id: "new", label: "Add", submenu: ctx.newItems ?? [] },
+          { kind: "action", action: "build.buildModule", arg: ctx.paths[0], label: "Build Selected Projects" },
+        ],
+      }),
+      registerMenuGroup({
+        id: "test.build",
+        menus: ["projectView"],
+        items: (_menu, ctx) => [{ kind: "action", action: "build.buildModule", arg: ctx.paths[0] }],
+      }),
+    ];
+    try {
+      const items = contextMenuItems([node(`${ROOT}/App`, true)]);
+      const l = labels(items);
+      expect(l.slice(0, 3)).toEqual(["Add", "Build Selected Projects", "-"]);
+      expect(l).not.toContain("New");
+      expect(l).not.toContain("Build Module");
+      expect(sub(items, "Add")?.slice(0, 2)).toEqual(["File", "Directory"]);
+    } finally {
+      dispose.forEach((d) => d());
+    }
+  });
+
   it("never shows an empty submenu", () => {
     disposers.forEach((d) => d());
     disposers = [];

@@ -47,7 +47,8 @@ import { FrameworkStatus } from "./FrameworkStatus";
 import { GROUP_PREFIX } from "@/features/project-tree/model";
 import { setExpanded, suggestViewMode, useProjectTree } from "@/features/project-tree/store";
 import { dotnetRunType } from "./runType";
-import { efActions, isEfProject, loadEfProjects } from "./ef/ef";
+import { efActions, loadEfProjects } from "./ef/ef";
+import { contextMenuActions, projectMenuItems, solutionFolderMenuItems, solutionMenuItems } from "./contextMenus";
 import { msbuildCompletion } from "./msbuild/completion";
 import { xamlEditor } from "./xaml/editor";
 import { activateXamlPreview, xamlLiveText } from "./xaml/preview";
@@ -294,99 +295,20 @@ export function activate(): () => void {
     order: 10,
     items: (_menu, { paths }) => {
       const key = paths.length === 1 ? paths[0]! : null;
-      if (!key || !useSolution.getState().solution) return [];
-      // The solution node, or one of its solution folders (`<root key>/src/inner`).
-      const folder =
-        key === solutionKey ? null : key.startsWith(`${solutionKey}/`) ? key.slice(solutionKey.length + 1) : undefined;
-      if (folder === undefined) return [];
-      const arg = { solutionFolder: folder };
-      return [
-        {
-          label: "Add",
-          icon: "plus",
-          submenu: [
-            {
-              kind: "action",
-              action: "dotnet.newProject",
-              arg,
-              label: "New Project…",
-              icon: "module",
-            },
-            {
-              kind: "action",
-              action: "dotnet.addExistingProject",
-              arg,
-              label: "Existing Project…",
-            },
-          ],
-        },
-        { kind: "separator" },
-        ...(folder === null && useSolution.getState().solution?.format === "sln"
-          ? [{ kind: "action" as const, action: "dotnet.migrateSolution" }]
-          : []),
-        { kind: "action", action: "dotnet.runAllTests" },
-        { kind: "action", action: "dotnet.manageNugetPackages" },
-        { kind: "action", action: "dotnet.projectDiagram" },
-      ];
+      const solution = useSolution.getState().solution;
+      if (!key || !solution) return [];
+      if (key === solutionKey) return solutionMenuItems(solution);
+      // One of its solution folders (`<root key>/src/inner`).
+      return key.startsWith(`${solutionKey}/`) ? solutionFolderMenuItems(key.slice(solutionKey.length + 1)) : [];
     },
   });
   const disposeProjectMenu = registerMenuGroup({
     id: "dotnet.project",
-    menus: ["projectView"],
+    menus: ["projectViewLead"],
     order: 25,
-    items: (_menu, { paths, dirs }) => {
+    items: (_menu, { paths, dirs, newItems }) => {
       const project = paths.length === 1 && dirs?.[0] ? projectAt(paths[0]!) : null;
-      if (!project) return [];
-      return [
-        {
-          kind: "action",
-          action: "dotnet.projectReferences",
-          arg: { dir: project.dir },
-          label: "Add Project Reference…",
-        },
-        {
-          kind: "action",
-          action: "dotnet.manageNugetPackages",
-          label: "Manage NuGet Packages…",
-        },
-        ...(isEfProject(project)
-          ? [
-              {
-                label: "Entity Framework Core",
-                icon: "database",
-                submenu: [
-                  { kind: "action" as const, action: "dotnet.ef.addMigration", arg: { dir: project.dir } },
-                  { kind: "action" as const, action: "dotnet.ef.removeMigration", arg: { dir: project.dir } },
-                  { kind: "action" as const, action: "dotnet.ef.updateDatabase", arg: { dir: project.dir } },
-                  { kind: "separator" as const },
-                  { kind: "action" as const, action: "dotnet.ef.script", arg: { dir: project.dir } },
-                  { kind: "action" as const, action: "dotnet.ef.scaffold", arg: { dir: project.dir } },
-                ],
-              },
-            ]
-          : []),
-        {
-          kind: "action",
-          action: "dotnet.manageUserSecrets",
-          arg: { dir: project.dir },
-        },
-        {
-          kind: "action",
-          action: "dotnet.publish",
-          arg: { dir: project.dir },
-        },
-        {
-          kind: "action",
-          action: "dotnet.runInContainer",
-          arg: { dir: project.dir },
-        },
-        {
-          kind: "action",
-          action: "dotnet.removeFromSolution",
-          arg: { dir: project.dir },
-          label: "Remove from Solution",
-        },
-      ];
+      return project ? projectMenuItems(project, newItems) : [];
     },
   });
   const dirArg = (arg: unknown, key: string) => {
@@ -548,6 +470,14 @@ export function activate(): () => void {
       },
     },
     ...efActions(),
+    ...contextMenuActions(
+      (project, coverage) => {
+        if (!showTests() || useUnitTests.getState().busy) return;
+        const selection = [{ project: project.path, uids: [] }];
+        void (coverage ? runTestsWithCoverage(selection) : runTests(selection));
+      },
+      (arg) => projectAt(dirArg(arg, "dir") ?? ""),
+    ),
     {
       id: "dotnet.reloadSolution",
       title: "Reload Solution",
