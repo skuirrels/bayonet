@@ -9,7 +9,7 @@
 use ide_core::{CancellationToken, IdeError, IdeResult};
 use serde::Serialize;
 use specta::Type;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{LazyLock, Mutex};
@@ -110,16 +110,19 @@ pub fn target_from(project: &Path, properties: &[(String, String)]) -> IdeResult
     })
 }
 
-/// `dotnet` without telemetry or the first-run banner, its messages in English (they are parsed).
-fn sdk(dotnet: &Path) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(dotnet);
-    cmd.env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_CLI_UI_LANGUAGE", "en");
-    cmd
+/// `dotnet` with `env`, without telemetry or the first-run banner, its messages in English (they are parsed).
+fn sdk(dotnet: &Path, env: &BTreeMap<String, String>) -> tokio::process::Command {
+    tokio::process::Command::from(crate::sdk_command(dotnet, env))
 }
 
-/// Builds `project` and asks MSBuild for what the previewer needs.
-pub async fn prepare(dotnet: &Path, project: &Path, cancel: &CancellationToken) -> IdeResult<PreviewTarget> {
-    let build = sdk(dotnet)
+/// Builds `project` and asks MSBuild for what the previewer needs; `env` is added to both.
+pub async fn prepare(
+    dotnet: &Path,
+    env: &BTreeMap<String, String>,
+    project: &Path,
+    cancel: &CancellationToken,
+) -> IdeResult<PreviewTarget> {
+    let build = sdk(dotnet, env)
         .args(["build", "-nologo", "-v:q", "-clp:NoSummary"])
         .arg(project)
         .stdin(Stdio::null())
@@ -136,7 +139,7 @@ pub async fn prepare(dotnet: &Path, project: &Path, cancel: &CancellationToken) 
             if errors.is_empty() { text.trim().lines().last().unwrap_or("").to_owned() } else { errors.join("\n") };
         return Err(IdeError::invalid(format!("the project did not build\n{detail}")));
     }
-    let mut cmd = sdk(dotnet);
+    let mut cmd = sdk(dotnet, env);
     cmd.arg("msbuild").arg(project).arg("-nologo");
     for p in PROPERTIES {
         cmd.arg(format!("-getProperty:{p}"));
@@ -475,9 +478,11 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Builds the project of `xaml`, starts the designer host and keeps the preview
 /// current with the text sent through [`update`] for `id`, until `cancel`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: u64,
     dotnet: &Path,
+    env: &BTreeMap<String, String>,
     xaml: &Path,
     text: String,
     scale: f64,
@@ -489,12 +494,12 @@ pub async fn run(
     let _registered = Registered(id);
     let project = project_of(xaml).ok_or_else(|| IdeError::not_found("no project file above the XAML file"))?;
     emit(PreviewEvent::Phase { phase: PreviewPhase::Building, message: None });
-    let target = prepare(dotnet, &project, cancel).await?;
+    let target = prepare(dotnet, env, &project, cancel).await?;
     emit(PreviewEvent::Phase { phase: PreviewPhase::Starting, message: None });
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
-    let mut host = sdk(dotnet)
+    let mut host = sdk(dotnet, &BTreeMap::new())
         .arg("exec")
         .arg("--runtimeconfig")
         .arg(&target.runtime_config)

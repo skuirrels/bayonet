@@ -26,6 +26,15 @@ pub mod trace_source;
 
 pub use project::{LaunchProfile, ProjectInfo, launch_profiles, read_project};
 
+/// `dotnet` with `env` (Settings › .NET › Environment variables), then without telemetry
+/// or the first-run banner and with its messages in English: they are parsed, so those
+/// win over the same names in `env`. Async callers convert it with `tokio::process::Command::from`.
+pub fn sdk_command(dotnet: &Path, env: &std::collections::BTreeMap<String, String>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(dotnet);
+    cmd.envs(env).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_CLI_UI_LANGUAGE", "en");
+    cmd
+}
+
 use ide_core::{IdeError, IdeResult, IpcPath};
 use serde::{Deserialize, Serialize};
 use specta::Type;

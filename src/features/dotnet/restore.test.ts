@@ -9,6 +9,7 @@ import {
   RESTORE_TASK_ID,
   resetRestore,
   restore,
+  restoreAgain,
   restoreIfNeeded,
   setRestoreBackend,
   touchesRestoreInputs,
@@ -207,6 +208,25 @@ describe("restore review cases", () => {
     void restoreIfNeeded(["/w/App/App.csproj"], "/w/App.slnx", true);
     await flush();
     expect(runs).toHaveLength(1);
+  });
+
+  it("restores again when the .NET environment changes, after a running build", async () => {
+    const { backend, runs } = fakeBackend();
+    const unwatch = watchBuilds();
+    const projects = ["/w/App/App.csproj", "/w/Lib/Lib.csproj"];
+    void restoreIfNeeded(projects, "/w/App.slnx", true);
+    await flush();
+    runs[0]!.finish(OK);
+    await flush();
+    expect(runs.map((r) => r.targets)).toEqual([["/w/App.slnx"]]);
+
+    setContext("build.running", true);
+    await restoreAgain(projects, "/w/App.slnx");
+    expect(backend.needed).toHaveBeenCalledTimes(1);
+    setContext("build.running", false);
+    await flush();
+    expect(runs.map((r) => r.targets)).toEqual([["/w/App.slnx"], ["/w/App.slnx"]]);
+    unwatch();
   });
 
   it("does not queue a project again while its solution is queued", async () => {

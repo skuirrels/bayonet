@@ -51,7 +51,7 @@ fn evaluated_id(dotnet: Option<&Path>, project: &Path) -> IdeResult<Option<Strin
     }
     let cwd = project.parent().unwrap_or(project);
     let args = ["msbuild".to_owned(), project.to_string_lossy().into_owned(), "-getProperty:UserSecretsId".into()];
-    let out = run(dotnet, cwd, &args)?;
+    let out = run(dotnet, &Default::default(), cwd, &args)?;
     // One property name prints its bare value; several print JSON.
     let id = parse_properties(&out)
         .into_iter()
@@ -69,7 +69,7 @@ pub fn ensure_secrets_file(dotnet: Option<&Path>, project: &Path) -> IdeResult<P
         None => {
             let cwd = project.parent().unwrap_or(project);
             let args = ["user-secrets", "init", "--project"].map(String::from);
-            run(dotnet, cwd, &[&args[..], &[project.to_string_lossy().into_owned()]].concat())?;
+            run(dotnet, &Default::default(), cwd, &[&args[..], &[project.to_string_lossy().into_owned()]].concat())?;
             evaluated_id(dotnet, project)?
                 .ok_or_else(|| IdeError::unavailable("dotnet user-secrets init did not add a UserSecretsId"))?
         }

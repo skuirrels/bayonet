@@ -24,13 +24,17 @@ pub async fn dotnet_solution(host: &Host, _window: &str, path: IpcPath) -> IdeRe
     host.blocking(move || ide_dotnet::read(&path)).await
 }
 
-/// The project root and the `dotnet` the project uses (Settings, `global.json`, else PATH).
-fn dotnet_of(host: &Host, window: &str) -> IdeResult<(PathBuf, Option<PathBuf>)> {
+/// The project root, the `dotnet` the project uses (Settings, `global.json`, else PATH)
+/// and the environment its commands run with (Settings › .NET › Environment variables).
+fn dotnet_of(host: &Host, window: &str) -> IdeResult<(PathBuf, Option<PathBuf>, Env)> {
     let project = host.project(window)?;
     let root = project.root.clone();
-    let dotnet = ide_sdk::apply::dotnet_command(&root, &project.settings.effective());
-    Ok((root, dotnet))
+    let settings = project.settings.effective();
+    let dotnet = ide_sdk::apply::dotnet_command(&root, &settings);
+    Ok((root, dotnet, ide_sdk::apply::dotnet_env(&settings)))
 }
+
+type Env = std::collections::BTreeMap<String, String>;
 
 /// Avalonia previewer for the XAML file at `path` (CI-16): builds its project, starts the
 /// designer host and streams frames on `on_event` until `cancel_request(request)`.
@@ -45,14 +49,14 @@ pub async fn dotnet_xaml_preview(
     on_event: Channel<ide_dotnet::avalonia::PreviewEvent>,
 ) -> IdeResult<()> {
     use ide_dotnet::avalonia::{self, PreviewEvent, PreviewPhase};
-    let (_, dotnet) = dotnet_of(host, window)?;
+    let (_, dotnet, env) = dotnet_of(host, window)?;
     let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
     let token = host.begin_request(request);
     let emit = |e: PreviewEvent| {
         let _ = on_event.send(e);
     };
     let scale = if scale.is_finite() { scale.clamp(1.0, 4.0) } else { 1.0 };
-    let result = avalonia::run(request.0.into(), &dotnet, &path, text, scale, &token, &emit).await;
+    let result = avalonia::run(request.0.into(), &dotnet, &env, &path, text, scale, &token, &emit).await;
     host.end_request(request);
     match result {
         Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled => Ok(()),
@@ -78,9 +82,9 @@ pub async fn nuget_search(
     skip: u32,
     take: u32,
 ) -> IdeResult<PackageSearch> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
-        let out = nuget::run(dotnet.as_deref(), &root, &nuget::search_args(&query, prerelease, skip, take))?;
+        let out = nuget::run(dotnet.as_deref(), &env, &root, &nuget::search_args(&query, prerelease, skip, take))?;
         nuget::parse_search(&out)
     })
     .await
@@ -88,9 +92,9 @@ pub async fn nuget_search(
 
 /// Every version of package `id`, newest first.
 pub async fn nuget_versions(host: &Host, window: &str, id: String, prerelease: bool) -> IdeResult<Vec<String>> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
-        nuget::parse_versions(&nuget::run(dotnet.as_deref(), &root, &nuget::versions_args(&id, prerelease))?)
+        nuget::parse_versions(&nuget::run(dotnet.as_deref(), &env, &root, &nuget::versions_args(&id, prerelease))?)
     })
     .await
 }
@@ -103,10 +107,10 @@ pub async fn nuget_installed(
     outdated: bool,
     prerelease: bool,
 ) -> IdeResult<InstalledPackages> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let target = ide_dotnet::find(&root).into_iter().next().unwrap_or_else(|| root.clone());
-        let out = nuget::run(dotnet.as_deref(), &root, &nuget::list_args(&target, outdated, prerelease))?;
+        let out = nuget::run(dotnet.as_deref(), &env, &root, &nuget::list_args(&target, outdated, prerelease))?;
         Ok(nuget::with_central_packages(nuget::parse_list(&out)?))
     })
     .await
@@ -115,13 +119,13 @@ pub async fn nuget_installed(
 /// Vulnerable (with the packages under them) and deprecated packages of every project
 /// of the solution at the root, placed in their project files. Asks the package sources.
 pub async fn nuget_audit(host: &Host, window: &str) -> IdeResult<PackageAudit> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let target = ide_dotnet::find(&root).into_iter().next().unwrap_or_else(|| root.clone());
         let mut listings = Vec::new();
         let mut failures = Vec::new();
         for vulnerable in [true, false] {
-            match nuget::run(dotnet.as_deref(), &root, &nuget::audit_args(&target, vulnerable)) {
+            match nuget::run(dotnet.as_deref(), &env, &root, &nuget::audit_args(&target, vulnerable)) {
                 Ok(out) => listings.push(out),
                 Err(e) => failures.push(e),
             }
@@ -145,13 +149,13 @@ pub async fn nuget_install(
     id: String,
     version: Option<String>,
 ) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     if projects.is_empty() {
         return Err(IdeError::invalid("no project to install into"));
     }
     host.blocking(move || {
         for p in &projects {
-            nuget::run(dotnet.as_deref(), &root, &nuget::add_args(p, &id, version.as_deref()))?;
+            nuget::run(dotnet.as_deref(), &env, &root, &nuget::add_args(p, &id, version.as_deref()))?;
         }
         Ok(())
     })
@@ -160,10 +164,10 @@ pub async fn nuget_install(
 
 /// Removes package `id` from `projects`.
 pub async fn nuget_remove(host: &Host, window: &str, projects: Vec<IpcPath>, id: String) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         for p in &projects {
-            nuget::run(dotnet.as_deref(), &root, &nuget::remove_args(p, &id))?;
+            nuget::run(dotnet.as_deref(), &env, &root, &nuget::remove_args(p, &id))?;
         }
         Ok(())
     })
@@ -177,9 +181,9 @@ fn solution_of(root: &Path) -> IdeResult<PathBuf> {
 
 /// Installed project and solution templates (`dotnet new`), custom ones included.
 pub async fn dotnet_templates(host: &Host, window: &str) -> IdeResult<Vec<ProjectTemplate>> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
-        let version = nuget::run(dotnet.as_deref(), &root, &["--version".to_owned()])?.trim().to_owned();
+        let version = nuget::run(dotnet.as_deref(), &env, &root, &["--version".to_owned()])?.trim().to_owned();
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -187,7 +191,7 @@ pub async fn dotnet_templates(host: &Host, window: &str) -> IdeResult<Vec<Projec
         let file = templates::cache_file(&home, &version);
         if !file.is_file() {
             // The cache is written on first use of `dotnet new`.
-            nuget::run(dotnet.as_deref(), &root, &["new".into(), "list".into()])?;
+            nuget::run(dotnet.as_deref(), &env, &root, &["new".into(), "list".into()])?;
         }
         templates::parse_cache(&std::fs::read_to_string(&file)?)
     })
@@ -208,19 +212,20 @@ pub async fn dotnet_new_project(
     add_to_solution: bool,
     solution_folder: Option<String>,
 ) -> IdeResult<IpcPath> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     if name.trim().is_empty() || name.contains(['/', '\\']) {
         return Err(IdeError::invalid("enter a project name"));
     }
     host.blocking(move || {
         let args = templates::new_args(&template, &name, &directory, language.as_deref(), &values);
-        nuget::run(dotnet.as_deref(), &root, &args)?;
+        nuget::run(dotnet.as_deref(), &env, &root, &args)?;
         let project = templates::created_project(&directory, &name)
             .ok_or_else(|| IdeError::not_found(format!("{template} created no project in {}", directory.display())))?;
         if add_to_solution {
             let solution = solution_of(&root)?;
             nuget::run(
                 dotnet.as_deref(),
+                &env,
                 &root,
                 &templates::sln_add_args(&solution, std::slice::from_ref(&project), solution_folder.as_deref()),
             )?;
@@ -237,30 +242,35 @@ pub async fn dotnet_solution_add(
     projects: Vec<IpcPath>,
     solution_folder: Option<String>,
 ) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let solution = solution_of(&root)?;
         let paths: Vec<PathBuf> = projects.into_iter().map(PathBuf::from).collect();
-        nuget::run(dotnet.as_deref(), &root, &templates::sln_add_args(&solution, &paths, solution_folder.as_deref()))
-            .map(|_| ())
+        nuget::run(
+            dotnet.as_deref(),
+            &env,
+            &root,
+            &templates::sln_add_args(&solution, &paths, solution_folder.as_deref()),
+        )
+        .map(|_| ())
     })
     .await
 }
 
 /// Removes projects from the root's solution (their files stay).
 pub async fn dotnet_solution_remove(host: &Host, window: &str, projects: Vec<IpcPath>) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let solution = solution_of(&root)?;
         let paths: Vec<PathBuf> = projects.into_iter().map(PathBuf::from).collect();
-        nuget::run(dotnet.as_deref(), &root, &templates::sln_remove_args(&solution, &paths)).map(|_| ())
+        nuget::run(dotnet.as_deref(), &env, &root, &templates::sln_remove_args(&solution, &paths)).map(|_| ())
     })
     .await
 }
 
 /// Converts a `.sln` to `.slnx` next to it (SLN-6); the `.sln` stays. Returns the new file.
 pub async fn dotnet_migrate_solution(host: &Host, window: &str, solution: IpcPath) -> IdeResult<IpcPath> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let solution = PathBuf::from(solution);
         let target = templates::migrated_solution(&solution);
@@ -270,7 +280,7 @@ pub async fn dotnet_migrate_solution(host: &Host, window: &str, solution: IpcPat
                 format!("{} already exists", target.file_name().unwrap_or_default().to_string_lossy()),
             ));
         }
-        nuget::run(dotnet.as_deref(), &root, &templates::sln_migrate_args(&solution))?;
+        nuget::run(dotnet.as_deref(), &env, &root, &templates::sln_migrate_args(&solution))?;
         ide_dotnet::solution_replaced(&solution, &target)?;
         Ok(IpcPath::from(target))
     })
@@ -312,7 +322,7 @@ pub async fn dotnet_ef_command(
     project: IpcPath,
     operation: ide_dotnet::ef::EfOperation,
 ) -> IdeResult<ide_dotnet::ef::EfCommand> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, _) = dotnet_of(host, window)?;
     host.blocking(move || {
         let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
         Ok(ide_dotnet::ef::command(&dotnet, &operation, &project, &solution_projects(&root)))
@@ -326,7 +336,7 @@ pub async fn dotnet_sdk_target(
     window: &str,
     name: String,
 ) -> IdeResult<Option<ide_dotnet::msbuild::FileLocation>> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, _) = dotnet_of(host, window)?;
     host.blocking(move || {
         let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
         let Some(sdk) = ide_dotnet::msbuild::sdk_dir(&dotnet, &root) else { return Ok(None) };
@@ -379,8 +389,8 @@ pub async fn dotnet_generated_dirs(host: &Host, window: &str, projects: Vec<IpcP
 static GENERATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Runs `dotnet <args>` in `cwd`; stdout and stderr.
-async fn dotnet_output(dotnet: &Path, cwd: &Path, args: &[String]) -> IdeResult<(String, String)> {
-    let (_, stdout, stderr) = dotnet_status_output(dotnet, cwd, args).await?;
+async fn dotnet_output(dotnet: &Path, env: &Env, cwd: &Path, args: &[String]) -> IdeResult<(String, String)> {
+    let (_, stdout, stderr) = dotnet_status_output(dotnet, env, cwd, args).await?;
     Ok((stdout, stderr))
 }
 
@@ -394,7 +404,7 @@ pub async fn dotnet_generated_sources(
     project: IpcPath,
 ) -> IdeResult<ide_dotnet::generators::GeneratedSources> {
     use ide_dotnet::generators::{self, GeneratedSources};
-    let (_, dotnet) = dotnet_of(host, window)?;
+    let (_, dotnet, env) = dotnet_of(host, window)?;
     let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
     let base = host.project(window)?.build_cache_dir().join("generated");
     let project = PathBuf::from(project);
@@ -418,7 +428,7 @@ pub async fn dotnet_generated_sources(
     // below would hide it) and its target frameworks, as MSBuild evaluates them.
     let mut eval: Vec<String> = vec!["msbuild".into(), path.clone(), "-nologo".into()];
     eval.extend(generators::EVAL_PROPERTIES.iter().map(|n| format!("-getProperty:{n}")));
-    let props = generators::parse_properties(&dotnet_output(&dotnet, &cwd, &eval).await?.0);
+    let props = generators::parse_properties(&dotnet_output(&dotnet, &env, &cwd, &eval).await?.0);
     let prop = |k: &str| props.iter().find(|(n, _)| n == k).map(|(_, v)| v.trim().to_owned()).unwrap_or_default();
     let user_import = prop("CustomAfterMicrosoftCommonTargets");
     let first_tfm = prop("TargetFrameworks").split(';').map(str::trim).find(|t| !t.is_empty()).map(str::to_owned);
@@ -444,7 +454,7 @@ pub async fn dotnet_generated_sources(
     {
         args.push(format!("-p:TargetFramework={first}"));
     }
-    let (stdout, stderr) = dotnet_output(&dotnet, &cwd, &args).await?;
+    let (stdout, stderr) = dotnet_output(&dotnet, &env, &cwd, &args).await?;
     let errors = generators::errors(&format!("{stdout}\n{stderr}"));
     let analyzers = generators::parse_analyzers(&stdout);
     host.blocking(move || {
@@ -486,7 +496,7 @@ pub async fn dotnet_publish_command(
     project: IpcPath,
     target: ide_dotnet::publish::PublishTarget,
 ) -> IdeResult<ide_dotnet::publish::PublishCommand> {
-    let (_, dotnet) = dotnet_of(host, window)?;
+    let (_, dotnet, _) = dotnet_of(host, window)?;
     let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
     Ok(ide_dotnet::publish::command(&dotnet, &project, &target))
 }
@@ -499,7 +509,7 @@ pub async fn dotnet_container_run(
     project: IpcPath,
     repository: String,
 ) -> IdeResult<ide_dotnet::publish::PublishCommand> {
-    let (_, dotnet) = dotnet_of(host, window)?;
+    let (_, dotnet, _) = dotnet_of(host, window)?;
     let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
     host.blocking(move || {
         let port = ide_dotnet::publish::web_host_port(&project);
@@ -510,7 +520,7 @@ pub async fn dotnet_container_run(
 
 /// The `secrets.json` of `project` (PLT-4), with a `UserSecretsId` added when it has none.
 pub async fn dotnet_user_secrets(host: &Host, window: &str, project: IpcPath) -> IdeResult<IpcPath> {
-    let (_, dotnet) = dotnet_of(host, window)?;
+    let (_, dotnet, _) = dotnet_of(host, window)?;
     host.blocking(move || ide_dotnet::secrets::ensure_secrets_file(dotnet.as_deref(), &project).map(IpcPath::from))
         .await
 }
@@ -561,7 +571,7 @@ pub async fn dotnet_restore(
 ) -> IdeResult<ide_dotnet::restore::RestoreResult> {
     use ide_dotnet::restore::{self, RestoreMessage, RestoreResult, RestoreSeverity};
     host.require_trust(window)?;
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
     let sink = host.project(window)?.sink.clone();
     let token = host.begin_project_request(window, request);
@@ -572,7 +582,7 @@ pub async fn dotnet_restore(
             let args = restore::restore_args(&target);
             let started = std::time::SystemTime::now();
             let (code, stdout, stderr) = tokio::select! {
-                out = dotnet_status_output(&dotnet, &root, &args) => out?,
+                out = dotnet_status_output(&dotnet, &env, &root, &args) => out?,
                 () = token.cancelled() => return Err(IdeError::cancelled()),
             };
             let mut messages = restore::parse_output(&format!("{stdout}\n{stderr}"));
@@ -630,13 +640,15 @@ pub async fn dotnet_restore(
 }
 
 /// Runs `dotnet <args>` in `cwd`: exit code, stdout and stderr; killed when dropped.
-async fn dotnet_status_output(dotnet: &Path, cwd: &Path, args: &[String]) -> IdeResult<(i32, String, String)> {
-    let out = tokio::process::Command::new(dotnet)
+async fn dotnet_status_output(
+    dotnet: &Path,
+    env: &Env,
+    cwd: &Path,
+    args: &[String],
+) -> IdeResult<(i32, String, String)> {
+    let out = tokio::process::Command::from(ide_dotnet::sdk_command(dotnet, env))
         .args(args)
         .current_dir(cwd)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output()
@@ -657,12 +669,12 @@ pub async fn dotnet_edit_references(
     add: Vec<IpcPath>,
     remove: Vec<IpcPath>,
 ) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         for (adding, list) in [(false, remove), (true, add)] {
             if !list.is_empty() {
                 let paths: Vec<PathBuf> = list.into_iter().map(PathBuf::from).collect();
-                nuget::run(dotnet.as_deref(), &root, &templates::reference_args(adding, &project, &paths))?;
+                nuget::run(dotnet.as_deref(), &env, &root, &templates::reference_args(adding, &project, &paths))?;
             }
         }
         Ok(())
@@ -694,12 +706,12 @@ pub async fn dotnet_tests(
     selection: Vec<TestSelection>,
     on_event: Channel<TestEvent>,
 ) -> IdeResult<()> {
-    let (root, dotnet) = dotnet_of(host, window)?;
+    let (root, dotnet, env) = dotnet_of(host, window)?;
     let token = host.begin_request(request);
     // A debug run collects no coverage: the coverage host would start the tests in another process.
     let coverage = (run && coverage && !debug).then(|| coverage_dir(request));
     let debug = run && debug;
-    let result = tests_inner(&root, dotnet, run, coverage.as_deref(), debug, selection, &token, &on_event).await;
+    let result = tests_inner(&root, dotnet, &env, run, coverage.as_deref(), debug, selection, &token, &on_event).await;
     host.end_request(request);
     if let Err(e) = &result {
         let _ = on_event.send(TestEvent::Phase {
@@ -721,6 +733,7 @@ fn coverage_dir(request: RequestId) -> PathBuf {
 async fn tests_inner(
     root: &Path,
     dotnet: Option<PathBuf>,
+    env: &Env,
     run: bool,
     coverage: Option<&Path>,
     debug: bool,
@@ -760,7 +773,7 @@ async fn tests_inner(
         let on_line = move |line| {
             let _ = out.send(TestEvent::Output { project: None, line });
         };
-        let code = stream_dotnet(&dotnet, root, &args, token, on_line).await?;
+        let code = stream_dotnet(&dotnet, env, root, &args, token, on_line).await?;
         if code != 0 {
             return Err(IdeError::new(ide_core::error::ErrorKind::Io, "build failed; see the output"));
         }
@@ -773,7 +786,7 @@ async fn tests_inner(
         let phase =
             |phase, message: Option<String>| TestEvent::Phase { project: Some(project.clone()), phase, message };
         send(phase(if run { TestPhase::Running } else { TestPhase::Discovering }, None));
-        let mut app = match test_app(&dotnet, &t.project).await {
+        let mut app = match test_app(&dotnet, env, &t.project).await {
             Ok(app) => app,
             Err(e) => {
                 send(phase(TestPhase::Failed, Some(e.message)));
@@ -829,7 +842,7 @@ async fn tests_inner(
 }
 
 /// The built test app of `project`: its `TargetPath` (first target framework when it has several).
-async fn test_app(dotnet: &Path, project: &Path) -> IdeResult<TestApp> {
+async fn test_app(dotnet: &Path, env: &Env, project: &Path) -> IdeResult<TestApp> {
     let names = ["TargetPath", "IsTestingPlatformApplication"];
     let mut args: Vec<String> = vec!["msbuild".into(), project.to_string_lossy().into_owned()];
     args.extend(names.iter().map(|n| format!("-getProperty:{n}")));
@@ -845,12 +858,9 @@ async fn test_app(dotnet: &Path, project: &Path) -> IdeResult<TestApp> {
         args.push(format!("-p:TargetFramework={first}"));
     }
     let dir = project.parent().unwrap_or(project);
-    let out = tokio::process::Command::new(dotnet)
+    let out = tokio::process::Command::from(ide_dotnet::sdk_command(dotnet, env))
         .args(&args)
         .current_dir(dir)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
         .output()
         .await
         .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", dotnet.display())))?;
@@ -879,17 +889,15 @@ async fn test_app(dotnet: &Path, project: &Path) -> IdeResult<TestApp> {
 /// Runs `dotnet <args>`, calling `on_line` per output line; the exit code (cancellation kills it).
 async fn stream_dotnet(
     dotnet: &Path,
+    env: &Env,
     cwd: &Path,
     args: &[String],
     token: &ide_core::CancellationToken,
     on_line: impl Fn(String) + Send + Sync + Clone + 'static,
 ) -> IdeResult<i32> {
-    let mut child = tokio::process::Command::new(dotnet)
+    let mut child = tokio::process::Command::from(ide_dotnet::sdk_command(dotnet, env))
         .args(args)
         .current_dir(cwd)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
