@@ -622,7 +622,7 @@ pub struct LanguagesSettings {
     pub markdown: MarkdownSettings,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DotnetSettings {
     /// .NET install directory (`DOTNET_ROOT`) for language servers and terminals;
@@ -630,6 +630,15 @@ pub struct DotnetSettings {
     pub root: String,
     /// Write an MSBuild binary log (`-bl`) of every build, for the binary log viewer.
     pub binary_log: bool,
+    /// Restore NuGet packages when a solution opens and when a project file changes,
+    /// for projects whose restore is missing or out of date.
+    pub restore_on_open: bool,
+}
+
+impl Default for DotnetSettings {
+    fn default() -> Self {
+        Self { root: String::new(), binary_log: false, restore_on_open: true }
+    }
 }
 
 impl Default for LanguagesSettings {

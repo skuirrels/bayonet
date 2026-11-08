@@ -2594,6 +2594,7 @@
   "no file is open in the editor": "编辑器中没有打开的文件",
   "no symbols": "没有符号",
   "not found": "未找到",
+  "not restored": "未还原",
   "not installed in this project": "此项目中未安装",
   "or click a line number to set a breakpoint.": "或点击行号设置断点。",
   "per module, the JDK of its Java version": "按模块使用与其 Java 版本匹配的 JDK",
@@ -6863,5 +6864,12 @@
   "Reload All Projects": "重新加载所有项目",
   "Rereads the solution and restarts the C# and F# language servers, which load its projects again": "重新读取解决方案并重启 C# 和 F# 语言服务器，使其重新加载项目",
   "Manage .NET SDK…": "管理 .NET SDK…",
-  "Opens Settings › Languages › .NET: the dotnet host, SDK and global.json": "打开 设置 › 语言 › .NET：dotnet 主机、SDK 和 global.json"
+  "Opens Settings › Languages › .NET: the dotnet host, SDK and global.json": "打开 设置 › 语言 › .NET：dotnet 主机、SDK 和 global.json",
+  "Restoring NuGet packages": "正在还原 NuGet 包",
+  "NuGet restore failed": "NuGet 还原失败",
+  "NuGet restore failed: 1 error": "NuGet 还原失败：1 个错误",
+  "NuGet restore failed: {count} errors": "NuGet 还原失败：{count} 个错误",
+  "Show Problems": "显示问题",
+  "Restore NuGet packages automatically": "自动还原 NuGet 包",
+  "Restores when a solution opens, when a project file or Directory.Packages.props changes, and when the C# language server finds unresolved packages.": "在打开解决方案、项目文件或 Directory.Packages.props 更改，以及 C# 语言服务器发现未解析的包时还原。"
 }

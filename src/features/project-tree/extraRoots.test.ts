@@ -93,6 +93,22 @@ describe("withExtraRoots", () => {
     expect(withExtraRoots(base, extras, new Map(), DEFAULT_TREE_OPTIONS).children.get("/s/App")).toBeUndefined();
   });
 
+  it("keeps a group's reveal target and an empty group's children", () => {
+    const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
+    const extras = [
+      {
+        id: "refs",
+        label: "Projects",
+        icon: "module",
+        children: [{ id: "core", label: "Core", icon: "project-csharp", reveal: "/s/Core", children: [] }],
+      },
+    ];
+    const m = withExtraRoots(base, extras, new Map(), DEFAULT_TREE_OPTIONS);
+    const [core] = m.children.get(m.roots[1]!.key)!;
+    expect(core).toMatchObject({ label: "Core", group: true, reveal: "/s/Core" });
+    expect(m.children.get(core!.key)).toEqual([]);
+  });
+
   it("returns the model itself without extra roots", () => {
     const base = buildModel({ path: "/p", name: "proj" }, new Map(), DEFAULT_TREE_OPTIONS);
     expect(withExtraRoots(base, [], new Map(), DEFAULT_TREE_OPTIONS)).toBe(base);

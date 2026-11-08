@@ -395,6 +395,41 @@ pub async fn dotnet_project_references(
     ide_host::ops::dotnet::dotnet_project_references(&state.host, window.label(), project).await
 }
 
+/// Each project's frameworks, packages and project references for the Solution view.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_dependencies(
+    window: Window,
+    state: State<'_, AppState>,
+    projects: Vec<IpcPath>,
+) -> IdeResult<Vec<Option<ide_dotnet::dependencies::ProjectDependencies>>> {
+    ide_host::ops::dotnet::dotnet_dependencies(&state.host, window.label(), projects).await
+}
+
+/// Of `projects`, those whose NuGet restore is missing or out of date.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_restore_needed(
+    window: Window,
+    state: State<'_, AppState>,
+    projects: Vec<IpcPath>,
+) -> IdeResult<Vec<IpcPath>> {
+    ide_host::ops::dotnet::dotnet_restore_needed(&state.host, window.label(), projects).await
+}
+
+/// Restores the NuGet packages of `targets` and publishes their errors as `nuget` diagnostics.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_restore(
+    window: Window,
+    state: State<'_, AppState>,
+    targets: Vec<IpcPath>,
+    clear: Vec<IpcPath>,
+    request: RequestId,
+) -> IdeResult<ide_dotnet::restore::RestoreResult> {
+    ide_host::ops::dotnet::dotnet_restore(&state.host, window.label(), targets, clear, request).await
+}
+
 /// Adds and removes project references.
 #[tauri::command]
 #[specta::specta]

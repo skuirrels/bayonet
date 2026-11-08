@@ -319,6 +319,15 @@ impl Handler for ClientHandler {
                 Ok(Value::Null)
             }
             "workspace/inlineValue/refresh" => Ok(Value::Null),
+            // Roslyn loaded projects with unresolved packages. The UI restores them and
+            // Roslyn reloads them when restore rewrites their `project.assets.json`.
+            "workspace/_roslyn_projectNeedsRestore" => {
+                let projects = restore_projects(&params);
+                if !projects.is_empty() {
+                    mgr.sink().emit(IdeEvent::PackagesNeedRestore { projects });
+                }
+                Ok(Value::Null)
+            }
             // Roslyn's Razor (cohosting) keeps the HTML of each Razor document on the
             // client and asks it the HTML half of requests.
             "razor/updateHtml" => Ok(Value::Null),
@@ -338,6 +347,17 @@ impl Handler for ClientHandler {
             mgr.resync_documents(&self.server, self.generation);
         }
     }
+}
+
+/// The project files of Roslyn's `workspace/_roslyn_projectNeedsRestore`.
+fn restore_projects(params: &Value) -> Vec<ide_core::IpcPath> {
+    params["projectFilePaths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|p| ide_core::IpcPath::from(std::path::PathBuf::from(p)))
+        .collect()
 }
 
 /// A request Roslyn's Razor sends for the HTML projection of a Razor document:
@@ -421,5 +441,18 @@ mod razor_tests {
         assert_eq!(razor_html_answer("textDocument/completion"), json!({ "isIncomplete": false, "items": [] }));
         assert_eq!(razor_html_answer("textDocument/documentHighlight"), json!([]));
         assert_eq!(razor_html_answer("textDocument/hover"), Value::Null);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_projects_roslyn_asks_to_restore() {
+        let params = json!({ "projectFilePaths": ["/s/App/App.csproj", 3, "/s/Lib/Lib.fsproj"] });
+        let projects: Vec<std::path::PathBuf> = restore_projects(&params).into_iter().map(Into::into).collect();
+        assert_eq!(projects, [std::path::PathBuf::from("/s/App/App.csproj"), "/s/Lib/Lib.fsproj".into()]);
+        assert!(restore_projects(&json!({})).is_empty());
     }
 }

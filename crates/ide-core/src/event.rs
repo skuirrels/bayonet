@@ -156,6 +156,11 @@ pub enum IdeEvent {
         state: String,
         message: Option<String>,
     },
+    /// A language server found projects whose NuGet packages are not restored (Roslyn's
+    /// `workspace/_roslyn_projectNeedsRestore`); the UI restores them.
+    PackagesNeedRestore {
+        projects: Vec<crate::IpcPath>,
+    },
 }
 
 /// What an askpass prompt asks for.

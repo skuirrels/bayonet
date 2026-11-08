@@ -39,7 +39,7 @@ const SOLUTION: Solution = {
 };
 
 describe("solutionRoot", () => {
-  it("shows folders as groups, projects as their folders and items as files", () => {
+  it("shows folders as groups, projects as their folders (minus build output and project file) and items as files", () => {
     const root = solutionRoot(SOLUTION);
     expect(root).toMatchObject({
       id: "solution",
@@ -57,14 +57,14 @@ describe("solutionRoot", () => {
             icon: "project-csharp",
             path: "/w/src/App",
             detail: undefined,
-            hide: BUILD_OUTPUT,
+            hide: [...BUILD_OUTPUT, "App.csproj"],
           },
           {
             label: "Gone",
             icon: "project-fsharp",
             path: "/w/src/Gone",
             detail: "not found",
-            hide: BUILD_OUTPUT,
+            hide: [...BUILD_OUTPUT, "Gone.fsproj"],
           },
         ],
       },
@@ -73,7 +73,7 @@ describe("solutionRoot", () => {
         icon: "module",
         path: "/w/Tool",
         detail: undefined,
-        hide: BUILD_OUTPUT,
+        hide: [...BUILD_OUTPUT, "Tool.vbproj"],
       },
       { label: "README.md", icon: "", path: "/w/README.md", file: true },
     ]);

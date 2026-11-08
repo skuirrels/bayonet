@@ -327,6 +327,7 @@ export function RustPage() {
 
 export function DotnetPage() {
   const [binaryLog, setBinaryLog] = useSetting<boolean>("languages.dotnet.binaryLog");
+  const [restoreOnOpen, setRestoreOnOpen] = useSetting<boolean>("languages.dotnet.restoreOnOpen");
   return (
     <div className={styles.page}>
       <Section title=".NET Install">
@@ -343,6 +344,12 @@ export function DotnetPage() {
         />
       </Section>
       <Section title="Build">
+        <Toggle
+          label="Restore NuGet packages automatically"
+          checked={restoreOnOpen !== false}
+          onChange={setRestoreOnOpen}
+          hint="Restores when a solution opens, when a project file or Directory.Packages.props changes, and when the C# language server finds unresolved packages."
+        />
         <Toggle
           label="Write a binary log of every build"
           checked={binaryLog}

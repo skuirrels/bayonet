@@ -485,12 +485,13 @@ export function ProjectView() {
   const isExpandable = useCallback(
     (n: ProjectNode) =>
       n.dir
-        ? !n.placeholder
+        ? // A group with nothing in it (a package without dependencies) is a leaf.
+          !n.placeholder && !(n.group && !model.children.get(n.key)?.length)
         : n.member
           ? n.member.children.length > 0
           : // A file whose outline came back empty (unsupported or no members) has nothing to show.
             showMembers && !n.placeholder && (outlines.get(n.path)?.length ?? 1) > 0,
-    [showMembers, outlines],
+    [showMembers, outlines, model],
   );
 
   const loadChildren = useCallback(
@@ -524,7 +525,9 @@ export function ProjectView() {
   }, []);
 
   const onActivate = useCallback((node: ProjectNode) => {
-    if (node.member) {
+    if (node.reveal) {
+      revealPath(node.reveal, true);
+    } else if (node.member) {
       void revealRange(node.path, { start: node.member.selection_range.start }, { focus: true });
     } else if (!node.dir && !node.placeholder) void openFile(node.path, { focus: true });
   }, []);

@@ -264,6 +264,23 @@ describe("build feature", () => {
   });
 
   it.each([
+    ["a .NET solution with a dotnet configuration", "dotnet.solutionOpen", "dotnet", true],
+    ["a .NET solution with no configuration", "dotnet.solutionOpen", "", true],
+    ["a Maven project with an application configuration", "build.maven", "application", true],
+    ["a .NET solution with a Python configuration", "dotnet.solutionOpen", "python", false],
+    ["a project with no build model", null, "dotnet", false],
+  ])("shows the title bar hammer for %s", (_case, key, kind, shown) => {
+    if (key) setContext(key, true);
+    setContext("run.selectedKind", kind);
+    const item = useContributions.getState().titleItems.get("build.project")!;
+    const Item = item.component;
+    render(<Item />);
+    expect(!!screen.queryByRole("button", { name: /Build Project/ })).toBe(shown);
+    if (key) setContext(key, false);
+    setContext("run.selectedKind", "");
+  });
+
+  it.each([
     ["build.buildProject", undefined],
     ["build.buildModule", "/p/core/src/A.java"],
     ["build.rebuildProject", undefined],

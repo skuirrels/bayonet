@@ -65,6 +65,8 @@ export interface ProjectNode {
   readOnly?: boolean;
   /** A declaration of the file itself ("Show Members"); navigating lands on its `selection_range`. */
   member?: OutlineItem;
+  /** Group node standing for this path elsewhere in the tree (a project reference): opening it selects that node. */
+  reveal?: string;
 }
 
 export interface TreeModel {
@@ -287,6 +289,8 @@ export interface ExtraRoot {
   prepend?: readonly ExtraRoot[];
   /** Listed above the project folder (IDEA's module group of the build). */
   beforeProject?: boolean;
+  /** A group node standing for this path elsewhere in the tree: opening it selects that node (a project reference). */
+  reveal?: string;
 }
 
 /** Key prefix of group nodes that show no folder ("External Libraries", an SDK). */
@@ -455,6 +459,7 @@ export function withExtraRoots(
       group: true,
       readOnly: true,
     };
+    if (extra.reveal) node.reveal = extra.reveal;
     out.byKey.set(key, node);
     // Deepest folders first: a module folder nested in a sibling's (`billing/modules/core`
     // in `billing`) would otherwise already be keyed by the sibling's listing and dropped.

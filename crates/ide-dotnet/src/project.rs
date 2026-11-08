@@ -21,6 +21,9 @@ pub struct ProjectInfo {
     pub is_test: bool,
     /// `<ProjectReference Include="…"/>` values as written (relative, `\` or `/`).
     pub project_references: Vec<String>,
+    /// `<PackageReference Include="…" Version="…"/>`: id and version as written (none under
+    /// central package management).
+    pub package_references: Vec<(String, Option<String>)>,
 }
 
 impl ProjectInfo {
@@ -80,11 +83,14 @@ pub(crate) fn parse_project(text: &str) -> IdeResult<ProjectInfo> {
                     "Project" => info.sdks.extend(attr(tag, "Sdk").iter().flat_map(|s| sdk_names(s))),
                     "Sdk" => info.sdks.extend(attr(tag, "Name").iter().flat_map(|s| sdk_names(s))),
                     "ProjectReference" => info.project_references.extend(attr(tag, "Include")),
-                    "PackageReference"
-                        if attr(tag, "Include")
-                            .is_some_and(|p| TEST_PACKAGES.iter().any(|t| t.eq_ignore_ascii_case(&p))) =>
-                    {
-                        info.is_test = true;
+                    "PackageReference" => {
+                        if let Some(id) = attr(tag, "Include") {
+                            if TEST_PACKAGES.iter().any(|t| t.eq_ignore_ascii_case(&id)) {
+                                info.is_test = true;
+                            }
+                            let version = attr(tag, "VersionOverride").or_else(|| attr(tag, "Version"));
+                            info.package_references.push((id, version));
+                        }
                     }
                     _ => {}
                 }

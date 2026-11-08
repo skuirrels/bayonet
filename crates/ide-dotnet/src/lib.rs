@@ -7,6 +7,7 @@
 pub mod aspire;
 pub mod avalonia;
 pub mod binlog;
+pub mod dependencies;
 pub mod diagnostics;
 pub mod ef;
 pub mod generators;
@@ -15,6 +16,7 @@ pub mod msbuild;
 pub mod nuget;
 mod project;
 pub mod publish;
+pub mod restore;
 pub mod secrets;
 mod sln;
 mod slnx;

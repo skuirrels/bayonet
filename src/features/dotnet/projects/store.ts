@@ -2,6 +2,7 @@
 import { create } from "zustand";
 import { commands } from "@/bindings";
 import type { Solution, SolutionItem } from "@/bindings";
+import { setContext } from "@/platform/context";
 import { call } from "@/platform/ipc";
 import { tx } from "@/platform/i18n";
 import { notifications } from "@/workbench/contributions";
@@ -49,7 +50,11 @@ export function projectsOf(items: readonly SolutionItem[], folders: string[] = [
   });
 }
 
+/** Context key: a .NET solution (or lone project) is loaded. */
+const SOLUTION_OPEN = "dotnet.solutionOpen";
+
 export function setSolution(solution: Solution | null) {
+  setContext(SOLUTION_OPEN, !!solution);
   useSolution.setState({
     solution,
     projects: solution ? projectsOf(solution.items).sort((a, b) => a.name.localeCompare(b.name)) : [],
