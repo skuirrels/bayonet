@@ -501,6 +501,26 @@ mod tests {
     }
 
     #[test]
+    fn dotnet_environment_is_saved_per_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let store = SettingsStore::load(&cfg, Some(&proj));
+        let sources = "/feed;https://api.nuget.org/v3/index.json";
+        let s =
+            store.set(SettingsScope::Project, "languages.dotnet.env", json!({ "RestoreSources": sources })).unwrap();
+        assert_eq!(s.languages.dotnet.env["RestoreSources"], sources);
+        let file = std::fs::read_to_string(proj.join(".openidea/settings.toml")).unwrap();
+        assert!(file.contains("RestoreSources"), "{file}");
+        let reloaded = SettingsStore::load(&cfg, Some(&proj)).effective();
+        assert_eq!(reloaded.languages.dotnet.env["RestoreSources"], sources);
+        // Removing the last row clears it.
+        let s = store.set(SettingsScope::Project, "languages.dotnet.env", json!({})).unwrap();
+        assert!(s.languages.dotnet.env.is_empty());
+    }
+
+    #[test]
     fn inspection_profiles_live_in_their_layers() {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = tmp.path().join("cfg");

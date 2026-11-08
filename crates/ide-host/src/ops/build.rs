@@ -35,6 +35,7 @@ pub fn load(root: &Path, cache: &Path, settings: &Settings) -> BuildModel {
         &settings.languages.java.gradle,
     );
     model.dotnet = ide_sdk::apply::dotnet_command(root, settings);
+    model.dotnet_env = ide_sdk::apply::dotnet_env(settings);
     if settings.languages.dotnet.binary_log {
         model.dotnet_binlogs = Some(cache.join("binlogs"));
     }

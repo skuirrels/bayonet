@@ -10,6 +10,7 @@ import { PHP_LANGUAGE_LEVELS } from "@/platform/languageSettings";
 import { GlobListEditor, Row, Section, Select, Toggle } from "../components/Form";
 import { choosePath } from "./api";
 import { useSetting } from "../components/context";
+import { TableEditor } from "../pages/workflowControls";
 import { SdkField, tildify, useDetected } from "./components";
 import styles from "./Sdk.module.css";
 
@@ -328,6 +329,7 @@ export function RustPage() {
 export function DotnetPage() {
   const [binaryLog, setBinaryLog] = useSetting<boolean>("languages.dotnet.binaryLog");
   const [restoreOnOpen, setRestoreOnOpen] = useSetting<boolean>("languages.dotnet.restoreOnOpen");
+  const [env, setEnv] = useSetting<Record<string, string> | undefined>("languages.dotnet.env");
   return (
     <div className={styles.page}>
       <Section title=".NET Install">
@@ -356,6 +358,22 @@ export function DotnetPage() {
           onChange={setBinaryLog}
           hint="Builds run with -bl. The last 10 logs are kept and open in the binary log viewer from the Build tool window."
         />
+        <Row
+          label="Environment variables"
+          stacked
+          hint="Set for every restore, build, test and run, and for the C# and F# language servers. MSBuild reads each one as a property, so RestoreSources=/path/to/packages;https://api.nuget.org/v3/index.json restores from those sources instead of the ones in nuget.config. Use absolute paths: a relative one is read from each project's own folder. A property the project file sets itself wins."
+        >
+          <TableEditor
+            rows={Object.entries(env ?? {}).map(([name, value]) => ({ name, value }))}
+            columns={[
+              { key: "name", title: "Name", placeholder: "NAME" },
+              { key: "value", title: "Value", placeholder: "value" },
+            ]}
+            onChange={(rows) => setEnv(Object.fromEntries(rows.map((r) => [r.name ?? "", r.value ?? ""])))}
+            empty="No variables"
+            aria-label="Environment variables"
+          />
+        </Row>
       </Section>
     </div>
   );

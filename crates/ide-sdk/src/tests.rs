@@ -1642,6 +1642,52 @@ fn dotnet_servers_get_the_chosen_install_and_quiet_sdk_commands() {
 }
 
 #[test]
+fn dotnet_environment_reaches_language_servers_and_dotnet_runs_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut settings = Settings::default();
+    settings.languages.dotnet.env = BTreeMap::from([
+        ("RestoreSources".into(), "/feed;https://api.nuget.org/v3/index.json".into()),
+        (" ".into(), "nameless".into()),
+    ]);
+    let mut roslyn = server("roslyn-language-server");
+    configure_server(&mut roslyn, tmp.path(), tmp.path(), &settings);
+    assert_eq!(roslyn.env["RestoreSources"], "/feed;https://api.nuget.org/v3/index.json");
+    assert!(!roslyn.env.contains_key(" ") && !roslyn.env.contains_key(""));
+    let mut gopls = server("gopls");
+    configure_server(&mut gopls, tmp.path(), tmp.path(), &settings);
+    assert!(!gopls.env.contains_key("RestoreSources"));
+
+    let mut configs = [
+        run("dotnet", "dotnet", &["run"]),
+        run("dotnet-test", "dotnet", &["test"]),
+        // Publish and EF Core commands run as shell configurations of `dotnet` itself.
+        run("shell", "/usr/local/share/dotnet/dotnet", &["publish"]),
+        run("shell", "make", &["build"]),
+        run("dotnet", "dotnet", &["run"]),
+        // Run in Container: one shell line that starts with the quoted `dotnet`.
+        run("shell", "'/opt/dot net/dotnet' publish App.csproj && docker run --rm -i app:dev", &[]),
+        run("program", "/Program Files/dotnet/dotnet", &["run"]),
+        run("shell", "dotnetish build", &[]),
+    ];
+    configs[4].env.insert("RestoreSources".into(), "/own".into());
+    apply_to_run_configs(&mut configs, tmp.path(), &settings);
+    let sources: Vec<_> = configs.iter().map(|c| c.env.get("RestoreSources").map(String::as_str)).collect();
+    assert_eq!(
+        sources,
+        [
+            Some("/feed;https://api.nuget.org/v3/index.json"),
+            Some("/feed;https://api.nuget.org/v3/index.json"),
+            Some("/feed;https://api.nuget.org/v3/index.json"),
+            None,
+            Some("/own"),
+            Some("/feed;https://api.nuget.org/v3/index.json"),
+            Some("/feed;https://api.nuget.org/v3/index.json"),
+            None,
+        ]
+    );
+}
+
+#[test]
 fn saving_a_loaded_run_configuration_drops_what_settings_derived() {
     if cfg!(windows) {
         return; // Unix paths
@@ -1672,6 +1718,8 @@ fn saving_a_loaded_run_configuration_drops_what_settings_derived() {
     s.languages.ruby.interpreter = touch("ruby/bin/ruby");
     touch("ruby/bin/bundle");
     s.tools.insert("godot".into(), ide_core::settings::ToolSettings { path: touch("Godot/godot") });
+    s.languages.dotnet.env =
+        BTreeMap::from([("RestoreSources".into(), "/feed;https://api.nuget.org/v3/index.json".into())]);
 
     let saved = |kind: &str, command: &str, args: &[&str], env: &[(&str, &str)]| {
         let mut c = run(kind, command, args);
@@ -1692,6 +1740,8 @@ fn saving_a_loaded_run_configuration_drops_what_settings_derived() {
         saved("ruby", "ruby", &["app.rb"], &[]),
         saved("rake", "bundle", &["exec", "rake"], &[("RAILS_ENV", "test")]),
         saved("godot", "godot", &["--path", "."], &[]),
+        saved("dotnet", "dotnet", &["run", "--project", "App.csproj"], &[]),
+        saved("shell", "dotnet", &["publish", "App.csproj"], &[]),
         // The user's own values that merely look like derived ones stay.
         saved("cargo", "/opt/rust/bin/cargo", &["build"], &[("PATH", "/custom/bin")]),
         saved("maven", "mvn", &["verify"], &[("JAVA_HOME", "/other/jdk")]),

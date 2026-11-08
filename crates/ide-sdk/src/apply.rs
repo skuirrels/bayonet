@@ -11,7 +11,7 @@ use ide_core::{IdeError, IdeResult};
 use ide_language::{LanguageConfig, LanguageServerConfig};
 use ide_run::RunConfig;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -135,6 +135,18 @@ pub(crate) fn dotnet_root(root: &Path, s: &Settings) -> Option<PathBuf> {
 /// The `dotnet` host of the configured .NET install; `None` = the one on `PATH`.
 pub fn dotnet_command(root: &Path, s: &Settings) -> Option<PathBuf> {
     dotnet_root(root, s).map(|dir| dir.join(crate::exe("dotnet"))).filter(|p| p.is_file())
+}
+
+/// Settings › .NET › Environment variables, for every `dotnet` the IDE runs and the
+/// .NET language servers (MSBuild reads each as a property). Entries without a name are skipped.
+pub fn dotnet_env(s: &Settings) -> BTreeMap<String, String> {
+    s.languages
+        .dotnet
+        .env
+        .iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| (k.trim().to_owned(), v.clone()))
+        .collect()
 }
 
 /// The configured GOROOT, else the Go the project pins for mise / asdf.
@@ -804,6 +816,8 @@ pub fn configure_server(cfg: &mut LanguageServerConfig, root: &Path, server_root
     }
 
     if DOTNET_SERVERS.contains(&name) {
+        // Restore and design-time builds inside the server see the same properties as builds.
+        cfg.env.extend(dotnet_env(s));
         if let Some(dir) = dotnet_root(root, s) {
             path_dirs.push(dir.clone());
             cfg.env.insert("DOTNET_ROOT".into(), dir.to_string_lossy().into_owned());
@@ -1270,6 +1284,13 @@ pub fn apply_to_run_configs(configs: &mut [RunConfig], root: &Path, s: &Settings
                     path_dirs.push(bin);
                 }
             }
+            "dotnet" | "dotnet-test" | "shell" | "program"
+                if c.kind.starts_with("dotnet") || is_dotnet_command(&c.command) =>
+            {
+                for (key, value) in dotnet_env(s) {
+                    c.env.entry(key).or_insert(value);
+                }
+            }
             "maven" | "tomcat" => {
                 if let Some(jdk) = &jdk {
                     c.env.entry("JAVA_HOME".into()).or_insert_with(|| jdk.home.to_string_lossy().into_owned());
@@ -1292,6 +1313,21 @@ pub fn apply_to_run_configs(configs: &mut [RunConfig], root: &Path, s: &Settings
             c.env.insert("PATH".into(), path_with(&dirs));
         }
     }
+}
+
+/// A command that starts `dotnet` (a bare name or a path, quoted or not): publish and EF Core
+/// commands run as shell configurations, Run in Container as one shell line.
+fn is_dotnet_command(command: &str) -> bool {
+    let is_dotnet = |p: &str| Path::new(p).file_stem().is_some_and(|n| n.eq_ignore_ascii_case("dotnet"));
+    let command = command.trim_start();
+    if is_dotnet(command) {
+        return true; // a path with spaces in it
+    }
+    let program = match command.strip_prefix(['\'', '"']) {
+        Some(rest) => rest.split(['\'', '"']).next().unwrap_or(rest),
+        None => command.split_whitespace().next().unwrap_or(command),
+    };
+    is_dotnet(program)
 }
 
 /// `config` as it should be saved: without what [`apply_to_run_configs`] derives from

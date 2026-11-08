@@ -121,6 +121,15 @@ export async function restoreIfNeeded(
   await restore(todo.length > 1 && solution ? [solution] : todo);
 }
 
+/**
+ * Restores `projects` again even when restored since the project opened: what restore
+ * resolves changed without a file changing (Settings › .NET › Environment variables).
+ */
+export function restoreAgain(projects: readonly string[], solution: string | null): Promise<void> {
+  restored = new Set();
+  return restoreIfNeeded(projects, solution, true);
+}
+
 /** Runs the checks put off by a build once it ends; returns the unsubscribe. */
 export function watchBuilds(): () => void {
   return useContextKeys.subscribe((c, prev) => {

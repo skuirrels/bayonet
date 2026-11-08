@@ -48,6 +48,9 @@ pub struct BuildModel {
     /// Where .NET builds write a binary log (BLD-3); `None` = no binary log.
     #[serde(skip)]
     pub dotnet_binlogs: Option<PathBuf>,
+    /// Settings › .NET › Environment variables, added to .NET builds.
+    #[serde(skip)]
+    pub dotnet_env: std::collections::BTreeMap<String, String>,
 }
 
 impl BuildModel {
@@ -102,7 +105,7 @@ pub fn load_linked(
             g
         })
         .collect();
-    BuildModel { maven, gradle, dotnet: None, dotnet_binlogs: None }
+    BuildModel { maven, gradle, dotnet: None, dotnet_binlogs: None, dotnet_env: Default::default() }
 }
 
 /// Gradle project folders outside `root` as of the last sync (`includeFlat` siblings):
@@ -287,7 +290,13 @@ mod tests {
             ..Default::default()
         };
         let gradle = gradle::load(root).into_iter().collect();
-        let model = BuildModel { maven: Some(maven), gradle, dotnet: None, dotnet_binlogs: None };
+        let model = BuildModel {
+            maven: Some(maven),
+            gradle,
+            dotnet: None,
+            dotnet_binlogs: None,
+            dotnet_env: Default::default(),
+        };
         let names: Vec<String> = dependency_coordinates(root, &model)
             .into_iter()
             .map(|c| format!("{}{}:{}:{}", if c.gradle { "G " } else { "M " }, c.group_id, c.artifact_id, c.version))

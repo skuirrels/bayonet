@@ -3732,6 +3732,13 @@ export type DotnetSettings = {
 	 *  for projects whose restore is missing or out of date.
 	 */
 	restoreOnOpen?: boolean,
+	/**
+	 *  Added to the environment of every `dotnet` the IDE runs (restore, build, tests,
+	 *  run configurations, NuGet) and of the .NET language servers. MSBuild reads each
+	 *  one as a property, so `RestoreSources` or a repository's own version property can
+	 *  be set here without editing its `nuget.config` or `Directory.Build.props`.
+	 */
+	env?: { [key in string]: string },
 };
 
 export type DumpAnalysis = {

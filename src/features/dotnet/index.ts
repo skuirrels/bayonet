@@ -55,7 +55,7 @@ import { activateXamlPreview, xamlLiveText } from "./xaml/preview";
 import { SOLUTION_ROOT_ID, solutionProjects, solutionRoot, touchesSolution } from "./solution";
 import { loadGeneratedDirs, resetGenerated, sourcesChanged, watchGenerated } from "./generated";
 import { loadDependencies, touchesDependencies } from "./dependencies";
-import { resetRestore, restoreIfNeeded, touchesRestoreInputs, watchBuilds } from "./restore";
+import { resetRestore, restoreAgain, restoreIfNeeded, touchesRestoreInputs, watchBuilds } from "./restore";
 import { watchContinuous } from "./tests/continuous";
 import { manageUserSecrets, targetProject } from "./secrets";
 import { publishProject, runInContainer } from "./publish";
@@ -581,6 +581,14 @@ export function activate(): () => void {
       const on = (p: typeof s) => !!p.project?.trusted && p.settings?.languages?.dotnet?.restoreOnOpen !== false;
       if (on(s) && !on(prev) && restoreTarget.solution)
         void restoreIfNeeded(restoreTarget.projects, restoreTarget.solution);
+      // Settings › .NET › Environment variables can name other package sources: restore again.
+      else if (
+        on(s) &&
+        restoreTarget.solution &&
+        JSON.stringify(s.settings?.languages?.dotnet?.env ?? {}) !==
+          JSON.stringify(prev.settings?.languages?.dotnet?.env ?? {})
+      )
+        void restoreAgain(restoreTarget.projects, restoreTarget.solution);
       return;
     }
     resetRestore();

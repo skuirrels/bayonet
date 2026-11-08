@@ -5787,6 +5787,7 @@
   "Turn on \"Write a binary log of every build\" in Settings › Languages › .NET, then build.": "请在“设置 › 语言 › .NET”中开启“为每次构建写入二进制日志”，然后构建。",
   "Open Settings": "打开设置",
   "Write a binary log of every build": "为每次构建写入二进制日志",
+  "Set for every restore, build, test and run, and for the C# and F# language servers. MSBuild reads each one as a property, so RestoreSources=/path/to/packages;https://api.nuget.org/v3/index.json restores from those sources instead of the ones in nuget.config. Use absolute paths: a relative one is read from each project's own folder. A property the project file sets itself wins.": "用于每次还原、构建、测试和运行，以及 C# 和 F# 语言服务器。MSBuild 会把每个变量读作属性，因此 RestoreSources=/path/to/packages;https://api.nuget.org/v3/index.json 会从这些源还原，而不是 nuget.config 中的源。请使用绝对路径：相对路径会按每个项目自己的文件夹解析。项目文件自己设置的属性优先。",
   "Builds run with -bl. The last 10 logs are kept and open in the binary log viewer from the Build tool window.": "构建使用 -bl 运行。保留最近 10 个日志，可从“构建”工具窗口在二进制日志查看器中打开。",
   "Duration": "耗时",
   "Project builds": "项目构建",

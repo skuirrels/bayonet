@@ -512,6 +512,8 @@ fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Ve
         step.args.push(format!("-bl:{}", path.display()));
         step.binlog = Some(path);
     }
+    // Settings › .NET › Environment variables first: the output is parsed, so the IDE's own win.
+    step.env.extend(model.dotnet_env.iter().map(|(k, v)| (k.clone(), v.clone())));
     step.env.extend(
         [("DOTNET_CLI_TELEMETRY_OPTOUT", "1"), ("DOTNET_NOLOGO", "1"), ("DOTNET_CLI_UI_LANGUAGE", "en")]
             .map(|(k, v)| (k.to_owned(), v.to_owned())),
@@ -1197,9 +1199,17 @@ mod tests {
         write(&root, "App.slnx", "<Solution />");
         write(&root, "src/Lib/Lib.fsproj", "<Project />");
         write(&root, "src/Lib/Lib.fs", "module Lib");
-        let model = BuildModel { dotnet: Some(PathBuf::from("/opt/dotnet/dotnet")), ..BuildModel::default() };
+        let model = BuildModel {
+            dotnet: Some(PathBuf::from("/opt/dotnet/dotnet")),
+            dotnet_env: [("RestoreSources".to_owned(), "/feed;https://api.nuget.org/v3/index.json".to_owned())].into(),
+            ..BuildModel::default()
+        };
         let p = plan(&root, &model, BuildKind::Build, None, None).unwrap();
         assert_eq!(p.system, BuildSystem::Dotnet);
+        assert_eq!(
+            p.steps[0].env.get("RestoreSources").map(String::as_str),
+            Some("/feed;https://api.nuget.org/v3/index.json")
+        );
         assert_eq!(p.steps[0].program, "/opt/dotnet/dotnet");
         assert_eq!(
             p.steps[0].args,

@@ -10,6 +10,7 @@ use ide_core::{IdeError, IdeResult, IpcPath, Pos, Range};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -137,8 +138,9 @@ fn path_arg(p: &Path) -> String {
 }
 
 /// Runs `dotnet <args>` in `cwd` with telemetry, banners and localisation off; stdout on success.
-pub fn run(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> IdeResult<String> {
-    let mut cmd = command(dotnet, cwd, args);
+/// Runs `dotnet <args>` in `cwd` with `env` (Settings › .NET › Environment variables) added.
+pub fn run(dotnet: Option<&Path>, env: &BTreeMap<String, String>, cwd: &Path, args: &[String]) -> IdeResult<String> {
+    let mut cmd = command(dotnet, env, cwd, args);
     let out = cmd
         .output()
         .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", cmd.get_program().to_string_lossy())))?;
@@ -153,14 +155,11 @@ pub fn run(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> IdeResult<Stri
     Err(IdeError::new(ErrorKind::Io, failure(&stdout, &String::from_utf8_lossy(&out.stderr))))
 }
 
-fn command(dotnet: Option<&Path>, cwd: &Path, args: &[String]) -> Command {
+fn command(dotnet: Option<&Path>, env: &BTreeMap<String, String>, cwd: &Path, args: &[String]) -> Command {
     let program = dotnet.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("dotnet"));
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::sdk_command(&program, env);
     cmd.args(args)
         .current_dir(cwd)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
         .env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1")
         // `package list` evaluates every project on one MSBuild node per core; reused
         // nodes would outlive the listing (and the IDE) by 15 minutes, holding ~1.5 GB.
@@ -553,8 +552,12 @@ mod tests {
 
     #[test]
     fn listings_leave_no_msbuild_nodes_behind() {
-        let cmd =
-            command(Some(Path::new("/sdk/dotnet")), Path::new("/s"), &list_args(Path::new("/s/S.slnx"), false, false));
+        let cmd = command(
+            Some(Path::new("/sdk/dotnet")),
+            &BTreeMap::new(),
+            Path::new("/s"),
+            &list_args(Path::new("/s/S.slnx"), false, false),
+        );
         let env: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned))).collect();
         assert!(env.contains(&("MSBUILDDISABLENODEREUSE".into(), Some("1".into()))));
         assert!(env.contains(&("DOTNET_ROOT".into(), Some("/sdk".into()))));
@@ -729,9 +732,9 @@ mod tests {
             "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><TargetFramework>net10.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup>\n  <ItemGroup>\n    <PackageReference Include=\"System.Text.Json\" Version=\"8.0.0\" />\n    <PackageReference Include=\"WindowsAzure.Storage\" Version=\"9.3.3\" />\n  </ItemGroup>\n</Project>\n",
         )
         .unwrap();
-        run(None, dir.path(), &["restore".into()]).unwrap();
+        run(None, &BTreeMap::new(), dir.path(), &["restore".into()]).unwrap();
         let listings: Vec<String> =
-            [true, false].map(|v| run(None, dir.path(), &audit_args(&project, v)).unwrap()).into();
+            [true, false].map(|v| run(None, &BTreeMap::new(), dir.path(), &audit_args(&project, v)).unwrap()).into();
         let audit = locate_findings(parse_audit(&listings.iter().map(String::as_str).collect::<Vec<_>>()).unwrap());
         let f = &audit.projects[0].findings;
         let json = f.iter().find(|x| x.id == "System.Text.Json").unwrap();
@@ -748,7 +751,8 @@ mod tests {
     #[ignore]
     fn lists_the_fixture_solution() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
-        let out = run(None, &root, &list_args(&root.join("DotnetFixture.slnx"), false, false)).unwrap();
+        let out =
+            run(None, &BTreeMap::new(), &root, &list_args(&root.join("DotnetFixture.slnx"), false, false)).unwrap();
         let l = parse_list(&out).unwrap();
         let ids: Vec<&str> =
             l.projects.iter().flat_map(|p| &p.frameworks).flat_map(|f| &f.packages).map(|p| p.id.as_str()).collect();

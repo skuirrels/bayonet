@@ -35,7 +35,8 @@ async fn renders_xaml_and_reports_xaml_errors() {
         let (events, cancel, xaml, text) = (events.clone(), cancel.clone(), xaml.clone(), text.clone());
         tokio::spawn(async move {
             let emit = move |e: PreviewEvent| events.lock().unwrap().push(e);
-            avalonia::run(1, std::path::Path::new("dotnet"), &xaml, text, 2.0, &cancel, &emit).await
+            avalonia::run(1, std::path::Path::new("dotnet"), &Default::default(), &xaml, text, 2.0, &cancel, &emit)
+                .await
         })
     };
     let frame = wait(&events, 180, |e| matches!(e, PreviewEvent::Frame { .. })).await;
