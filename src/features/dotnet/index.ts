@@ -55,6 +55,7 @@ import { activateXamlPreview, xamlLiveText } from "./xaml/preview";
 import { SOLUTION_ROOT_ID, solutionProjects, solutionRoot, touchesSolution } from "./solution";
 import { loadGeneratedDirs, resetGenerated, sourcesChanged, watchGenerated } from "./generated";
 import { loadDependencies, touchesDependencies } from "./dependencies";
+import { resetRestore, restoreIfNeeded, touchesRestoreInputs, watchBuilds } from "./restore";
 import { watchContinuous } from "./tests/continuous";
 import { manageUserSecrets, targetProject } from "./secrets";
 import { publishProject, runInContainer } from "./publish";
@@ -118,6 +119,8 @@ export function activate(): () => void {
   let disposeAspire: (() => void) | null = null;
   let seq = 0;
   let shown = "";
+  /** The open solution and its projects, for restores (NUG-1). */
+  let restoreTarget = { projects: [] as string[], solution: null as string | null };
   const clear = () => {
     disposeRoot();
     disposeRoot = () => {};
@@ -135,6 +138,8 @@ export function activate(): () => void {
     disposeAspire?.();
     disposeAspire = null;
     resetAspire();
+    resetRestore();
+    restoreTarget = { projects: [], solution: null };
     shown = "";
   };
   const refresh = async () => {
@@ -147,6 +152,9 @@ export function activate(): () => void {
       const solution = await call(commands.dotnetSolution(path));
       if (id !== seq) return;
       const projects = solutionProjects(solution.items);
+      const opened = restoreTarget.solution !== solution.path;
+      restoreTarget = { projects, solution: solution.path };
+      if (opened) void restoreIfNeeded(projects, solution.path);
       const [dirs, deps] = await Promise.all([
         loadGeneratedDirs(projects).catch((e: unknown) => {
           console.warn("solution: no folders for generated sources", e);
@@ -567,7 +575,16 @@ export function activate(): () => void {
     },
   ]);
   const unsub = useProject.subscribe((s, prev) => {
-    if (s.project?.root === prev.project?.root) return;
+    if (s.project?.root === prev.project?.root) {
+      // Trusted after opening in Restricted Mode, or automatic restore turned back on:
+      // the open-time restore runs now.
+      const on = (p: typeof s) => !!p.project?.trusted && p.settings?.languages?.dotnet?.restoreOnOpen !== false;
+      if (on(s) && !on(prev) && restoreTarget.solution)
+        void restoreIfNeeded(restoreTarget.projects, restoreTarget.solution);
+      return;
+    }
+    resetRestore();
+    restoreTarget = { projects: [], solution: null };
     resetNuget();
     resetUnitTests();
     void refresh().then(() => {
@@ -577,6 +594,12 @@ export function activate(): () => void {
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let packagesTimer: ReturnType<typeof setTimeout> | undefined;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  // Roslyn found unresolved packages (`workspace/_roslyn_projectNeedsRestore`).
+  const unsubRestore = onIdeEvent("packagesNeedRestore", (e) => {
+    if (restoreTarget.solution) void restoreIfNeeded(e.projects, restoreTarget.solution, true);
+  });
+  const unwatchBuilds = watchBuilds();
   const unwatchGenerated = watchGenerated();
   const unwatchContinuous = watchContinuous();
   const unsubFs = onIdeEvent("fsChanged", (e) => {
@@ -586,6 +609,13 @@ export function activate(): () => void {
       clearTimeout(packagesTimer);
       packagesTimer = setTimeout(() => void loadInstalled(), REFRESH_DELAY * 3);
     }
+    if (restoreTarget.solution && touchesRestoreInputs(paths)) {
+      clearTimeout(restoreTimer);
+      restoreTimer = setTimeout(
+        () => void restoreIfNeeded(restoreTarget.projects, restoreTarget.solution),
+        REFRESH_DELAY * 3,
+      );
+    }
     if (!touchesSolution(paths) && !touchesDependencies(paths)) return;
     clearTimeout(timer);
     timer = setTimeout(() => void refresh(), REFRESH_DELAY);
@@ -594,8 +624,11 @@ export function activate(): () => void {
     seq++;
     clearTimeout(timer);
     clearTimeout(packagesTimer);
+    clearTimeout(restoreTimer);
     unsub();
     unsubFs();
+    unsubRestore();
+    unwatchBuilds();
     unwatchGenerated();
     unwatchContinuous();
     disposeActions();

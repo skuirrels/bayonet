@@ -380,18 +380,8 @@ static GENERATING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Runs `dotnet <args>` in `cwd`; stdout and stderr.
 async fn dotnet_output(dotnet: &Path, cwd: &Path, args: &[String]) -> IdeResult<(String, String)> {
-    let out = tokio::process::Command::new(dotnet)
-        .args(args)
-        .current_dir(cwd)
-        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
-        .env("DOTNET_NOLOGO", "1")
-        .env("DOTNET_CLI_UI_LANGUAGE", "en")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", dotnet.display())))?;
-    Ok((String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned()))
+    let (_, stdout, stderr) = dotnet_status_output(dotnet, cwd, args).await?;
+    Ok((stdout, stderr))
 }
 
 /// Compiles `project` once more with `EmitCompilerGeneratedFiles` into the
@@ -541,6 +531,122 @@ pub async fn dotnet_dependencies(
         Ok(projects.into_iter().map(|p| ide_dotnet::dependencies::read_dependencies(&PathBuf::from(p)).ok()).collect())
     })
     .await
+}
+
+/// Of `projects`, those whose NuGet restore is missing or older than their inputs (NUG-1).
+pub async fn dotnet_restore_needed(host: &Host, _window: &str, projects: Vec<IpcPath>) -> IdeResult<Vec<IpcPath>> {
+    host.blocking(move || {
+        Ok(projects
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_file() && ide_dotnet::restore::needs_restore(p))
+            .map(IpcPath::from)
+            .collect())
+    })
+    .await
+}
+
+/// Diagnostics source of restore errors and warnings, on the project or solution they name.
+const RESTORE_SOURCE: &str = "nuget";
+
+/// Restores the NuGet packages of `targets` (projects or a solution), one after another
+/// (NUG-1). Their errors and warnings replace the earlier `nuget` diagnostics of the files
+/// they name and of `clear`. Stopped by `cancel_request(request)`.
+pub async fn dotnet_restore(
+    host: &Host,
+    window: &str,
+    targets: Vec<IpcPath>,
+    clear: Vec<IpcPath>,
+    request: RequestId,
+) -> IdeResult<ide_dotnet::restore::RestoreResult> {
+    use ide_dotnet::restore::{self, RestoreMessage, RestoreResult, RestoreSeverity};
+    host.require_trust(window)?;
+    let (root, dotnet) = dotnet_of(host, window)?;
+    let dotnet = dotnet.unwrap_or_else(|| PathBuf::from("dotnet"));
+    let sink = host.project(window)?.sink.clone();
+    let token = host.begin_project_request(window, request);
+    let run = async {
+        let mut result = RestoreResult { success: true, messages: Vec::new() };
+        for target in targets {
+            let target = PathBuf::from(target);
+            let args = restore::restore_args(&target);
+            let started = std::time::SystemTime::now();
+            let (code, stdout, stderr) = tokio::select! {
+                out = dotnet_status_output(&dotnet, &root, &args) => out?,
+                () = token.cancelled() => return Err(IdeError::cancelled()),
+            };
+            let mut messages = restore::parse_output(&format!("{stdout}\n{stderr}"));
+            let failed = code != 0 || messages.iter().any(|m| m.severity == RestoreSeverity::Error);
+            if code != 0 && !messages.iter().any(|m| m.severity == RestoreSeverity::Error) {
+                let last = stderr.lines().chain(stdout.lines()).rfind(|l| !l.trim().is_empty());
+                messages.push(RestoreMessage {
+                    severity: RestoreSeverity::Error,
+                    code: None,
+                    text: last
+                        .map_or_else(|| format!("dotnet restore exited with code {code}"), |l| l.trim().to_owned()),
+                    project: Some(IpcPath::from(target.clone())),
+                });
+            }
+            result.success &= !failed;
+            if !failed {
+                let target = target.clone();
+                let projects =
+                    tokio::task::spawn_blocking(move || restore::restored_by(&target)).await.unwrap_or_default();
+                restore::mark_restored(projects, started);
+            }
+            for m in messages {
+                if !result.messages.contains(&m) {
+                    result.messages.push(m);
+                }
+            }
+        }
+        Ok(result)
+    };
+    let result = run.await;
+    host.end_request(request);
+    let result = result?;
+    let mut by_file: std::collections::BTreeMap<PathBuf, Vec<ide_core::Diagnostic>> =
+        clear.into_iter().map(|p| (PathBuf::from(p), Vec::new())).collect();
+    for m in &result.messages {
+        let Some(path) = m.project.clone() else { continue };
+        by_file.entry(PathBuf::from(path)).or_default().push(ide_core::Diagnostic {
+            range: ide_core::Range::default(),
+            severity: match m.severity {
+                RestoreSeverity::Error => ide_core::Severity::Error,
+                RestoreSeverity::Warning => ide_core::Severity::Warning,
+            },
+            message: m.text.clone(),
+            source: Some("NuGet".into()),
+            code: m.code.clone(),
+            unnecessary: false,
+            deprecated: false,
+            server: Some(RESTORE_SOURCE.into()),
+        });
+    }
+    for (path, items) in by_file {
+        sink.emit(ide_core::IdeEvent::Diagnostics { path: path.into(), source: RESTORE_SOURCE.into(), items });
+    }
+    Ok(result)
+}
+
+/// Runs `dotnet <args>` in `cwd`: exit code, stdout and stderr; killed when dropped.
+async fn dotnet_status_output(dotnet: &Path, cwd: &Path, args: &[String]) -> IdeResult<(i32, String, String)> {
+    let out = tokio::process::Command::new(dotnet)
+        .args(args)
+        .current_dir(cwd)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .env("DOTNET_NOLOGO", "1")
+        .env("DOTNET_CLI_UI_LANGUAGE", "en")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| IdeError::unavailable(format!("cannot run {}: {e}", dotnet.display())))?;
+    Ok((
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// Adds and removes project references of `project`.
@@ -862,6 +968,14 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("dotnet_ef_migrations", |c| async move { dotnet_ef_migrations(&c.host, &c.window, c.arg("project")?).await });
     d.add("dotnet_ef_command", |c| async move {
         dotnet_ef_command(&c.host, &c.window, c.arg("project")?, c.arg("operation")?).await
+    });
+    d.add("dotnet_dependencies", |c| async move { dotnet_dependencies(&c.host, &c.window, c.arg("projects")?).await });
+    d.add(
+        "dotnet_restore_needed",
+        |c| async move { dotnet_restore_needed(&c.host, &c.window, c.arg("projects")?).await },
+    );
+    d.add("dotnet_restore", |c| async move {
+        dotnet_restore(&c.host, &c.window, c.arg("targets")?, c.arg("clear")?, c.arg("request")?).await
     });
     d.add("dotnet_project_references", |c| async move {
         dotnet_project_references(&c.host, &c.window, c.arg("project")?).await

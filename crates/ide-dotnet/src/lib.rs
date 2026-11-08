@@ -16,6 +16,7 @@ pub mod msbuild;
 pub mod nuget;
 mod project;
 pub mod publish;
+pub mod restore;
 pub mod secrets;
 mod sln;
 mod slnx;

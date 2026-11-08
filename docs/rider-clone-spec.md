@@ -279,14 +279,14 @@ Known gap: netcoredbg does not support Hot Reload and its expression evaluator i
 
 ### 5.6 NuGet
 
-| ID    | Pri | Status  | macOS | Windows  | Linux    | Requirement                                                                                                         | Acceptance                                                        |
-| ----- | --- | ------- | ----- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| NUG-1 | P0  | Partial | Yes   | Untested | Untested | Restore on open and on change; show restore errors.                                                                 | Missing package triggers restore                                  |
-| NUG-2 | P1  | Done    | Yes   | Untested | Untested | NuGet tool window: search feeds, install, update, remove, per project or solution; respects `nuget.config` and CPM. | Updating a CPM package edits `Directory.Packages.props`           |
-| NUG-3 | P1  | Done    | Yes   | Untested | Untested | Authenticated feeds via the user's credential providers (Azure Artifacts).                                          | Private feed lists packages                                       |
-| NUG-4 | P2  | Done    | Yes   | Untested | Untested | Vulnerable and deprecated package warnings.                                                                         | `dotnet list package --vulnerable` results surface as diagnostics |
+| ID    | Pri | Status | macOS | Windows  | Linux    | Requirement                                                                                                         | Acceptance                                                        |
+| ----- | --- | ------ | ----- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| NUG-1 | P0  | Done   | Yes   | Untested | Untested | Restore on open and on change; show restore errors.                                                                 | Missing package triggers restore                                  |
+| NUG-2 | P1  | Done   | Yes   | Untested | Untested | NuGet tool window: search feeds, install, update, remove, per project or solution; respects `nuget.config` and CPM. | Updating a CPM package edits `Directory.Packages.props`           |
+| NUG-3 | P1  | Done   | Yes   | Untested | Untested | Authenticated feeds via the user's credential providers (Azure Artifacts).                                          | Private feed lists packages                                       |
+| NUG-4 | P2  | Done   | Yes   | Untested | Untested | Vulnerable and deprecated package warnings.                                                                         | `dotnet list package --vulnerable` results surface as diagnostics |
 
-- NUG-1: packages are restored as part of every build, test run and package change, but not when a solution is opened or a project file changes. Roslyn's `workspace/_roslyn_projectNeedsRestore` request is not handled, and restore errors do not show on their own.
+- NUG-1: projects whose `obj/project.assets.json` is missing or older than the project file or a `Directory.*.props` / `nuget.config` above it are restored when a solution opens, when one of those files changes, and when Roslyn sends `workspace/_roslyn_projectNeedsRestore`. One restore runs at a time as a cancellable background task; errors and warnings go to Problems on the project they name, and a failed restore notifies. Settings › Languages › .NET can turn it off.
 
 ### 5.7 Profiling and diagnostics (P2)
 

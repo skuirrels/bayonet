@@ -61,7 +61,7 @@ pub fn read_dependencies(project: &Path) -> IdeResult<ProjectDependencies> {
 }
 
 /// `obj/project.assets.json`, or `artifacts/obj/<name>/` under an ancestor (`UseArtifactsOutput`).
-fn assets_file(project: &Path) -> Option<PathBuf> {
+pub(crate) fn assets_file(project: &Path) -> Option<PathBuf> {
     const NAME: &str = "project.assets.json";
     let dir = project.parent()?;
     let local = dir.join("obj").join(NAME);

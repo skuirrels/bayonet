@@ -1142,6 +1142,10 @@ export const commands = {
 	dotnetProjectReferences: (project: IpcPath) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_project_references", { project })),
 	/**  Each project's frameworks, packages and project references for the Solution view. */
 	dotnetDependencies: (projects: IpcPath[]) => typedError<(ProjectDependencies | null)[], IdeError>(__TAURI_INVOKE("dotnet_dependencies", { projects })),
+	/**  Of `projects`, those whose NuGet restore is missing or out of date. */
+	dotnetRestoreNeeded: (projects: IpcPath[]) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_restore_needed", { projects })),
+	/**  Restores the NuGet packages of `targets` and publishes their errors as `nuget` diagnostics. */
+	dotnetRestore: (targets: IpcPath[], clear: IpcPath[], request: RequestId) => typedError<RestoreResult, IdeError>(__TAURI_INVOKE("dotnet_restore", { targets, clear, request })),
 	/**  Adds and removes project references. */
 	dotnetEditReferences: (project: IpcPath, add: IpcPath[], remove: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_edit_references", { project, add, remove })),
 	/**  The browsers installed on this machine. */
@@ -3723,6 +3727,11 @@ export type DotnetSettings = {
 	root?: string,
 	/**  Write an MSBuild binary log (`-bl`) of every build, for the binary log viewer. */
 	binaryLog?: boolean,
+	/**
+	 *  Restore NuGet packages when a solution opens and when a project file changes,
+	 *  for projects whose restore is missing or out of date.
+	 */
+	restoreOnOpen?: boolean,
 };
 
 export type DumpAnalysis = {
@@ -4947,7 +4956,12 @@ remember: boolean } |
  */
 { type: "notebookKernel"; 
 /**  Backend document incarnation; stale queued events cannot target a reopen. */
-id: string; path: IpcPath; state: string; message: string | null };
+id: string; path: IpcPath; state: string; message: string | null } | 
+/**
+ *  A language server found projects whose NuGet packages are not restored (Roslyn's
+ *  `workspace/_roslyn_projectNeedsRestore`); the UI restores them.
+ */
+{ type: "packagesNeedRestore"; projects: IpcPath[] };
 
 /**  An identifier-like token whose text equals the searched name. */
 export type IdentifierOccurrence = {
@@ -7279,6 +7293,22 @@ export type ResolvedMapping = {
 	local: IpcPath,
 	deployment: string,
 };
+
+export type RestoreMessage = {
+	severity: RestoreSeverity,
+	/**  `NU1301`, `MSB3202`. */
+	code: string | null,
+	text: string,
+	/**  The project (or solution) the message is about, when the output names one. */
+	project: IpcPath | null,
+};
+
+export type RestoreResult = {
+	success: boolean,
+	messages: RestoreMessage[],
+};
+
+export type RestoreSeverity = "error" | "warning";
 
 export type ReviewEvent = "approve" | "requestChanges" | "comment";
 
