@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="https://skuirrels.github.io/bayonet-releases/"><img src="https://img.shields.io/github/v/release/skuirrels/bayonet-releases?label=download" alt="Download the latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache%202.0-blue" alt="Apache 2.0 licence"></a>
   <img src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white" alt=".NET 10">
   <img src="https://img.shields.io/badge/core-Rust-B7410E?logo=rust&logoColor=white" alt="Rust core">
@@ -111,7 +112,11 @@ and editing for 70+ languages, inherited from OpenIDEA.
 
 ## Getting started
 
-Installers are not published yet, so build from source. You need Rust 1.96 or later,
+Download the installers from the [Bayonet download page](https://skuirrels.github.io/bayonet-releases/)
+(the same files are on the [latest release](https://github.com/skuirrels/bayonet-releases/releases/latest) of `skuirrels/bayonet-releases`).
+Installed copies update themselves.
+
+To build from source instead, you need Rust 1.96 or later,
 Node 22.18 or later, pnpm, the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 and the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
