@@ -130,6 +130,12 @@ const OWN_MODES = [
     extensions: ["astro"],
     load: () => import("./astro").then((m) => m.astro()),
   }),
+  // Overrides the language-data Vue mode so `<style lang="scss">` highlights.
+  LanguageDescription.of({
+    name: "Vue",
+    extensions: ["vue"],
+    load: () => import("./vue").then((m) => m.vueLanguage()),
+  }),
   LanguageDescription.of({
     name: "YAML",
     alias: ["yml"],
