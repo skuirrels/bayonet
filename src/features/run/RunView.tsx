@@ -142,7 +142,6 @@ export function SessionPanel({
       <div className={styles.toolbar} role="toolbar" aria-orientation="vertical" aria-label={tx("Run actions")}>
         <IconButton
           icon="rerun"
-          iconSize={14}
           title="Rerun"
           shortcut={shortcutLabel("run.rerun")}
           disabled={onRerun === null}
@@ -151,7 +150,6 @@ export function SessionPanel({
         {/* Switch the launch mode: the same configuration started under the debugger. */}
         <IconButton
           icon="debug"
-          iconSize={14}
           title="Debug"
           shortcut={shortcutLabel("run.debug")}
           disabled={onDebug === null}
@@ -160,7 +158,6 @@ export function SessionPanel({
         {rt.tests && (
           <IconButton
             icon="rerun"
-            iconSize={14}
             tone="danger"
             title="Rerun Failed Tests"
             shortcut={shortcutLabel("run.rerunFailed")}
@@ -170,7 +167,6 @@ export function SessionPanel({
         )}
         <IconButton
           icon="stop"
-          iconSize={13}
           title={session.status === "stopping" ? tx`Stopping… (click to kill)` : "Stop"}
           tone={running || onStop ? "danger" : "default"}
           disabled={!running && !onStop}
@@ -190,27 +186,24 @@ export function SessionPanel({
           <>
             <IconButton
               icon="search"
-              iconSize={14}
               title="Find…"
               shortcut={formatBinding(hostBinding("Meta+F"))}
               pressed={findOpen}
               onClick={() => setFindOpen((v) => !v)}
             />
             <IconButton
-              icon="arrow-down"
-              iconSize={14}
+              icon="scroll-to-end"
               title="Scroll to End"
               pressed={follow}
               onClick={() => setFollow((v) => !v)}
             />
-            <IconButton icon="soft-wrap" iconSize={14} title="Soft-Wrap" pressed={softWrap} onClick={toggleWrap} />
+            <IconButton icon="soft-wrap" title="Soft-Wrap" pressed={softWrap} onClick={toggleWrap} />
           </>
         )}
-        <IconButton icon="trash" iconSize={14} title="Clear All" onClick={() => clearConsole(session.id)} />
+        <IconButton icon="trash" title="Clear All" onClick={() => clearConsole(session.id)} />
         <div className={styles.toolbarSep} />
         <IconButton
           icon="settings"
-          iconSize={14}
           title="Edit Configurations…"
           onClick={() => void executeAction("run.editConfigs", session.config.id)}
         />
