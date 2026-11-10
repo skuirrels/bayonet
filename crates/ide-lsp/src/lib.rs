@@ -2999,9 +2999,7 @@ impl LspManager {
                 | ide_core::event::ServerStatus::Busy
                 | ide_core::event::ServerStatus::Starting => {
                     tracing::info!("{}: configuration changed, restarting", s.name);
-                    self.stop_instance(&s, false).await;
-                    s.reset_for_restart();
-                    self.ensure_started(&s);
+                    self.restart_instance(&s).await;
                 }
                 // Missing / crashed / misconfigured servers retry with the new configuration (e.g. a new PATH).
                 ide_core::event::ServerStatus::Missing
@@ -3158,9 +3156,7 @@ impl LspManager {
             .find(|s| s.id == server)
             .cloned()
             .ok_or_else(|| IdeError::not_found(format!("unknown language server {server}")))?;
-        self.stop_instance(&s, false).await;
-        s.reset_for_restart();
-        self.ensure_started(&s);
+        self.restart_instance(&s).await;
         match s.wait_ready(Duration::from_secs(60)).await {
             Some(_) => Ok(()),
             None => {
@@ -3169,9 +3165,19 @@ impl LspManager {
         }
     }
 
-    /// Gracefully stops the current instance (`shutdown` + `exit`, then kill).
+    /// Stops the current instance and starts a new one. Requests waiting for the server
+    /// (`Server::wait_ready`) wait through it for the new instance rather than fail.
+    async fn restart_instance(&self, server: &Arc<Server>) {
+        self.stop_instance(server, false).await;
+        server.reset_for_restart();
+        self.ensure_started(server);
+        server.end_restart();
+    }
+
+    /// Gracefully stops the current instance (`shutdown` + `exit`, then kill); without
+    /// `final_stop` a restart follows (see [`Self::restart_instance`]).
     async fn stop_instance(&self, server: &Arc<Server>, final_stop: bool) {
-        let Some(run) = server.begin_stop() else {
+        let Some(run) = server.begin_stop(!final_stop) else {
             if final_stop {
                 server.set_status(&self.sink, ide_core::event::ServerStatus::Stopped, None);
             }

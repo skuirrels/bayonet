@@ -930,6 +930,9 @@ fn pending_holds(launch: Option<&Launch>) -> Holds {
 }
 
 /// One step of opening paths from outside; see [`plan_open`].
+// `Launch` passes clippy's size threshold only on Windows (larger `PathBuf`s); the steps
+// are a few short-lived values, so boxing it would only add noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum OpenStep {
     /// The window already has the folder open.

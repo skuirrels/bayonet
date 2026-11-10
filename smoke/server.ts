@@ -31,18 +31,53 @@ function treeKill(pid: number | undefined): Promise<void> {
   });
 }
 
-/** Resolves once no process group `pid` exists anymore (signal 0 only checks). */
-async function waitForGroupExit(pid: number, timeoutMs = 5000): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    try {
-      process.kill(-pid, 0);
-    } catch {
-      return;
-    }
-    if (Date.now() - start > timeoutMs) return;
-    await new Promise((r) => setTimeout(r, 50));
+/** The direct children of `pid` (`pgrep -P`); none when `pgrep` finds none or fails. */
+function childrenOf(pid: number): Promise<number[]> {
+  return new Promise((resolve) => {
+    execFile("pgrep", ["-P", String(pid)], (_error, stdout) =>
+      resolve(
+        stdout
+          .split("\n")
+          .map(Number)
+          .filter((n) => n > 0),
+      ),
+    );
+  });
+}
+
+/** Every process below `pid`, while it is still running (an orphan loses its parent link). */
+async function descendantsOf(pid: number): Promise<number[]> {
+  const out: number[] = [];
+  for (let next = [pid]; next.length;) {
+    next = (await Promise.all(next.map(childrenOf))).flat();
+    out.push(...next);
   }
+  return out;
+}
+
+/** `SIGKILL` to group `pid`, or to `pid` alone when it leads no group. */
+function killGroupOrProcess(pid: number) {
+  for (const target of [-pid, pid])
+    try {
+      process.kill(target, "SIGKILL");
+      return;
+    } catch {
+      // Not a group leader, or already gone.
+    }
+}
+
+/** Resolves once none of `targets` (a group as `-pid`) exists anymore (signal 0 only checks). */
+async function waitForExit(targets: number[], timeoutMs = 5000): Promise<void> {
+  const alive = (t: number) => {
+    try {
+      process.kill(t, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const start = Date.now();
+  while (targets.some(alive) && Date.now() - start <= timeoutMs) await new Promise((r) => setTimeout(r, 50));
 }
 
 export class Server {
@@ -74,8 +109,7 @@ export class Server {
     const child = spawn(serverBinary(), ["--stdio"], {
       env: { ...process.env, OPENIDEA_SERVER_HOME: home, ...env },
       stdio: ["pipe", "pipe", "pipe"],
-      // Its own process group: the language servers it starts (jdtls's JVM) stay in
-      // it, so `close` can reap them together with the server (see below).
+      // Its own process group, so `close` can reap it with what it started (see there).
       detached: true,
     });
     const server = new Server(child);
@@ -107,10 +141,16 @@ export class Server {
    * Kills the server and everything it started; resolves once they're all gone.
    * The server alone is not enough: a language server's own process (jdtls's JVM)
    * outlives it and keeps writing under the test's home directory, so deleting that
-   * directory afterwards raced its writes (`ENOTEMPTY` on teardown). The server runs
-   * detached (its own process group), so the group is only it and its children.
+   * directory afterwards raced its writes (`ENOTEMPTY` on teardown). On Unix the server
+   * leads its own process group, but it starts language servers and runs in groups of
+   * their own (`ide_core::process::own_group`), so those are found from the process tree
+   * first: once the server is gone they are orphans with no link back to it.
    */
   async close(): Promise<void> {
+    const started =
+      process.platform !== "win32" && this.child.pid !== undefined && this.child.exitCode === null
+        ? await descendantsOf(this.child.pid)
+        : [];
     if (this.child.exitCode === null && !this.child.killed) {
       const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
       this.child.stdin.end();
@@ -124,14 +164,11 @@ export class Server {
       await exited;
     }
     if (process.platform !== "win32" && this.child.pid !== undefined) {
-      // Reap what the server started: `SIGKILL` to the group, then wait until it is
-      // gone (termination is asynchronous; files held open can't be deleted meanwhile).
-      try {
-        process.kill(-this.child.pid, "SIGKILL");
-      } catch {
-        // Nothing left running.
-      }
-      await waitForGroupExit(this.child.pid);
+      // Reap what the server started: `SIGKILL` to its group and to each group it started,
+      // then wait until they are gone (termination is asynchronous; files held open can't
+      // be deleted meanwhile).
+      for (const pid of [this.child.pid, ...started]) killGroupOrProcess(pid);
+      await waitForExit([-this.child.pid, ...started]);
     }
   }
 
