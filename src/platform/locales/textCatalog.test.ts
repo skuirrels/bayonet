@@ -194,6 +194,7 @@ const UNTRANSLATED = new Set<string>([
   "Rustfmt",
   "SingleStore",
   "SQLite",
+  "StarRocks",
   "Supabase",
   "TiDB",
   "TimescaleDB",
