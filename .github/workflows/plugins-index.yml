@@ -30,7 +30,11 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          # Bayonet publishes its builds elsewhere (skuirrels/bayonet-releases): no release here.
+          if ! tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"; then
+            echo "::notice::$GITHUB_REPOSITORY has no release to refresh"
+            exit 0
+          fi
           tool=openidea-plugin-linux-x86_64
           if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p plugins-index.json -p "$tool.gz"; then
             echo "::notice::$tag has no plugin index or openidea-plugin tool yet"
