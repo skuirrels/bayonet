@@ -36,6 +36,7 @@ import {
   type OutlineNode,
 } from "./outline";
 import { useLiveOutline, useOutline, useStructureOptions } from "./store";
+import { useFileStructurePopup } from "./popup";
 import styles from "./StructureView.module.css";
 import { tx } from "@/platform/i18n";
 
@@ -318,8 +319,6 @@ function StructureToolbar() {
 
 // ---------------------------------------------------------------------------
 // ⌘F12 File Structure popup
-
-export const useFileStructurePopup = create<{ open: boolean }>(() => ({ open: false }));
 
 export function FileStructureOverlay() {
   const open = useFileStructurePopup((s) => s.open);

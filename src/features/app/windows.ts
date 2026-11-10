@@ -24,6 +24,7 @@ import { holdSplash } from "@/platform/splash";
 import { editorService, maybeEditorService, notifications } from "@/workbench/contributions";
 import { chooseProjectWindow } from "@/workbench/projectWindow";
 import { cycleWindowTab, useWindowGroup } from "@/platform/windowGroups";
+import { compareFilesData } from "@/features/vcs/compareData";
 import { showWorkspaceDialog } from "./WorkspaceDialog";
 
 export const LAUNCH_EVENT = "openidea://launch";
@@ -312,10 +313,7 @@ export async function consumeLaunch(): Promise<void> {
 async function openCliDiff(diff: { left: string; right: string }): Promise<void> {
   const s = useProject.getState();
   if (!s.project && !s.lightEdit) await openLightEdit(diff.right).catch(() => {});
-  const [{ openDiff }, { compareFilesData }] = await Promise.all([
-    import("@/features/vcs/diffInput"),
-    import("@/features/vcs/compareData"),
-  ]);
+  const { openDiff } = await import("@/features/vcs/diffInput");
   await openDiff(compareFilesData(diff.left, diff.right));
 }
 

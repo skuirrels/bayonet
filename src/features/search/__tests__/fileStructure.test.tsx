@@ -7,7 +7,8 @@ vi.mock("../structure/store", async (orig) => ({
   useLiveOutline: () => undefined,
 }));
 
-const { FileStructureOverlay, useFileStructurePopup } = await import("../structure/StructureView");
+const { FileStructureOverlay } = await import("../structure/StructureView");
+const { useFileStructurePopup } = await import("../structure/popup");
 const { useOutline, useStructureOptions } = await import("../structure/store");
 
 const item = (name: string, kind: OutlineItem["kind"], line: number, children: OutlineItem[] = []): OutlineItem => ({
