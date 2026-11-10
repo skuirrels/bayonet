@@ -6,6 +6,9 @@ ignore = [
     # SQLx MySQL uses RSA public-key encryption; russh/ssh-key use signatures.
     # No RSA private-key decryption is exposed to attacker-controlled ciphertext.
     { id = "RUSTSEC-2023-0071", reason = "RSA is used for MySQL password encryption and SSH signatures, not RSA decryption" },
+    # Bundled SQLite before 3.54.0 (libsqlite3-sys < 0.39). sqlx-sqlite 0.9.0, the latest, requires
+    # libsqlite3-sys 0.37, and only one version can be linked. Remove once sqlx moves to 0.39 or later.
+    { id = "RUSTSEC-2026-0459", reason = "no sqlx release allows the fixed libsqlite3-sys yet; exposure needs a database and -wal file from an untrusted party opened in the Database tool" },
 ]
 
 [licenses]
