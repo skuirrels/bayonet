@@ -209,7 +209,7 @@ function MainMenuBar({ merged, onExpandedChange }: MainMenuProps & { merged: boo
         else void expand();
       }}
     >
-      <Icon name="main-menu" size={16} />
+      <Icon name="main-menu" size={20} />
     </button>
   );
   const titles = (
