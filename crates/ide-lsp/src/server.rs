@@ -289,19 +289,22 @@ impl Server {
     }
 
     /// Ready → Stopping, returning the instance to shut down. An in-flight
-    /// start is abandoned instead.
-    pub fn begin_stop(&self) -> Option<Running> {
+    /// start is abandoned instead. With `restarting`, [`Self::wait_ready`] keeps
+    /// waiting through the stop for the instance that follows (see
+    /// [`Self::end_restart`]) instead of finding no server mid-restart.
+    pub fn begin_stop(&self, restarting: bool) -> Option<Running> {
+        let phase = if restarting { Phase::Starting } else { Phase::Down };
         let mut st = self.state.lock();
         match std::mem::replace(&mut st.conn, Conn::Idle) {
             Conn::Ready(run) => {
                 st.conn = Conn::Stopping;
-                self.phase.send_replace(Phase::Down);
+                self.phase.send_replace(phase);
                 Some(run)
             }
             Conn::Starting => {
                 st.generation += 1; // invalidates the in-flight start
                 self.start_cancel.lock().cancel();
-                self.phase.send_replace(Phase::Down);
+                self.phase.send_replace(phase);
                 None
             }
             other => {
@@ -314,6 +317,15 @@ impl Server {
     /// Cancelled when the current start is abandoned.
     pub fn start_token(&self) -> CancellationToken {
         self.start_cancel.lock().clone()
+    }
+
+    /// After a restart's new start was requested: wakes the waiters [`Self::begin_stop`]
+    /// held when no start began (a project closing, Restricted Mode).
+    pub fn end_restart(&self) {
+        let st = self.state.lock();
+        if !matches!(st.conn, Conn::Starting | Conn::Ready(_)) && *self.phase.borrow() == Phase::Starting {
+            self.phase.send_replace(Phase::Down);
+        }
     }
 
     pub fn end_stop(&self, generation: u64) {
@@ -745,10 +757,49 @@ mod tests {
     fn a_superseded_start_is_not_announced() {
         let s = server();
         let generation = s.begin_start().unwrap();
-        s.begin_stop(); // abandons the start and invalidates its generation
+        s.begin_stop(false); // abandons the start and invalidates its generation
         let sink: SharedSink = Arc::new(|_: IdeEvent| {});
         assert!(!s.fail_start(generation, Conn::Failed, &sink, ServerStatus::Crashed, Some("boom".into())));
         assert_eq!(s.status(), ServerStatus::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_waits_through_a_restart_for_the_next_instance() {
+        // "jdtls is not ready (Busy)": a request arriving while a configuration change
+        // restarts the server found it stopped and failed instead of waiting.
+        let s = Arc::new(server());
+        let sink: SharedSink = Arc::new(|_: IdeEvent| {});
+        s.begin_start().unwrap();
+        let waiter = {
+            let s = s.clone();
+            tokio::spawn(async move { s.wait_ready(Duration::from_secs(30)).await.is_none() })
+        };
+        tokio::task::yield_now().await;
+        s.begin_stop(true);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiter.is_finished(), "a restart's stop must not wake the waiter");
+        // The restart's new start: the waiter now follows it.
+        let generation = s.begin_start().unwrap();
+        s.end_restart();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiter.is_finished(), "the waiter follows the new start");
+        assert!(s.fail_start(generation, Conn::Failed, &sink, ServerStatus::Crashed, Some("boom".into())));
+        assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restart_that_starts_nothing_releases_its_waiters() {
+        let s = Arc::new(server());
+        s.begin_start().unwrap();
+        let waiter = {
+            let s = s.clone();
+            tokio::spawn(async move { s.wait_ready(Duration::from_secs(30)).await.is_none() })
+        };
+        tokio::task::yield_now().await;
+        s.begin_stop(true);
+        s.end_restart(); // no new start began (Restricted Mode, say)
+        let none = tokio::time::timeout(Duration::from_secs(5), waiter).await.expect("released").unwrap();
+        assert!(none);
     }
 
     #[test]
