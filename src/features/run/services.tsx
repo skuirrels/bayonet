@@ -13,7 +13,7 @@ import type { RunConfig } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import { projectLocation, useRemote } from "@/platform/remote";
 import { tx, useT, useTxTemplate } from "@/platform/i18n";
-import { Button, EmptyState, T } from "@/ui";
+import { Button, EmptyState, T, lazyComponent } from "@/ui";
 import type { MenuItem } from "@/ui";
 import {
   toolWindowService,
@@ -26,7 +26,6 @@ import {
   type ServiceTreeItem,
 } from "@/workbench/contributions";
 import { commandLine, configIcon, KIND_OPTIONS, kindLabel } from "./configs";
-import { SessionPanel } from "./RunView";
 import { showApplicationUpdate } from "./applicationUpdate";
 import { isUpdatable } from "./updatePolicies";
 import {
@@ -58,6 +57,9 @@ import {
   type ServiceOrder,
 } from "./serviceOrder";
 import styles from "./RunServices.module.css";
+
+// The Run tool window's console, loaded with that view's code.
+const SessionPanel = lazyComponent(() => import("./RunView").then((m) => m.SessionPanel));
 
 export const RUN_PROVIDER = "runConfigurations";
 const TYPE_PREFIX = "run:type:";

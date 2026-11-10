@@ -62,6 +62,7 @@ import {
   useOverlays,
 } from "./ui/popoverStore";
 import { tx } from "@/platform/i18n";
+import { workflowSettings } from "@/platform/workflowSettings";
 
 function isRunConfig(arg: unknown): arg is RunConfig {
   return !!arg && typeof arg === "object" && "command" in arg && "args" in arg && "debugAdapter" in arg;
@@ -69,6 +70,35 @@ function isRunConfig(arg: unknown): arg is RunConfig {
 
 function errorText(e: unknown) {
   return e instanceof Error ? e.message : String(e);
+}
+
+interface DotnetAttachTarget {
+  pid: number;
+  name: string;
+  cwd: string;
+}
+
+function isDotnetAttachTarget(arg: unknown): arg is DotnetAttachTarget {
+  if (!arg || typeof arg !== "object") return false;
+  const a = arg as Record<string, unknown>;
+  return typeof a.pid === "number" && typeof a.name === "string" && typeof a.cwd === "string";
+}
+
+/** netcoredbg attached to a running .NET process: a debug run's test app or an Aspire resource. */
+async function attachDotnet({ pid, name, cwd }: DotnetAttachTarget) {
+  await startSession(
+    {
+      name: tx`${name} (${pid})`,
+      adapter: "netcoredbg",
+      request: "attach",
+      program: null,
+      args: [],
+      cwd,
+      env: {},
+      extraJson: JSON.stringify({ processId: pid, justMyCode: workflowSettings().debugger.skipLibraryCode }),
+    },
+    { rerunnable: false },
+  );
 }
 
 async function report(title: string, p: Promise<unknown>) {
@@ -598,6 +628,15 @@ export function registerDebugActions(): () => void {
         const frame = s && selectedFrame(s);
         if (frame) void revealFrame(frame, true);
       },
+    },
+    {
+      id: "debug.attachDotnet",
+      title: "Attach Debugger",
+      category: "Debug",
+      hidden: true,
+      description: "Attach netcoredbg to a running .NET process (arg: { pid, name, cwd })",
+      run: ({ arg }) =>
+        isDotnetAttachTarget(arg) ? report(tx("Cannot attach the debugger"), attachDotnet(arg)) : undefined,
     },
     {
       id: "debug.attachToProcess",

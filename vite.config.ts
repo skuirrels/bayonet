@@ -41,6 +41,10 @@ export default defineConfig(() => ({
   build: {
     target: "safari16",
     sourcemap: true,
+    // The app loads its bundle from disk, and start-up size is budgeted by
+    // `bundle.initialJsKb` (perf/budgets.json). This only flags a chunk growing
+    // well past today's main one (~3 MB), not Vite's web-oriented 500 kB.
+    chunkSizeWarningLimit: 3_500,
   },
   test: {
     environment: "jsdom",

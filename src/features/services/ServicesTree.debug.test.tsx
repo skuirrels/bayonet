@@ -142,7 +142,8 @@ it("shows the owning Run output for attached debugging and overrides both sets o
   useDebugRunSessions.setState({ serviceSessions: [d] });
   render(<ServicesTreeView />);
   select();
-  expect(screen.getByRole("log")).toHaveTextContent("Maven application log");
+  // The Run console loads with the Run view's code.
+  expect(await screen.findByRole("log")).toHaveTextContent("Maven application log");
   const actions = within(screen.getByRole("toolbar", { name: "Run actions" }));
   fireEvent.click(actions.getByRole("button", { name: "Rerun" }));
   expect(d.rerun).toHaveBeenCalledOnce();

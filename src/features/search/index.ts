@@ -41,7 +41,7 @@ import { hideFindPopup, parseFindArg, runFindPopupCommand, showFindPopup, useFin
 import { disposeFindWindow, openEditorResults, rerunActiveFindTab, useFindHeaderMenu } from "./find/windowStore";
 import { RecentPopupsOverlay } from "./recent/RecentPopups";
 import { cycleSwitcher, hideRecentPopup, showRecentPopup } from "./recent/store";
-import { FileStructureOverlay, useFileStructurePopup } from "./structure/StructureView";
+import { FileStructurePopup, useFileStructurePopup } from "./structure/popup";
 import { useOutline, useStructureOptions } from "./structure/store";
 import { tx } from "@/platform/i18n";
 
@@ -129,7 +129,7 @@ export function activate(): void | (() => void) {
     registerOverlay({ id: "search.recent", component: RecentPopupsOverlay }),
     registerOverlay({ id: "search.findInFiles", component: FindInFilesOverlay }),
     registerOverlay({ id: "search.scopes", component: ScopesDialogOverlay }),
-    registerOverlay({ id: "search.fileStructure", component: FileStructureOverlay }),
+    registerOverlay({ id: "search.fileStructure", component: FileStructurePopup }),
     registerOverlay({ id: "search.bookmarks", component: BookmarkPopupsOverlay }),
 
     registerToolWindow({
