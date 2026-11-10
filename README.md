@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://skuirrels.github.io/bayonet-releases/"><img src="https://img.shields.io/github/v/release/skuirrels/bayonet-releases?label=download" alt="Download the latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache%202.0-blue" alt="Apache 2.0 licence"></a>
-  <img src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white" alt=".NET 10">
+  <img src="https://img.shields.io/badge/.NET-10%20%7C%2011-512BD4?logo=dotnet&logoColor=white" alt=".NET 10 and 11">
   <img src="https://img.shields.io/badge/core-Rust-B7410E?logo=rust&logoColor=white" alt="Rust core">
   <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2">
   <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey" alt="macOS, Windows and Linux">
@@ -118,7 +118,7 @@ Installed copies update themselves.
 
 To build from source instead, you need Rust 1.96 or later,
 Node 22.18 or later, pnpm, the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-and the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+and the [.NET 10 or 11 SDK](https://dotnet.microsoft.com/download).
 
 ```sh
 git clone https://github.com/skuirrels/bayonet.git
