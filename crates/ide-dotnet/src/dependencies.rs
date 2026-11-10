@@ -364,6 +364,7 @@ mod tests {
     #[test]
     fn names_frameworks() {
         assert_eq!(long_name("net10.0").as_deref(), Some(".NETCoreApp,Version=v10.0"));
+        assert_eq!(long_name("net11.0").as_deref(), Some(".NETCoreApp,Version=v11.0"));
         assert_eq!(long_name("net8.0-windows").as_deref(), Some(".NETCoreApp,Version=v8.0"));
         assert_eq!(long_name("netcoreapp3.1").as_deref(), Some(".NETCoreApp,Version=v3.1"));
         assert_eq!(long_name("netstandard2.0").as_deref(), Some(".NETStandard,Version=v2.0"));

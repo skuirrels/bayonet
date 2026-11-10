@@ -86,8 +86,9 @@ jobs:
           save-if: ${{ contains(fromJSON('["refs/heads/main", "refs/heads/master", "refs/heads/dotnet-port"]'), github.ref) }}
       - uses: taiki-e/install-action@nextest
       # .NET integration tests read fixtures/dotnet and call the dotnet CLI.
+      # The newest 10.0 SDK: fixtures/dotnet/global.json takes 10.0.400 or later.
       - uses: actions/setup-dotnet@v4
-        with: { global-json-file: fixtures/dotnet/global.json }
+        with: { dotnet-version: 10.0.x }
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
@@ -108,18 +109,28 @@ jobs:
         run: git diff --exit-code src/bindings.ts
 
   # The .NET fixture solution must build and its tests pass on every OS, or the
-  # IDE's .NET tests are testing against a broken project.
+  # IDE's .NET tests are testing against a broken project. The SDK 11 leg checks that
+  # it also builds with SDK 11 (global.json rolls forward to the newest SDK installed).
   dotnet-fixture:
-    name: .NET fixture (${{ matrix.os }})
+    name: .NET fixture (${{ matrix.os }}, SDK ${{ matrix.sdk }})
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-22.04, windows-latest]
+        sdk: [10.0.x]
+        include:
+          - { os: ubuntu-22.04, sdk: 11.0.x }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with: { global-json-file: fixtures/dotnet/global.json }
+        with:
+          # 10.0.x also brings the .NET 10 runtime the net10.0 tests run on.
+          dotnet-version: |
+            10.0.x
+            ${{ matrix.sdk != '10.0.x' && matrix.sdk || '' }}
+      - run: dotnet --version
+        working-directory: fixtures/dotnet
       - run: dotnet test --solution DotnetFixture.slnx
         working-directory: fixtures/dotnet
       - run: dotnet build DotnetFixture.sln

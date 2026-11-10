@@ -87,14 +87,18 @@ fn language_rank(l: &str) -> u8 {
     }
 }
 
+/// One installed version of a template in one language: (precedence, entry).
+type Variant<'a> = (i64, &'a Value);
+
 /// Project and solution templates of a `templatecache.json`, by name: for each
-/// template group the highest-precedence variant of each language.
+/// template group the highest-precedence variant of each language, offering the
+/// frameworks of all its variants.
 pub fn parse_cache(text: &str) -> IdeResult<Vec<ProjectTemplate>> {
     let v: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|e| IdeError::invalid(format!("unreadable template cache: {e}")))?;
     let infos = v.get("TemplateInfo").and_then(Value::as_array).ok_or_else(|| IdeError::invalid("no TemplateInfo"))?;
-    // group → language → (precedence, entry)
-    let mut groups: BTreeMap<String, BTreeMap<String, (i64, &Value)>> = BTreeMap::new();
+    // group → language → variants, highest precedence first
+    let mut groups: BTreeMap<String, BTreeMap<String, Vec<Variant>>> = BTreeMap::new();
     for t in infos {
         let tags = t.get("TagsCollection");
         let kind = tags.and_then(|g| str_of(g, "type")).unwrap_or_default();
@@ -105,17 +109,21 @@ pub fn parse_cache(text: &str) -> IdeResult<Vec<ProjectTemplate>> {
         let group = str_of(t, "GroupIdentity").unwrap_or(identity);
         let language = tags.and_then(|g| str_of(g, "language")).unwrap_or_default();
         let precedence = t.get("Precedence").and_then(Value::as_i64).unwrap_or(0);
-        let slot = groups.entry(group).or_default().entry(language).or_insert((i64::MIN, t));
-        if precedence >= slot.0 {
-            *slot = (precedence, t);
-        }
+        groups.entry(group).or_default().entry(language).or_default().push((precedence, t));
+    }
+    for variants in groups.values_mut().flat_map(BTreeMap::values_mut) {
+        // Reversed before the stable sort: of equal precedence, the last listed wins.
+        variants.reverse();
+        variants.sort_by_key(|(p, _)| std::cmp::Reverse(*p));
     }
     let mut out: Vec<ProjectTemplate> = groups
         .into_iter()
         .filter_map(|(id, by_language)| {
             let mut languages: Vec<String> = by_language.keys().filter(|l| !l.is_empty()).cloned().collect();
             languages.sort_by_key(|l| (language_rank(l), l.clone()));
-            let main = languages.first().and_then(|l| by_language.get(l)).or_else(|| by_language.values().next())?.1;
+            let variants =
+                languages.first().and_then(|l| by_language.get(l)).or_else(|| by_language.values().next())?;
+            let main = variants.first()?.1;
             Some(ProjectTemplate {
                 id,
                 name: str_of(main, "Name")?,
@@ -129,7 +137,7 @@ pub fn parse_cache(text: &str) -> IdeResult<Vec<ProjectTemplate>> {
                     .unwrap_or_default(),
                 languages,
                 kind: main.get("TagsCollection").and_then(|g| str_of(g, "type")).unwrap_or_default(),
-                parameters: parameters(main),
+                parameters: parameters(main, variants),
             })
         })
         .collect();
@@ -137,7 +145,44 @@ pub fn parse_cache(text: &str) -> IdeResult<Vec<ProjectTemplate>> {
     Ok(out)
 }
 
-fn parameters(t: &Value) -> Vec<TemplateParameter> {
+/// `Framework` choices of `variants` (one per installed template version, each usually
+/// offering only its own framework), `default` first, then newest first:
+/// `dotnet new --framework net10.0` picks the variant that offers it.
+fn framework_choices(variants: &[Variant], default: Option<&str>) -> Vec<TemplateChoice> {
+    let mut out: Vec<TemplateChoice> = Vec::new();
+    for (_, t) in variants {
+        let params = t.get("Parameters").and_then(Value::as_array).into_iter().flatten();
+        let framework = params.filter(|p| str_of(p, "Name").as_deref() == Some("Framework"));
+        for choice in framework.flat_map(choices) {
+            if !out.iter().any(|c| c.value == choice.value) {
+                out.push(choice);
+            }
+        }
+    }
+    if let Some(i) = out.iter().position(|c| Some(c.value.as_str()) == default) {
+        out[..=i].rotate_right(1);
+    }
+    out
+}
+
+fn choices(p: &Value) -> Vec<TemplateChoice> {
+    p.get("Choices")
+        .and_then(Value::as_object)
+        .map(|c| {
+            c.iter()
+                .map(|(value, d)| TemplateChoice {
+                    value: value.clone(),
+                    label: str_of(d, "DisplayName")
+                        .or_else(|| str_of(d, "Description"))
+                        .unwrap_or_else(|| value.clone()),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The dialog's options of `t`, the newest of `variants`.
+fn parameters(t: &Value, variants: &[Variant]) -> Vec<TemplateParameter> {
     let host: Value = str_of(t, "HostData").and_then(|h| serde_json::from_str(&h).ok()).unwrap_or(Value::Null);
     let symbols = host.get("symbolInfo");
     let Some(list) = t.get("Parameters").and_then(Value::as_array) else { return Vec::new() };
@@ -157,26 +202,15 @@ fn parameters(t: &Value) -> Vec<TemplateParameter> {
                 return None;
             }
             let long = info.and_then(|i| str_of(i, "longName")).unwrap_or_else(|| name.clone());
-            let choices = p
-                .get("Choices")
-                .and_then(Value::as_object)
-                .map(|c| {
-                    c.iter()
-                        .map(|(value, d)| TemplateChoice {
-                            value: value.clone(),
-                            label: str_of(d, "DisplayName")
-                                .or_else(|| str_of(d, "Description"))
-                                .unwrap_or_else(|| value.clone()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let default_value = p.get("DefaultValue").and_then(Value::as_str).map(str::to_owned);
+            let choices =
+                if name == "Framework" { framework_choices(variants, default_value.as_deref()) } else { choices(p) };
             Some(TemplateParameter {
                 label: str_of(p, "DisplayName").unwrap_or_else(|| name.clone()),
                 option: format!("--{long}"),
                 description: str_of(p, "Description").or_else(|| str_of(p, "Documentation")),
                 data_type: str_of(p, "DataType").unwrap_or_else(|| "string".into()),
-                default_value: p.get("DefaultValue").and_then(Value::as_str).map(str::to_owned),
+                default_value,
                 choices,
                 name,
             })
@@ -281,6 +315,14 @@ mod tests {
          {"Name":"UseProgramMain","Type":"parameter","DataType":"bool","DefaultValue":"false"},
          {"Name":"skipRestore","Type":"parameter","DataType":"bool"},
          {"Name":"HostIdentifier","Type":"bind","DataType":"string"}]},
+      {"Identity":"Microsoft.Common.Console.CSharp.11.0","GroupIdentity":"Microsoft.Common.Console","Precedence":13000,
+       "Name":"Console App","ShortNameList":["console"],"Description":"A project for a command-line application","Author":"Microsoft",
+       "Classifications":["Common","Console"],"TagsCollection":{"language":"C#","type":"project"},
+       "HostData":"{\"symbolInfo\":{\"Framework\":{\"longName\":\"framework\"},\"TargetFrameworkOverride\":{\"isHidden\":\"true\"},\"UseProgramMain\":{\"longName\":\"use-program-main\"}}}",
+       "Parameters":[
+         {"Name":"Framework","Type":"parameter","DataType":"choice","DefaultValue":"net11.0","DisplayName":"Framework",
+          "Description":"The target framework for the project.","Choices":{"net10.0":{"DisplayName":".NET 10.0"},"net11.0":{"DisplayName":".NET 11.0"}}},
+         {"Name":"UseProgramMain","Type":"parameter","DataType":"bool","DefaultValue":"false"}]},
       {"Identity":"Microsoft.Common.Console.FSharp.10.0","GroupIdentity":"Microsoft.Common.Console","Precedence":12000,
        "Name":"Console App","ShortNameList":["console"],"TagsCollection":{"language":"F#","type":"project"},"Parameters":[]},
       {"Identity":"Microsoft.Standard.QuickStarts.DirectoryProps","Name":"MSBuild Directory.Build.props file","ShortNameList":["buildprops"],
@@ -304,11 +346,12 @@ mod tests {
         assert_eq!(console.tags, ["Common", "Console"]);
         let names: Vec<_> = console.parameters.iter().map(|p| (p.name.as_str(), p.option.as_str())).collect();
         assert_eq!(names, [("Framework", "--framework"), ("UseProgramMain", "--use-program-main")]);
+        // The newest variant's default, and the frameworks of every installed variant.
         let fw = &console.parameters[0];
-        assert_eq!(fw.default_value.as_deref(), Some("net10.0"));
+        assert_eq!(fw.default_value.as_deref(), Some("net11.0"));
         assert_eq!(
             fw.choices.iter().map(|c| (c.value.as_str(), c.label.as_str())).collect::<Vec<_>>(),
-            [("net10.0", ".NET 10.0"), ("net9.0", "Target net9.0")]
+            [("net11.0", ".NET 11.0"), ("net10.0", ".NET 10.0"), ("net9.0", "Target net9.0")]
         );
     }
 
@@ -347,7 +390,8 @@ mod tests {
         let text = std::fs::read_to_string(cache_file(&home, &version)).unwrap();
         let t = parse_cache(&text).unwrap();
         let console = t.iter().find(|t| t.short_name == "console").unwrap();
-        assert!(console.parameters.iter().any(|p| p.option == "--framework"), "{console:?}");
+        let fw = console.parameters.iter().find(|p| p.option == "--framework").expect("--framework");
+        assert_eq!(fw.choices.first().map(|c| &c.value), fw.default_value.as_ref(), "{fw:?}");
         assert!(t.len() > 20);
     }
 }
