@@ -17,8 +17,9 @@ const config: KnipConfig = {
   // Plugins' web pages are projects of their own (own package.json, checked by plugins/build.sh and CI).
   ignore: ["plugins/**/web-src/**"],
   ignoreExportsUsedInFile: true,
-  // lint-staged formats Rust files with the toolchain's rustfmt; the release kit builds Linux in WSL from Windows.
-  ignoreBinaries: ["rustfmt", "wsl.exe"],
+  // lint-staged formats Rust files with the toolchain's rustfmt; the release kit builds Linux in WSL from Windows;
+  // the smoke harness walks the server's process tree with the system's pgrep.
+  ignoreBinaries: ["rustfmt", "wsl.exe", "pgrep"],
   compilers: {
     // Fonts come in through `@import` in global.css.
     css: (text: string) => [...text.matchAll(/(?<=@)import[^;]+/g)].join("\n"),
