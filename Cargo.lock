@@ -4662,6 +4662,7 @@ name = "ide-search"
 version = "0.1.47"
 dependencies = [
  "criterion",
+ "encoding_rs",
  "globset",
  "grep-matcher",
  "grep-regex",
