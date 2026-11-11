@@ -13,6 +13,8 @@ import {
 import clsx from "clsx";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useWorkflowSettings } from "@/platform/workflowSettings";
+import { useProject } from "@/platform/project";
+import { resolveMonoFont } from "@/platform/fonts";
 import { Icon, showContextMenu } from "@/ui";
 import { spanStyle } from "@/ui/ansi";
 import ansi from "@/ui/ansi.module.css";
@@ -26,8 +28,6 @@ import { hostBinding, formatBinding, hasPrimaryModifier, registerKeyClaim } from
 import { tx } from "@/platform/i18n";
 import { ConsoleFindBar } from "@/ui/ConsoleFindBar";
 import { DEFAULT_FIND_OPTIONS, findInLines, type FindOptions } from "@/ui/consoleFind";
-
-const ROW = 20;
 
 const MARK_COLOR = "var(--bg-search-match)";
 const CURRENT_MARK_COLOR = "var(--bg-search-match-current)";
@@ -182,6 +182,12 @@ export function ConsoleView({
   const innerRef = useRef<HTMLDivElement>(null);
   const lines = model.lines;
   const patterns = useWorkflowSettings((s) => s.console.foldPatterns);
+  // The Run console uses Tools › Terminal › Font (which can follow Editor › Font),
+  // so the font and fallback configured there apply to process output too.
+  const terminalFont = useWorkflowSettings((s) => s.terminal);
+  const editorFont = useProject((s) => s.settings?.editor);
+  const consoleFont = resolveMonoFont(terminalFont, editorFont);
+  const rowHeight = Math.max(16, Math.round(consoleFont.size * 1.5));
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
   const [internalFindOpen, setInternalFindOpen] = useState(false);
   const findOpen = controlledFindOpen ?? internalFindOpen;
@@ -218,7 +224,7 @@ export function ConsoleView({
     rangeExtractor,
     count,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW,
+    estimateSize: () => rowHeight,
     overscan: 30,
     getItemKey: (i) => {
       const r = rows[i];
@@ -230,7 +236,7 @@ export function ConsoleView({
   // Soft wrap changes row heights; re-measure everything.
   useEffect(() => {
     virtualizer.measure();
-  }, [softWrap, virtualizer]);
+  }, [softWrap, rowHeight, virtualizer]);
 
   useLayoutEffect(() => {
     if (!follow || count === 0) return;
@@ -244,7 +250,7 @@ export function ConsoleView({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el || programmatic.current) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < ROW;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight;
     if (atBottom && selecting) return;
     if (atBottom !== follow) onFollowChange(atBottom);
   };
@@ -517,6 +523,11 @@ export function ConsoleView({
       <div
         ref={scrollRef}
         className={clsx(styles.console, ansi.palette, softWrap && styles.wrap)}
+        style={{
+          fontFamily: consoleFont.family,
+          fontSize: `${consoleFont.size}px`,
+          lineHeight: `${rowHeight}px`,
+        }}
         role="log"
         aria-live="off"
         aria-label={aria["aria-label"] ?? "Console"}
@@ -543,7 +554,7 @@ export function ConsoleView({
                   data-index={item.index}
                   ref={softWrap ? virtualizer.measureElement : undefined}
                   className={styles.line}
-                  style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : ROW }}
+                  style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : rowHeight }}
                 >
                   {pendingInput}
                 </div>
@@ -556,7 +567,7 @@ export function ConsoleView({
                   data-index={item.index}
                   ref={softWrap ? virtualizer.measureElement : undefined}
                   className={styles.line}
-                  style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : ROW }}
+                  style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : rowHeight }}
                 >
                   {foldButton(row.fold, false)}
                 </div>
@@ -570,7 +581,7 @@ export function ConsoleView({
                 data-index={item.index}
                 ref={softWrap ? virtualizer.measureElement : undefined}
                 className={clsx(styles.line, styles[line.kind])}
-                style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : ROW }}
+                style={{ transform: `translateY(${item.start}px)`, height: softWrap ? undefined : rowHeight }}
               >
                 <Line line={line} marks={marksByLine.get(row.index)} length={line.text.length} cwd={cwd} />
                 {row.fold && foldButton(row.fold, true)}
