@@ -92,11 +92,12 @@ test("Find in Files streams matches by file and opens the chosen one at its line
   await dialog.getByRole("textbox", { name: "Text to find" }).fill("OrderService");
   const matches = dialog.getByRole("listbox", { name: "Matches" });
   await expect(matches.getByRole("option")).toHaveCount(3);
+  // Not just the last call: the TODO tool window runs its own search alongside.
   await expect
-    .poll(async () => (await ipcCalls(page, "search_start")).at(-1)?.query)
-    .toMatchObject({
-      pattern: "OrderService",
-    });
+    .poll(async () =>
+      (await ipcCalls(page, "search_start")).map((args) => (args.query as { pattern?: string } | undefined)?.pattern),
+    )
+    .toContain("OrderService");
   await matches.getByRole("option", { name: /import com\.acme\.orders\.service\.OrderService/ }).dblclick();
   await expect(page.getByRole("tab", { name: "build.gradle.kts" })).toHaveAttribute("aria-selected", "true");
   const caretLine = () =>
