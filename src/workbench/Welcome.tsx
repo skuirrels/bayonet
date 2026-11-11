@@ -41,7 +41,7 @@ function WelcomeFallback() {
       </div>
       <div className={styles.hint}>
         <span>
-          <T>Open a folder</T>
+          <T>Open a folder, solution or project</T>
         </span>
         <span className={styles.keys}>{shortcutLabel("file.openProject")}</span>
       </div>

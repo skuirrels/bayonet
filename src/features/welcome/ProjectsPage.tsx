@@ -66,8 +66,8 @@ function Landing() {
       </div>
       <p className={styles.landingText}>
         {canClone
-          ? tx("Open a folder from disk or clone a repository from version control.")
-          : tx("Open a folder from disk.")}
+          ? tx("Open a folder, solution or project from disk, or clone a repository from version control.")
+          : tx("Open a folder, solution or project from disk.")}
         <br />
         <T>You can also drop a folder onto this window.</T>
       </p>
@@ -107,7 +107,7 @@ function Landing() {
       </div>
       {shortcut && (
         <div className={styles.landingHint}>
-          <T>Open a folder</T> <Kbd>{shortcut}</Kbd>
+          <T>Open a folder, solution or project</T> <Kbd>{shortcut}</Kbd>
         </div>
       )}
     </div>

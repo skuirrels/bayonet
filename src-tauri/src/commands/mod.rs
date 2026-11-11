@@ -68,6 +68,7 @@ pub(crate) fn sender<T: tauri::ipc::IpcResponse + Send + Sync + 'static>(
 pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
         app::app_info,
+        app::dialog_pick_open_target,
         android::android_devices,
         android::android_logcat,
         app::recent_projects,
@@ -473,6 +474,11 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         dotnet::nuget_search,
         dotnet::nuget_versions,
         dotnet::nuget_installed,
+        dotnet::nuget_sources,
+        dotnet::nuget_add_source,
+        dotnet::nuget_update_source,
+        dotnet::nuget_remove_source,
+        dotnet::nuget_enable_source,
         dotnet::nuget_audit,
         dotnet::dotnet_user_secrets,
         dotnet::dotnet_publish_profiles,

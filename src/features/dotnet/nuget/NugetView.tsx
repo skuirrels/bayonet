@@ -4,7 +4,7 @@
  * Everything goes through `dotnet package`, so `nuget.config`, central package
  * management and credential providers apply as on the command line.
  */
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { openExternalUrl } from "@/platform/openUrl";
 import { tx } from "@/platform/i18n";
@@ -16,6 +16,7 @@ import {
   Icon,
   IconButton,
   List,
+  Menu,
   SearchField,
   Select,
   Spinner,
@@ -31,6 +32,7 @@ import {
   projectsOf,
   searchProblems,
   searchRows,
+  updatesOf,
   type InstalledPackage,
   type ProjectRef,
   type ProjectUse,
@@ -38,16 +40,23 @@ import {
 import {
   checkAudit,
   checkUpdates,
+  chooseAllFeeds,
   installPackage,
   loadInstalled,
+  loadSources,
   removePackage,
   runSearch,
   selectPackage,
   setPrerelease,
   setQuery,
   setVersion,
+  tickAll,
+  tickPackage,
+  toggleFeed,
+  updatePackages,
   useNuget,
 } from "./store";
+import { FeedsDialog } from "./FeedsDialog";
 import { auditIssues, reasonLabel, severityLabel, severityRank, type PackageIssues } from "./audit";
 import type { PackageSummary } from "@/bindings";
 import styles from "./NugetView.module.css";
@@ -68,7 +77,9 @@ export function NugetView() {
   const s = useNuget();
   useEffect(() => {
     if (!useNuget.getState().installed) void loadInstalled();
+    if (!useNuget.getState().sources) void loadSources();
   }, []);
+  const [managing, setManaging] = useState(false);
   const installed = useMemo(() => installedPackages(s.installed, s.outdated), [s.installed, s.outdated]);
   const projects = useMemo(() => projectsOf(s.installed), [s.installed]);
   const issues = useMemo(() => auditIssues(s.audit), [s.audit]);
@@ -135,6 +146,15 @@ export function NugetView() {
       r.pkg.id.toLowerCase() === s.selected?.toLowerCase(),
   );
   const selectedInstalled = installed.find((p) => p.id.toLowerCase() === s.selected?.toLowerCase());
+  // Packages Update All moves: an update known, in a project that can take it.
+  const { updatable, updatableIds } = useMemo(() => {
+    const ids = new Set(updatesOf(installed).map((u) => u.id.toLowerCase()));
+    return { updatable: installed.filter((p) => ids.has(p.id.toLowerCase())), updatableIds: ids };
+  }, [installed]);
+  const tickedUpdatable = updatable.filter((p) => s.ticked.has(p.id.toLowerCase()));
+  const working = s.updating !== null || s.busy.size > 0;
+  const updatingDone = s.updating?.done ?? 0;
+  const updatingTotal = s.updating?.total ?? 0;
   const selectedFound = found.find((p) => p.id.toLowerCase() === s.selected?.toLowerCase());
 
   return (
@@ -150,6 +170,7 @@ export function NugetView() {
             if (e.key === "Enter") void runSearch(false);
           }}
         />
+        <FeedPicker onManage={() => setManaging(true)} />
         <Checkbox checked={s.prerelease} onChange={setPrerelease} label={<T>Prerelease</T>} />
         <IconButton
           icon="refresh"
@@ -170,6 +191,43 @@ export function NugetView() {
           disabled={s.auditing || !s.installed}
         />
         {(s.checking || s.searching || s.loading || s.auditing) && <Spinner size={14} />}
+        {updatable.length > 0 && (
+          <div className={styles.updateBar}>
+            {s.updating ? (
+              <span className={styles.updating}>
+                <Spinner size={12} />
+                {tx`Updating ${updatingDone} of ${updatingTotal}…`}
+              </span>
+            ) : (
+              <>
+                <Checkbox
+                  aria-label="Select All Updates"
+                  checked={tickedUpdatable.length === updatable.length}
+                  indeterminate={tickedUpdatable.length > 0 && tickedUpdatable.length < updatable.length}
+                  onChange={(on) =>
+                    tickAll(
+                      updatable.map((p) => p.id),
+                      on,
+                    )
+                  }
+                />
+                {tickedUpdatable.length > 0 && (
+                  <Button size="small" disabled={working} onClick={() => void updatePackages(tickedUpdatable)}>
+                    {tx`Update Selected (${tickedUpdatable.length})`}
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  variant="primary"
+                  disabled={working}
+                  onClick={() => void updatePackages(updatable)}
+                >
+                  {tx`Update All (${updatable.length})`}
+                </Button>
+              </>
+            )}
+          </div>
+        )}
       </div>
       {(s.error || problems.length > 0) && (
         <div className={styles.banner} role="alert">
@@ -201,7 +259,14 @@ export function NugetView() {
             }}
             rowHeight={40}
             sectionHeight={24}
-            renderItem={(r) => <PackageRow row={r} />}
+            renderItem={(r) => (
+              <PackageRow
+                row={r}
+                tickable={r.kind === "installed" && updatableIds.has(r.pkg.id.toLowerCase())}
+                ticked={r.kind === "installed" && s.ticked.has(r.pkg.id.toLowerCase())}
+                tickDisabled={s.updating !== null}
+              />
+            )}
             empty={<EmptyState title={s.loading ? "Loading packages…" : "No packages"} />}
           />
         </SplitPanel>
@@ -220,11 +285,87 @@ export function NugetView() {
           )}
         </SplitPanel>
       </SplitGroup>
+      {managing && <FeedsDialog onClose={() => setManaging(false)} />}
     </div>
   );
 }
 
-function PackageRow({ row }: { row: Row }) {
+/** The feeds searched (Rider's feed picker): every enabled feed, or the ones ticked; Manage Feeds… edits them. */
+function FeedPicker({ onManage }: { onManage: () => void }) {
+  const sources = useNuget((s) => s.sources);
+  const sourcesError = useNuget((s) => s.sourcesError);
+  const feeds = useNuget((s) => s.feeds);
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const enabled = (sources ?? []).filter((x) => x.enabled);
+  const chosen = feeds ?? enabled.map((x) => x.name);
+  const count = chosen.length;
+  const label =
+    sources === null
+      ? sourcesError
+        ? tx`No feeds`
+        : tx`Feeds`
+      : enabled.length === 0
+        ? tx`No feeds`
+        : feeds === null && enabled.length > 1
+          ? tx`All feeds`
+          : count === 1
+            ? chosen[0]!
+            : tx`${count} feeds`;
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className={styles.feedButton}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={tx`Package feeds: ${label}`}
+        title={sourcesError ?? undefined}
+        onClick={() => {
+          if (useNuget.getState().sources === null) void loadSources();
+          setOpen((o) => !o);
+        }}
+      >
+        <span className={styles.feedLabel}>{label}</span>
+        <Icon name="chevron-down" size={12} />
+      </button>
+      <Menu
+        open={open}
+        onClose={() => setOpen(false)}
+        anchor={anchor}
+        aria-label="Package Feeds"
+        items={[
+          { kind: "header", label: "Enabled Feeds" },
+          ...(enabled.length > 1
+            ? [{ id: "all", label: "All Feeds", checked: feeds === null, run: chooseAllFeeds }]
+            : []),
+          ...enabled.map((x) => ({
+            id: `feed:${x.name}`,
+            label: x.name,
+            verbatim: true,
+            checked: chosen.includes(x.name),
+            run: () => toggleFeed(x.name),
+          })),
+          { kind: "separator" as const },
+          { id: "manage", label: "Manage Feeds…", icon: "settings", run: onManage },
+        ]}
+      />
+    </>
+  );
+}
+
+function PackageRow({
+  row,
+  tickable = false,
+  ticked = false,
+  tickDisabled = false,
+}: {
+  row: Row;
+  tickable?: boolean;
+  ticked?: boolean;
+  tickDisabled?: boolean;
+}) {
   if (row.kind === "more")
     return (
       <div className={clsx(styles.row, styles.more)}>
@@ -244,6 +385,23 @@ function PackageRow({ row }: { row: Row }) {
   const issues = row.kind === "installed" || row.kind === "transitive" ? row.issues : undefined;
   return (
     <div className={styles.row}>
+      {row.kind === "installed" && (
+        <span
+          className={styles.tick}
+          // The list selects and activates rows on these; the box only ticks.
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {tickable && (
+            <Checkbox
+              aria-label={tx`Select ${id} for update`}
+              checked={ticked}
+              disabled={tickDisabled}
+              onChange={(on) => tickPackage(id, on)}
+            />
+          )}
+        </span>
+      )}
       <Icon name="package" size={16} className={styles.rowIcon} />
       <div className={styles.rowText}>
         <div className={styles.rowTitle}>

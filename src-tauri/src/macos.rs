@@ -424,3 +424,43 @@ fn grouped_window(app: &AppHandle, native: *mut AnyObject) -> Option<WebviewWind
     let grouped = app.state::<WindowsState>().groups.lock().group(window.label()).is_some();
     grouped.then_some(window)
 }
+
+/// File › Open… on macOS: one panel that takes a folder or a file (a solution, a project
+/// file, anything else), as `NSOpenPanel` can and the dialog plugin cannot. None when cancelled.
+pub async fn pick_open_target(
+    app: &AppHandle,
+    title: String,
+    directory: Option<std::path::PathBuf>,
+) -> IdeResult<Option<(std::path::PathBuf, bool)>> {
+    fn run(
+        mtm: MainThreadMarker,
+        title: &str,
+        directory: Option<&std::path::Path>,
+    ) -> Option<(std::path::PathBuf, bool)> {
+        use objc2_app_kit::{NSModalResponseOK, NSOpenPanel};
+        use objc2_foundation::{NSString, NSURL};
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        panel.setResolvesAliases(true);
+        panel.setMessage(Some(&NSString::from_str(title)));
+        if let Some(dir) = directory {
+            let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&dir.to_string_lossy()), true);
+            panel.setDirectoryURL(Some(&url));
+        }
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        let path = std::path::PathBuf::from(panel.URLs().firstObject()?.path()?.to_string());
+        let directory = path.is_dir();
+        Some((path, directory))
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let mtm = MainThreadMarker::new().expect("AppKit main thread");
+        let _ = tx.send(run(mtm, &title, directory.as_deref()));
+    })
+    .map_err(|e| IdeError::internal(e.to_string()))?;
+    rx.await.map_err(|e| IdeError::internal(e.to_string()))
+}

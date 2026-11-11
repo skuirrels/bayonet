@@ -63,6 +63,8 @@ async fn application_commands_work_in_restricted_projects_and_without_a_project(
         "plugin_set_market_url",
         "plugin_market_download",
         "plugin_preview_install",
+        "dialog_pick_open_target",
+        "dotnet_solution_folder",
     ] {
         assert!(ide_host::trust::restricted_command_allowed(command), "{command}");
         for window in ["main", "welcome"] {

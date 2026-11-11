@@ -253,6 +253,16 @@ describe("loose files (LightEdit)", () => {
     expect(dotnetChooseSolution).not.toHaveBeenCalled();
   });
 
+  it("opens a picked project file as its folder's project, with no solution chosen", async () => {
+    windowOpenProject.mockResolvedValue(ok({ kind: "opened", label: "project-1" }));
+    useProject.setState({ settings: { general: { openProjectIn: "new" } } } as never);
+    await openPaths(["/work/app/src/Api/Api.csproj"], async () => false);
+    expect(dotnetSolutionFolder).not.toHaveBeenCalled();
+    expect(windowOpenFiles).not.toHaveBeenCalled();
+    expect(lightEditOpen).not.toHaveBeenCalled();
+    expect(windowOpenProject).toHaveBeenCalledWith("/work/app/src/Api", false, [], null);
+  });
+
   it("classifies paths through the file system by default", async () => {
     fsReadDir.mockResolvedValueOnce({ status: "error", error: { kind: "notFound", message: "not a dir" } } as never);
     windowOpenFiles.mockResolvedValue(ok(["/x/a.txt"]));

@@ -8,6 +8,14 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
+	/**
+	 *  File › Open…: a folder or a file from one native panel (macOS). Elsewhere `Unavailable`:
+	 *  the caller asks which kind to pick instead. None when cancelled.
+	 */
+	dialogPickOpenTarget: (title: string, directory: string | null) => typedError<{
+	path: IpcPath,
+	directory: boolean,
+} | null, IdeError>(__TAURI_INVOKE("dialog_pick_open_target", { title, directory })),
 	/**  Devices `adb` knows about, online ones first. */
 	androidDevices: () => typedError<AndroidDevice[], IdeError>(__TAURI_INVOKE("android_devices")),
 	/**
@@ -1023,12 +1031,22 @@ export const commands = {
 	dotnetChooseSolution: (path: string) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_choose_solution", { path })),
 	/**  The solution at `path`: its folders, projects and solution items. */
 	dotnetSolution: (path: IpcPath) => typedError<Solution, IdeError>(__TAURI_INVOKE("dotnet_solution", { path })),
-	/**  Searches the package sources of the project's `nuget.config`. */
-	nugetSearch: (query: string, prerelease: boolean, skip: number, take: number) => typedError<PackageSearch, IdeError>(__TAURI_INVOKE("nuget_search", { query, prerelease, skip, take })),
+	/**  Searches the package sources of the project's `nuget.config` (`sources`: only those; none: all enabled). */
+	nugetSearch: (query: string, prerelease: boolean, skip: number, take: number, sources: string[]) => typedError<PackageSearch, IdeError>(__TAURI_INVOKE("nuget_search", { query, prerelease, skip, take, sources })),
 	/**  Every version of package `id`, newest first. */
-	nugetVersions: (id: string, prerelease: boolean) => typedError<string[], IdeError>(__TAURI_INVOKE("nuget_versions", { id, prerelease })),
+	nugetVersions: (id: string, prerelease: boolean, sources: string[]) => typedError<string[], IdeError>(__TAURI_INVOKE("nuget_versions", { id, prerelease, sources })),
 	/**  The packages of every project of the solution; `outdated` adds the latest versions. */
-	nugetInstalled: (outdated: boolean, prerelease: boolean) => typedError<InstalledPackages, IdeError>(__TAURI_INVOKE("nuget_installed", { outdated, prerelease })),
+	nugetInstalled: (outdated: boolean, prerelease: boolean, sources: string[]) => typedError<InstalledPackages, IdeError>(__TAURI_INVOKE("nuget_installed", { outdated, prerelease, sources })),
+	/**  The package sources in effect at the project root. */
+	nugetSources: () => typedError<PackageSource[], IdeError>(__TAURI_INVOKE("nuget_sources")),
+	/**  Adds a package source to the user-wide or the solution's `nuget.config`. */
+	nugetAddSource: (name: string, url: string, scope: SourceScope) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_add_source", { name, url, scope })),
+	/**  Points package source `name` at `url`. */
+	nugetUpdateSource: (name: string, url: string) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_update_source", { name, url })),
+	/**  Removes package source `name`. */
+	nugetRemoveSource: (name: string) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_remove_source", { name })),
+	/**  Enables or disables package source `name`. */
+	nugetEnableSource: (name: string, enabled: boolean) => typedError<null, IdeError>(__TAURI_INVOKE("nuget_enable_source", { name, enabled })),
 	/**  Vulnerable and deprecated packages of the solution's projects (NUG-4). */
 	nugetAudit: () => typedError<PackageAudit, IdeError>(__TAURI_INVOKE("nuget_audit")),
 	/**  Opens the way to a project's user secrets: its `secrets.json`, created if needed (PLT-4). */
@@ -6257,6 +6275,12 @@ export type OpenProject = {
 	current: boolean,
 };
 
+/**  What File › Open… picked: a path on this machine, and whether it is a folder. */
+export type OpenTarget = {
+	path: IpcPath,
+	directory: boolean,
+};
+
 /**  A node of a document outline (Structure tool window, breadcrumbs). */
 export type OutlineItem = {
 	name: string,
@@ -6302,6 +6326,15 @@ export type PackageSearch = {
 	sources: SourceResults[],
 	/**  Errors that are not one source's: a broken `nuget.config`, say. */
 	problems: string[],
+};
+
+/**  A package source of the `nuget.config` hierarchy, from `dotnet nuget list source`. */
+export type PackageSource = {
+	/**  Its key in `nuget.config`: `nuget.org`. */
+	name: string,
+	/**  Its URL or local folder. */
+	url: string,
+	enabled: boolean,
 };
 
 export type PackageSummary = {
@@ -8013,6 +8046,13 @@ export type SourceResults = {
 	/**  Why this source returned nothing: unreachable, unauthorised. */
 	problems: string[],
 };
+
+/**  Where a new package source is written. */
+export type SourceScope = 
+/**  The user-wide `NuGet.Config`, for every solution. */
+"user" | 
+/**  The `nuget.config` at the project root (created when there is none). */
+"solution";
 
 /**
  *  The Typo inspection's options (IDEA's "Process code / literals / comments");

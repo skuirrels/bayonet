@@ -20,6 +20,7 @@ import {
   useProject,
 } from "@/platform/project";
 import { connectRemote, isRemoteWindow } from "@/platform/remote";
+import { isSameOrInside } from "@/platform/paths";
 import { holdSplash } from "@/platform/splash";
 import { editorService, maybeEditorService, notifications } from "@/workbench/contributions";
 import { chooseProjectWindow } from "@/workbench/projectWindow";
@@ -120,14 +121,26 @@ const SOLUTION_FILE = /\.(?:slnx?|slnf)$/i;
 /** Whether `path` names a .NET solution (`.sln`, `.slnx`, `.slnf`), which opens as its folder's project. */
 const isSolutionPath = (path: string) => SOLUTION_FILE.test(path);
 
+const PROJECT_FILE = /\.(?:cs|fs|vb)proj$/i;
+
+/** Whether `path` names a .NET project file, which opens as its folder's project. */
+const isProjectFilePath = (path: string) => PROJECT_FILE.test(path);
+
+/** A solution or a project file: either opens its folder as the project. */
+const opensAsProject = (path: string) => isSolutionPath(path) || isProjectFilePath(path);
+
 /** A project to open: its folder and, when opened from a solution file in it, that solution. */
 interface Target {
   root: string;
   solution: string | null;
 }
 
-/** `path` as a project: a solution file is its folder with that solution; null when that failed (reported). */
+/**
+ * `path` as a project: a solution file is its folder with that solution, a project file its
+ * folder; null when that failed (reported).
+ */
 async function targetOf(path: string): Promise<Target | null> {
+  if (isProjectFilePath(path)) return { root: dirname(path), solution: null };
   if (!isSolutionPath(path)) return { root: path, solution: null };
   try {
     const root = await call(commands.dotnetSolutionFolder(path));
@@ -152,16 +165,16 @@ async function openTargetHere(target: Target, files: readonly string[]): Promise
 }
 
 /**
- * Opens dropped paths: files as loose files ({@link openFiles}), the first folder or solution
- * file as a project (like further folders, further solution files are left out).
+ * Opens dropped or picked paths: files as loose files ({@link openFiles}), the first folder,
+ * solution or project file as a project (like further folders, further ones are left out).
  */
 export async function openPaths(
   paths: readonly string[],
   isDir: (path: string) => Promise<boolean> = pathIsDir,
 ): Promise<void> {
   const kinds = await Promise.all(paths.map((p) => isDir(p).catch(() => false)));
-  const projects = paths.filter((p, i) => kinds[i] || isSolutionPath(p));
-  const files = paths.filter((p, i) => !kinds[i] && !isSolutionPath(p));
+  const projects = paths.filter((p, i) => kinds[i] || opensAsProject(p));
+  const files = paths.filter((p, i) => !kinds[i] && !opensAsProject(p));
   await openFiles(files);
   if (projects[0]) await openProjectWithPolicy(projects[0]);
 }
@@ -196,6 +209,10 @@ async function openTargetInWindow(target: Target, newWindow: boolean, files: rea
  */
 export async function openProjectWithPolicy(path: string, files: readonly string[] = []): Promise<void> {
   if (desktopOnly()) return;
+  // A project file of the open project is one of its files, as a solution in a subfolder is.
+  const open = useProject.getState().project;
+  if (isProjectFilePath(path) && open && !isRemoteWindow() && isSameOrInside(dirname(path), open.root))
+    return openInEditor([path, ...files]);
   const target = await targetOf(path);
   if (!target) return;
   const { root, solution } = target;
@@ -266,9 +283,9 @@ async function pickSolution(): Promise<string | null> {
   const picked = await open({
     directory: false,
     multiple: false,
-    title: tx`Open Solution`,
+    title: tx`Open Solution or Project`,
     defaultPath: defaultProjectDirectory(),
-    filters: [{ name: tx`.NET Solutions`, extensions: ["sln", "slnx", "slnf"] }],
+    filters: [{ name: tx`Solutions and Projects`, extensions: ["sln", "slnx", "slnf", "csproj", "fsproj", "vbproj"] }],
   });
   const path = Array.isArray(picked) ? picked[0] : picked;
   return path ?? null;
@@ -483,7 +500,7 @@ export function windowActions(): Action[] {
       title: "Open Solution…",
       category: t("app.category.file"),
       icon: "folder-open",
-      keywords: ["solution", "sln", "slnx", "slnf", "dotnet", ".net", "c#"],
+      keywords: ["solution", "sln", "slnx", "slnf", "csproj", "fsproj", "vbproj", "project", "dotnet", ".net", "c#"],
       run: async (c) => {
         if (desktopOnly()) return;
         const path = typeof c.arg === "string" ? c.arg : await pickSolution();
