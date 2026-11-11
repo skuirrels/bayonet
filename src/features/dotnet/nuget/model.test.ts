@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { InstalledPackages, PackageSearch } from "@/bindings";
+import type { InstalledPackages, PackageSearch, PackageSource } from "@/bindings";
 import {
+  chosenSources,
   compareVersions,
   formatDownloads,
   installedPackages,
@@ -9,6 +10,8 @@ import {
   projectsOf,
   searchProblems,
   searchRows,
+  updatesOf,
+  type InstalledPackage,
 } from "./model";
 
 const API = "/s/src/Fixture.Api/Fixture.Api.csproj";
@@ -206,5 +209,58 @@ describe("nuget model", () => {
     expect(formatDownloads(1196514395)).toBe("1.2B");
     expect(formatDownloads(950)).toBe("950");
     expect(formatDownloads(null)).toBe("");
+  });
+});
+
+describe("updatesOf", () => {
+  const use = (project: string, version: string, autoReferenced = false) => ({
+    project,
+    name: project,
+    version,
+    latest: null,
+    autoReferenced,
+    frameworks: ["net10.0"],
+  });
+  const pkg = (id: string, update: string | null, uses: InstalledPackage["uses"]): InstalledPackage => ({
+    id,
+    uses,
+    version: uses[0]?.version ?? "",
+    update,
+    implicit: false,
+  });
+
+  it("moves only the projects behind the newest version", () => {
+    expect(updatesOf([pkg("Humanizer", "3.0.10", [use(API, "2.14.1"), use(CORE, "3.0.10")])])).toEqual([
+      { id: "Humanizer", version: "3.0.10", projects: [API] },
+    ]);
+  });
+
+  it("leaves out packages with no update and SDK references", () => {
+    expect(
+      updatesOf([
+        pkg("Newtonsoft.Json", null, [use(API, "13.0.3")]),
+        pkg("NETStandard.Library", "2.0.4", [use(CORE, "2.0.3", true)]),
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe("chosenSources", () => {
+  const sources: PackageSource[] = [
+    { name: "nuget.org", url: "https://api.nuget.org/v3/index.json", enabled: true },
+    { name: "Team", url: "https://team/v3/index.json", enabled: true },
+    { name: "Old", url: "https://old/v3/index.json", enabled: false },
+  ];
+
+  it("searches every enabled source when none or all are chosen", () => {
+    expect(chosenSources(sources, null)).toEqual([]);
+    expect(chosenSources(sources, ["nuget.org", "Team"])).toEqual([]);
+    expect(chosenSources(null, ["Team"])).toEqual([]);
+  });
+
+  it("passes the chosen enabled sources by URL", () => {
+    expect(chosenSources(sources, ["Team"])).toEqual(["https://team/v3/index.json"]);
+    // A disabled source cannot be searched, so choosing only it searches them all.
+    expect(chosenSources(sources, ["Old"])).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@ use crate::rpc::Dispatcher;
 use ide_core::RequestId;
 use ide_core::{IdeError, IdeResult, IpcPath};
 use ide_dotnet::Solution;
-use ide_dotnet::nuget::{self, InstalledPackages, PackageAudit, PackageSearch};
+use ide_dotnet::nuget::{self, InstalledPackages, PackageAudit, PackageSearch, PackageSource, SourceScope};
 use ide_dotnet::templates::{self, ProjectTemplate, TemplateValue};
 use ide_dotnet::testing::{self, SessionRequest, TestApp, TestEvent, TestPhase, TestProject, TestSelection};
 use std::path::{Path, PathBuf};
@@ -73,7 +73,9 @@ pub fn dotnet_xaml_preview_update(request: RequestId, text: String) -> bool {
     ide_dotnet::avalonia::update(request.0.into(), text)
 }
 
-/// Searches the package sources of the project's `nuget.config` (`skip` / `take` page).
+/// Searches the package sources of the project's `nuget.config` (`skip` / `take` page);
+/// `sources` (URLs or names) limits it to those, none means every enabled one.
+#[allow(clippy::too_many_arguments)]
 pub async fn nuget_search(
     host: &Host,
     window: &str,
@@ -81,37 +83,116 @@ pub async fn nuget_search(
     prerelease: bool,
     skip: u32,
     take: u32,
+    sources: Vec<String>,
 ) -> IdeResult<PackageSearch> {
     let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
-        let out = nuget::run(dotnet.as_deref(), &env, &root, &nuget::search_args(&query, prerelease, skip, take))?;
-        nuget::parse_search(&out)
+        let args = nuget::search_args(&query, prerelease, skip, take, &sources);
+        nuget::parse_search(&nuget::run(dotnet.as_deref(), &env, &root, &args)?)
     })
     .await
 }
 
-/// Every version of package `id`, newest first.
-pub async fn nuget_versions(host: &Host, window: &str, id: String, prerelease: bool) -> IdeResult<Vec<String>> {
+/// Every version of package `id`, newest first, on `sources` (none: every enabled one).
+pub async fn nuget_versions(
+    host: &Host,
+    window: &str,
+    id: String,
+    prerelease: bool,
+    sources: Vec<String>,
+) -> IdeResult<Vec<String>> {
     let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
-        nuget::parse_versions(&nuget::run(dotnet.as_deref(), &env, &root, &nuget::versions_args(&id, prerelease))?)
+        let args = nuget::versions_args(&id, prerelease, &sources);
+        nuget::parse_versions(&nuget::run(dotnet.as_deref(), &env, &root, &args)?)
     })
     .await
 }
 
 /// The packages of every project of the solution at the root (else of the root's
-/// project); `outdated` asks the sources for the latest versions too.
+/// project); `outdated` asks the sources (`sources`, else every enabled one) for the latest versions too.
 pub async fn nuget_installed(
     host: &Host,
     window: &str,
     outdated: bool,
     prerelease: bool,
+    sources: Vec<String>,
 ) -> IdeResult<InstalledPackages> {
     let (root, dotnet, env) = dotnet_of(host, window)?;
     host.blocking(move || {
         let target = ide_dotnet::find(&root).into_iter().next().unwrap_or_else(|| root.clone());
-        let out = nuget::run(dotnet.as_deref(), &env, &root, &nuget::list_args(&target, outdated, prerelease))?;
-        Ok(nuget::with_central_packages(nuget::parse_list(&out)?))
+        let args = nuget::list_args(&target, outdated, prerelease, &sources);
+        Ok(nuget::with_central_packages(nuget::parse_list(&nuget::run(dotnet.as_deref(), &env, &root, &args)?)?))
+    })
+    .await
+}
+
+/// The package sources in effect at the project root (its `nuget.config` hierarchy).
+pub async fn nuget_sources(host: &Host, window: &str) -> IdeResult<Vec<PackageSource>> {
+    let (root, dotnet, env) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        Ok(nuget::parse_sources(&nuget::run(dotnet.as_deref(), &env, &root, &nuget::list_sources_args())?))
+    })
+    .await
+}
+
+/// Adds package source `url` as `name`, to the user-wide config or the root's `nuget.config`.
+pub async fn nuget_add_source(
+    host: &Host,
+    window: &str,
+    name: String,
+    url: String,
+    scope: SourceScope,
+) -> IdeResult<()> {
+    let (root, dotnet, env) = dotnet_of(host, window)?;
+    if name.trim().is_empty() || url.trim().is_empty() {
+        return Err(IdeError::invalid("enter a name and a URL or folder"));
+    }
+    host.blocking(move || {
+        let config = match scope {
+            SourceScope::User => nuget::user_config().ok_or_else(|| IdeError::not_found("no user NuGet.Config"))?,
+            SourceScope::Solution => nuget::solution_config(&root),
+        };
+        if !config.exists() {
+            if let Some(dir) = config.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| IdeError::new(ide_core::error::ErrorKind::Io, format!("{}: {e}", dir.display())))?;
+            }
+            std::fs::write(&config, nuget::EMPTY_CONFIG)
+                .map_err(|e| IdeError::new(ide_core::error::ErrorKind::Io, format!("{}: {e}", config.display())))?;
+        }
+        nuget::run(dotnet.as_deref(), &env, &root, &nuget::add_source_args(&name, &url, &config)).map(|_| ())
+    })
+    .await
+}
+
+/// Points package source `name` at `url`.
+pub async fn nuget_update_source(host: &Host, window: &str, name: String, url: String) -> IdeResult<()> {
+    let (root, dotnet, env) = dotnet_of(host, window)?;
+    if url.trim().is_empty() {
+        return Err(IdeError::invalid("enter a URL or folder"));
+    }
+    host.blocking(move || {
+        nuget::run(dotnet.as_deref(), &env, &root, &nuget::update_source_args(&name, &url)).map(|_| ())
+    })
+    .await
+}
+
+/// Removes package source `name` from the config files that define it.
+pub async fn nuget_remove_source(host: &Host, window: &str, name: String) -> IdeResult<()> {
+    let (root, dotnet, env) = dotnet_of(host, window)?;
+    host.blocking(move || {
+        nuget::run(dotnet.as_deref(), &env, &root, &nuget::source_command_args("remove", &name)).map(|_| ())
+    })
+    .await
+}
+
+/// Enables or disables package source `name`.
+pub async fn nuget_enable_source(host: &Host, window: &str, name: String, enabled: bool) -> IdeResult<()> {
+    let (root, dotnet, env) = dotnet_of(host, window)?;
+    let verb = if enabled { "enable" } else { "disable" };
+    host.blocking(move || {
+        nuget::run(dotnet.as_deref(), &env, &root, &nuget::source_command_args(verb, &name)).map(|_| ())
     })
     .await
 }
@@ -1021,14 +1102,28 @@ pub(crate) fn register(d: &mut Dispatcher) {
         .await
     });
     d.add("nuget_search", |c| async move {
-        nuget_search(&c.host, &c.window, c.arg("query")?, c.arg("prerelease")?, c.arg("skip")?, c.arg("take")?).await
+        let sources = c.arg::<Option<Vec<String>>>("sources")?.unwrap_or_default();
+        nuget_search(&c.host, &c.window, c.arg("query")?, c.arg("prerelease")?, c.arg("skip")?, c.arg("take")?, sources)
+            .await
     });
-    d.add(
-        "nuget_versions",
-        |c| async move { nuget_versions(&c.host, &c.window, c.arg("id")?, c.arg("prerelease")?).await },
-    );
+    d.add("nuget_versions", |c| async move {
+        let sources = c.arg::<Option<Vec<String>>>("sources")?.unwrap_or_default();
+        nuget_versions(&c.host, &c.window, c.arg("id")?, c.arg("prerelease")?, sources).await
+    });
     d.add("nuget_installed", |c| async move {
-        nuget_installed(&c.host, &c.window, c.arg("outdated")?, c.arg("prerelease")?).await
+        let sources = c.arg::<Option<Vec<String>>>("sources")?.unwrap_or_default();
+        nuget_installed(&c.host, &c.window, c.arg("outdated")?, c.arg("prerelease")?, sources).await
+    });
+    d.add("nuget_sources", |c| async move { nuget_sources(&c.host, &c.window).await });
+    d.add("nuget_add_source", |c| async move {
+        nuget_add_source(&c.host, &c.window, c.arg("name")?, c.arg("url")?, c.arg("scope")?).await
+    });
+    d.add("nuget_update_source", |c| async move {
+        nuget_update_source(&c.host, &c.window, c.arg("name")?, c.arg("url")?).await
+    });
+    d.add("nuget_remove_source", |c| async move { nuget_remove_source(&c.host, &c.window, c.arg("name")?).await });
+    d.add("nuget_enable_source", |c| async move {
+        nuget_enable_source(&c.host, &c.window, c.arg("name")?, c.arg("enabled")?).await
     });
     d.add("dotnet_publish_profiles", |c| async move {
         dotnet_publish_profiles(&c.host, &c.window, c.arg("project")?).await

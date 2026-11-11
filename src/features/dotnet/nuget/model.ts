@@ -1,5 +1,5 @@
 /** NuGet tool window model: installed packages across projects, versions, search rows. */
-import type { InstalledPackages, PackageSearch, PackageSummary } from "@/bindings";
+import type { InstalledPackages, PackageSearch, PackageSource, PackageSummary } from "@/bindings";
 
 /** One project's reference to a package, over all its target frameworks. */
 export interface ProjectUse {
@@ -183,4 +183,36 @@ export function projectAction(use: ProjectUse | undefined, version: string | nul
   if (!version || use.autoReferenced) return "none";
   const d = compareVersions(version, use.version);
   return d > 0 ? "update" : d < 0 ? "downgrade" : "none";
+}
+
+/** One package's move to its newest version: the projects that use an older one. */
+export interface PackageUpdate {
+  id: string;
+  version: string;
+  projects: string[];
+}
+
+/** What Update All / Update Selected runs for `packages`: those with an update, in projects that can take it. */
+export function updatesOf(packages: readonly InstalledPackage[]): PackageUpdate[] {
+  const out: PackageUpdate[] = [];
+  for (const p of packages) {
+    const version = p.update;
+    if (!version) continue;
+    const projects = p.uses
+      .filter((u) => !u.autoReferenced && compareVersions(version, u.version) > 0)
+      .map((u) => u.project);
+    if (projects.length) out.push({ id: p.id, version, projects });
+  }
+  return out;
+}
+
+/**
+ * The `--source` URLs for the feeds chosen by name: none (every enabled source) when
+ * nothing is chosen or every enabled source is.
+ */
+export function chosenSources(sources: readonly PackageSource[] | null, feeds: readonly string[] | null): string[] {
+  if (!sources || !feeds) return [];
+  const enabled = sources.filter((s) => s.enabled);
+  const chosen = enabled.filter((s) => feeds.includes(s.name));
+  return chosen.length === 0 || chosen.length === enabled.length ? [] : chosen.map((s) => s.url);
 }

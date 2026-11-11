@@ -83,8 +83,16 @@ pub struct InstalledPackage {
     pub auto_referenced: bool,
 }
 
+/// `--source <s>` for each of `sources`; none means every enabled source of `nuget.config`.
+fn source_args(args: &mut Vec<String>, sources: &[String]) {
+    for s in sources.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        args.extend(["--source".into(), s.into()]);
+    }
+}
+
 /// `dotnet package search <query>` with descriptions; `skip` / `take` page through results.
-pub fn search_args(query: &str, prerelease: bool, skip: u32, take: u32) -> Vec<String> {
+/// `sources` limits it to those package sources (URLs or names).
+pub fn search_args(query: &str, prerelease: bool, skip: u32, take: u32, sources: &[String]) -> Vec<String> {
     let mut args = vec!["package".into(), "search".into()];
     if !query.trim().is_empty() {
         args.push(query.trim().into());
@@ -94,20 +102,23 @@ pub fn search_args(query: &str, prerelease: bool, skip: u32, take: u32) -> Vec<S
     if prerelease {
         args.push("--prerelease".into());
     }
+    source_args(&mut args, sources);
     args
 }
 
-/// Every version of package `id` on the sources.
-pub fn versions_args(id: &str, prerelease: bool) -> Vec<String> {
+/// Every version of package `id` on the sources (all of them, else `sources`).
+pub fn versions_args(id: &str, prerelease: bool, sources: &[String]) -> Vec<String> {
     let mut args: Vec<String> = ["package", "search", id, "--exact-match", "--format", "json"].map(String::from).into();
     if prerelease {
         args.push("--prerelease".into());
     }
+    source_args(&mut args, sources);
     args
 }
 
-/// `dotnet package list` of a project or a whole solution; `outdated` adds the latest versions (and needs the network).
-pub fn list_args(target: &Path, outdated: bool, prerelease: bool) -> Vec<String> {
+/// `dotnet package list` of a project or a whole solution; `outdated` adds the latest versions
+/// (and needs the network), from `sources` when there are any.
+pub fn list_args(target: &Path, outdated: bool, prerelease: bool, sources: &[String]) -> Vec<String> {
     let mut args = vec!["package".into(), "list".into(), "--project".into(), path_arg(target)];
     args.extend(["--format".into(), "json".into()]);
     if outdated {
@@ -115,9 +126,122 @@ pub fn list_args(target: &Path, outdated: bool, prerelease: bool) -> Vec<String>
         if prerelease {
             args.push("--include-prerelease".into());
         }
+        source_args(&mut args, sources);
     }
     args
 }
+
+/// A package source of the `nuget.config` hierarchy, from `dotnet nuget list source`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageSource {
+    /// Its key in `nuget.config`: `nuget.org`.
+    pub name: String,
+    /// Its URL or local folder.
+    pub url: String,
+    pub enabled: bool,
+}
+
+/// Where a new package source is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceScope {
+    /// The user-wide `NuGet.Config`, for every solution.
+    User,
+    /// The `nuget.config` at the project root (created when there is none).
+    Solution,
+}
+
+/// The package sources in effect at the working directory, in priority order.
+pub fn list_sources_args() -> Vec<String> {
+    ["nuget", "list", "source", "--format", "Detailed"].map(String::from).into()
+}
+
+/// Adds source `url` as `name` to `config`. Options come first and `--` ends them, so a
+/// value starting with `-` is not read as an option.
+pub fn add_source_args(name: &str, url: &str, config: &Path) -> Vec<String> {
+    vec![
+        "nuget".into(),
+        "add".into(),
+        "source".into(),
+        "--name".into(),
+        name.trim().into(),
+        "--configfile".into(),
+        path_arg(config),
+        "--".into(),
+        url.trim().into(),
+    ]
+}
+
+/// Points source `name` at `url`, in the file that defines it.
+pub fn update_source_args(name: &str, url: &str) -> Vec<String> {
+    ["nuget", "update", "source", "--source", url.trim(), "--", name].map(String::from).into()
+}
+
+/// `dotnet nuget remove|enable|disable source -- <name>`.
+pub fn source_command_args(verb: &str, name: &str) -> Vec<String> {
+    ["nuget", verb, "source", "--", name].map(String::from).into()
+}
+
+/// The text of `dotnet nuget list source --format Detailed`:
+///
+/// ```text
+/// Registered Sources:
+///   1.  nuget.org [Enabled]
+///       https://api.nuget.org/v3/index.json
+/// ```
+pub fn parse_sources(text: &str) -> Vec<PackageSource> {
+    let mut out: Vec<PackageSource> = Vec::new();
+    let mut pending: Option<PackageSource> = None;
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if let Some(head) = source_head(line) {
+            out.extend(pending.take());
+            pending = Some(head);
+        } else if let Some(mut p) = pending.take() {
+            p.url = line.to_owned();
+            out.push(p);
+        }
+    }
+    out.extend(pending);
+    out
+}
+
+/// `1.  nuget.org [Enabled]` → that source, its URL still to come.
+fn source_head(line: &str) -> Option<PackageSource> {
+    let (number, rest) = line.split_once('.')?;
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let rest = rest.trim();
+    let open = rest.rfind(" [")?;
+    let state = rest[open + 2..].strip_suffix(']')?;
+    let enabled = match state {
+        s if s.eq_ignore_ascii_case("enabled") => true,
+        s if s.eq_ignore_ascii_case("disabled") => false,
+        _ => return None,
+    };
+    Some(PackageSource { name: rest[..open].trim().to_owned(), url: String::new(), enabled })
+}
+
+/// The user-wide `NuGet.Config`: `%APPDATA%\NuGet\NuGet.Config`, else `~/.nuget/NuGet/NuGet.Config`.
+pub fn user_config() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("NuGet").join("NuGet.Config"));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".nuget").join("NuGet").join("NuGet.Config"))
+}
+
+/// The `nuget.config` at `root` (any casing NuGet reads), else where a new one goes.
+pub fn solution_config(root: &Path) -> PathBuf {
+    ["nuget.config", "NuGet.config", "NuGet.Config"]
+        .iter()
+        .map(|n| root.join(n))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| root.join("nuget.config"))
+}
+
+/// An empty `nuget.config`: no `<clear />`, so the user's sources still apply.
+pub const EMPTY_CONFIG: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<configuration>\n  <packageSources>\n  </packageSources>\n</configuration>\n";
 
 /// Installs package `id` (at `version`, else the latest stable) into `project`, or
 /// moves it to `version` when it is there already.
@@ -556,7 +680,7 @@ mod tests {
             Some(Path::new("/sdk/dotnet")),
             &BTreeMap::new(),
             Path::new("/s"),
-            &list_args(Path::new("/s/S.slnx"), false, false),
+            &list_args(Path::new("/s/S.slnx"), false, false, &[]),
         );
         let env: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned))).collect();
         assert!(env.contains(&("MSBUILDDISABLENODEREUSE".into(), Some("1".into()))));
@@ -627,13 +751,66 @@ mod tests {
             ["package", "remove", "Humanizer", "--project", "/s/src/Api/Api.csproj"]
         );
         assert_eq!(
-            list_args(Path::new("/s/S.slnx"), true, true),
+            list_args(Path::new("/s/S.slnx"), true, true, &[]),
             ["package", "list", "--project", "/s/S.slnx", "--format", "json", "--outdated", "--include-prerelease"]
         );
-        let s = search_args(" json ", true, 20, 20);
+        let s = search_args(" json ", true, 20, 20, &[]);
         assert_eq!(&s[..3], ["package", "search", "json"]);
         assert!(s.contains(&"--prerelease".to_owned()) && s.contains(&"detailed".to_owned()));
-        assert!(!search_args("", false, 0, 20).contains(&"".to_owned()));
+        assert!(!search_args("", false, 0, 20, &[]).contains(&"".to_owned()));
+    }
+
+    #[test]
+    fn chosen_sources_limit_search_versions_and_updates() {
+        let feeds = ["https://a/v3/index.json".to_owned(), " ".to_owned(), "b".to_owned()];
+        let s = search_args("x", false, 0, 20, &feeds);
+        assert_eq!(&s[s.len() - 4..], ["--source", "https://a/v3/index.json", "--source", "b"]);
+        let v = versions_args("X", false, &feeds);
+        assert_eq!(v.iter().filter(|a| *a == "--source").count(), 2);
+        // `--source` needs `--outdated`: a plain listing never gets it.
+        assert!(!list_args(Path::new("/s/S.slnx"), false, false, &feeds).contains(&"--source".to_owned()));
+        assert!(list_args(Path::new("/s/S.slnx"), true, false, &feeds).contains(&"--source".to_owned()));
+    }
+
+    #[test]
+    fn sources_of_a_detailed_listing() {
+        let text = "Registered Sources:\n  1.  nuget.org [Enabled]\n      https://api.nuget.org/v3/index.json\n  2.  Local [1.0] feed [Disabled]\n      /Users/me/feed\n";
+        assert_eq!(
+            parse_sources(text),
+            [
+                PackageSource {
+                    name: "nuget.org".into(),
+                    url: "https://api.nuget.org/v3/index.json".into(),
+                    enabled: true
+                },
+                PackageSource { name: "Local [1.0] feed".into(), url: "/Users/me/feed".into(), enabled: false },
+            ]
+        );
+        assert!(parse_sources("No sources found.\n").is_empty());
+    }
+
+    #[test]
+    fn source_command_lines() {
+        assert_eq!(
+            add_source_args(" Team ", " https://t/v3/index.json ", Path::new("/s/nuget.config")),
+            [
+                "nuget",
+                "add",
+                "source",
+                "--name",
+                "Team",
+                "--configfile",
+                "/s/nuget.config",
+                "--",
+                "https://t/v3/index.json"
+            ]
+        );
+        // A name or URL starting with `-` comes after `--`, so it is never read as an option.
+        assert_eq!(
+            update_source_args("-team", "https://u"),
+            ["nuget", "update", "source", "--source", "https://u", "--", "-team"]
+        );
+        assert_eq!(source_command_args("disable", "-team"), ["nuget", "disable", "source", "--", "-team"]);
     }
 
     #[test]
@@ -751,8 +928,8 @@ mod tests {
     #[ignore]
     fn lists_the_fixture_solution() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/dotnet").canonicalize().unwrap();
-        let out =
-            run(None, &BTreeMap::new(), &root, &list_args(&root.join("DotnetFixture.slnx"), false, false)).unwrap();
+        let out = run(None, &BTreeMap::new(), &root, &list_args(&root.join("DotnetFixture.slnx"), false, false, &[]))
+            .unwrap();
         let l = parse_list(&out).unwrap();
         let ids: Vec<&str> =
             l.projects.iter().flat_map(|p| &p.frameworks).flat_map(|f| &f.packages).map(|p| p.id.as_str()).collect();

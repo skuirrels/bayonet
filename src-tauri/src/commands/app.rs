@@ -21,6 +21,35 @@ pub struct AppInfo {
 
 pub use ide_host::ops::project::ProjectInfo;
 
+/// What File › Open… picked: a path on this machine, and whether it is a folder.
+#[derive(Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTarget {
+    pub path: ide_core::IpcPath,
+    pub directory: bool,
+}
+
+/// File › Open…: a folder or a file from one native panel (macOS). Elsewhere `Unavailable`:
+/// the caller asks which kind to pick instead. None when cancelled.
+#[tauri::command]
+#[specta::specta]
+pub async fn dialog_pick_open_target(
+    app: tauri::AppHandle,
+    title: String,
+    directory: Option<PathBuf>,
+) -> IdeResult<Option<OpenTarget>> {
+    #[cfg(target_os = "macos")]
+    {
+        let picked = crate::macos::pick_open_target(&app, title, directory).await?;
+        Ok(picked.map(|(path, directory)| OpenTarget { path: path.into(), directory }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, title, directory);
+        Err(IdeError::unavailable("no combined file and folder picker on this platform"))
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn app_info(state: State<'_, AppState>) -> AppInfo {

@@ -195,6 +195,8 @@ pub fn restricted_command_allowed(cmd: &str) -> bool {
     matches!(
         cmd,
         "app_info"
+            | "dialog_pick_open_target"
+            | "dotnet_solution_folder"
             | "app_build_info"
             | "app_log_location"
             | "app_check_update"
