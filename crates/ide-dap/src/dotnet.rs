@@ -275,7 +275,10 @@ mod tests {
         let props = RunProperties { run_working_directory: "data".into(), run_arguments: "--x".into(), ..props };
         let mut args = json!({ "args": ["--own"] });
         apply(&mut args, project, &props, None).unwrap();
-        assert_eq!((args["args"].clone(), args["cwd"].clone()), (json!(["--own"]), json!("/p/App/data")));
+        assert_eq!(
+            (args["args"].clone(), args["cwd"].clone()),
+            (json!(["--own"]), json!(Path::new("/p/App").join("data")))
+        );
         let mut none = json!({});
         apply(&mut none, project, &props, None).unwrap();
         assert_eq!(none["args"], json!(["--x"]));

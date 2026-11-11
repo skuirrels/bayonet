@@ -155,18 +155,23 @@ Build FAILED.
     2 Error(s)
 ";
 
+    /// `/s` as an absolute path on this platform: only absolute paths name a project.
+    fn rooted(s: &str) -> String {
+        if cfg!(windows) { s.replace("/s/", "C:/s/") } else { s.to_owned() }
+    }
+
     #[test]
     fn parses_nuget_and_msbuild_messages_once() {
-        let messages = parse_output(OUTPUT);
+        let messages = parse_output(&rooted(OUTPUT));
         let summary: Vec<_> =
             messages.iter().map(|m| (m.severity, m.code.as_deref(), m.project.clone().map(PathBuf::from))).collect();
         assert_eq!(
             summary,
             [
-                (RestoreSeverity::Error, Some("NU1301"), Some(PathBuf::from("/s/App/App.csproj"))),
-                (RestoreSeverity::Warning, Some("NU1603"), Some(PathBuf::from("/s/App/App.csproj"))),
+                (RestoreSeverity::Error, Some("NU1301"), Some(PathBuf::from(rooted("/s/App/App.csproj")))),
+                (RestoreSeverity::Warning, Some("NU1603"), Some(PathBuf::from(rooted("/s/App/App.csproj")))),
                 // From an SDK targets file: about the solution in brackets.
-                (RestoreSeverity::Error, Some("MSB3202"), Some(PathBuf::from("/s/App.slnx"))),
+                (RestoreSeverity::Error, Some("MSB3202"), Some(PathBuf::from(rooted("/s/App.slnx")))),
             ]
         );
         assert_eq!(messages[0].text, "Unable to load the service index for source https://feed.example/v3/index.json.");
