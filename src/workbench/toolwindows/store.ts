@@ -223,7 +223,7 @@ function persist() {
     distractionFreeStash,
   } = useToolWindowLayout.getState();
   // Distraction Free Mode is not saved: the layout to restore is.
-  const visible = distractionFreeStash ?? current;
+  const visible = withoutSessionWindows(distractionFreeStash ?? current);
   try {
     localStorage.setItem(
       storageKey(scope),
@@ -305,6 +305,17 @@ function sanitizeVisible(raw: unknown): SlotRecord {
   return out;
 }
 
+/** `visible` without the windows whose content doesn't outlive the project window (Run, Debug). */
+function withoutSessionWindows(visible: SlotRecord): SlotRecord {
+  const windows = useContributions.getState().toolWindows;
+  const out = { ...visible };
+  for (const slot of SLOTS) {
+    const id = out[slot];
+    if (id && windows.get(id)?.sessionContent) out[slot] = null;
+  }
+  return out;
+}
+
 /**
  * Moves visible windows recorded in an area they don't dock in (a layout
  * saved before a window became split, or before split areas existed) to
@@ -331,7 +342,7 @@ export function loadToolWindowLayout(scope: string) {
   const saved = readStorage(scope);
   const version = typeof saved?.v === "number" ? saved.v : 1;
   const placements = sanitizePlacements(saved?.placements, version);
-  let visible = sanitizeVisible(saved?.visible);
+  let visible = withoutSessionWindows(sanitizeVisible(saved?.visible));
   visible = reconcile(visible, placements) ?? visible;
   useToolWindowLayout.setState({
     ...initial(),
