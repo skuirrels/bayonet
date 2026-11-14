@@ -270,9 +270,10 @@ mod tests {
         let line = cmd.command;
         assert!(line.starts_with("/usr/local/share/dotnet/dotnet publish \""), "{line}");
         assert!(
-            line.contains(
-                "My Web/Web.csproj\" -c Release -t:PublishContainer -p:ContainerRepository=web -p:ContainerImageTag=dev"
-            ),
+            line.contains(&format!(
+                "{}\" -c Release -t:PublishContainer -p:ContainerRepository=web -p:ContainerImageTag=dev",
+                project.display()
+            )),
             "{line}"
         );
         assert!(line.ends_with("&& docker run --rm -i -p 5123:8080 web:dev"), "{line}");
