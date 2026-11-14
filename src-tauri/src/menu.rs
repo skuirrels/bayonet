@@ -748,6 +748,9 @@ pub fn spec(os: Os) -> Vec<Entry> {
             "toolWindowLayouts",
             "Tool Window Layouts",
             vec![
+                act("layout.saveCurrent", "Save Changes in Current Layout"),
+                act("layout.restoreCurrent", "Restore Current Layout"),
+                SEP,
                 act("layout.save", "Save Current Layout as…"),
                 act("layout.restoreDefault", "Restore Default Layout"),
                 SEP,
@@ -1952,6 +1955,8 @@ mod tests {
                 "view.quickSwitchScheme",
                 "code.cleanup",
                 "runAnything.show",
+                "layout.saveCurrent",
+                "layout.restoreCurrent",
                 "layout.save",
                 "layout.restoreDefault",
                 "layout.rename",
