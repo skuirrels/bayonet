@@ -292,10 +292,14 @@ pub async fn lsp_goto_implementation(
 }
 
 /// Contents of a read-only language-server document, including JDT library
-/// classes and disk class files. Cached per project.
+/// classes and disk class files. Cached per project. Git revisions and IL
+/// disassembly (`dotnet-il:`) are read-only documents of the same kind.
 pub async fn lsp_virtual_document(host: &Host, window: &str, uri: String) -> IdeResult<VirtualDocument> {
     if uri.starts_with("git-revision:") {
         return crate::ops::vcs::revision_virtual_document(host, window, &uri).await;
+    }
+    if uri.starts_with(crate::ops::il::SCHEME) {
+        return crate::ops::il::il_virtual_document(host, &uri).await;
     }
     host.project(window)?.lsp.virtual_document(&uri).await
 }
@@ -582,9 +586,13 @@ pub async fn lsp_rename(
 ) -> IdeResult<Renamed> {
     let project = host.project(window)?;
     let documents = project.documents.clone();
-    let version = blocking(move || documents.version(doc)).await?;
+    let (version, old_name) = blocking(move || {
+        let snapshot = documents.text_snapshot(doc)?;
+        Ok((snapshot.version, super::type_file::identifier_at(&snapshot.text, pos)))
+    })
+    .await?;
     let cancel = host.begin_request(request);
-    let result = project.lsp.rename(doc, pos, new_name, cancel).await;
+    let result = project.lsp.rename(doc, pos, new_name.clone(), cancel).await;
     host.end_request(request);
     let mut renamed = result?;
     blocking(move || {
@@ -595,6 +603,14 @@ pub async fn lsp_rename(
             ));
         }
         project.documents.prepare_workspace_edit(&mut renamed.edit)?;
+        // A C# type takes the file named after it along; the server's edit has no file operation.
+        let read =
+            |path: &std::path::Path| project.documents.text_of(path).or_else(|| std::fs::read_to_string(path).ok());
+        if let Some(old_name) = old_name
+            && let Some(file) = super::type_file::file_rename(&renamed.edit, &old_name, &new_name, read)
+        {
+            renamed.edit.files.push(file);
+        }
         Ok(renamed)
     })
     .await

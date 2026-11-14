@@ -18,6 +18,7 @@ import {
   ruleFires,
   shortMethod,
   type TriggerRule,
+  retainedByName,
 } from "./model";
 
 const sample = (name: string, time: number, value: number, over: Partial<MetricSample> = {}): MetricSample => ({
@@ -205,4 +206,25 @@ it("puts the project's processes first and tooling last", () => {
   expect(processGroup({ name: "dotnet", commandLine: "dotnet /sdk/Roslyn/bincore/VBCSCompiler.dll" }, root)).toBe(
     "tooling",
   );
+});
+
+describe("retainedByName", () => {
+  it("joins retained sizes onto report rows by type name", () => {
+    const byName = retainedByName({
+      totalBytes: 100,
+      objects: 3,
+      types: [
+        { name: "Leak.Holder", retainedBytes: 90, paths: [] },
+        {
+          name: "System.String",
+          retainedBytes: 10,
+          paths: [{ count: 2, retainedBytes: 10, frames: ["[static vars]", "Leak.Holder", "System.String"] }],
+        },
+      ],
+    });
+    expect(byName.get("Leak.Holder")?.retainedBytes).toBe(90);
+    expect(byName.get("System.String")?.paths[0]?.count).toBe(2);
+    expect(byName.has("Leak.Payload")).toBe(false);
+    expect(retainedByName(null).size).toBe(0);
+  });
 });

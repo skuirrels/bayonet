@@ -142,6 +142,28 @@ pub fn require(tool: DiagTool) -> IdeResult<PathBuf> {
     })
 }
 
+/// `dotnet-gcdump.dll` of the global tool whose executable is `exe` (the newest version in
+/// the tool store beside it): the only reader of the `.gcdump` object graph.
+pub fn gcdump_library(exe: &Path) -> Option<PathBuf> {
+    let store = exe.parent()?.join(".store").join("dotnet-gcdump");
+    let numbers = |name: &str| name.split(['.', '-']).map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let mut versions: Vec<String> = std::fs::read_dir(&store)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    versions.sort_by_key(|v| numbers(v));
+    versions.iter().rev().find_map(|version| {
+        let tools = store.join(version).join("dotnet-gcdump").join(version).join("tools");
+        std::fs::read_dir(tools)
+            .ok()?
+            .flatten()
+            .map(|framework| framework.path().join("any").join("dotnet-gcdump.dll"))
+            .find(|dll| dll.is_file())
+    })
+}
+
 // ---------------------------------------------------------------- dotnet-stack
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
@@ -964,6 +986,21 @@ mod tests {
             trace.duration_ms,
             trace.root.children.iter().take(3).map(|c| (&c.name, c.total_ms)).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn finds_the_newest_gcdump_library_in_the_tool_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("dotnet-gcdump");
+        assert_eq!(gcdump_library(&exe), None);
+        for version in ["9.0.553101", "10.0.750501"] {
+            let any = dir.path().join(".store/dotnet-gcdump").join(version).join("dotnet-gcdump").join(version);
+            let any = any.join("tools/net8.0/any");
+            std::fs::create_dir_all(&any).unwrap();
+            std::fs::write(any.join("dotnet-gcdump.dll"), "").unwrap();
+        }
+        let found = gcdump_library(&exe).unwrap();
+        assert!(found.to_string_lossy().replace('\\', "/").contains("/10.0.750501/tools/net8.0/any/"), "{found:?}");
     }
 
     #[test]

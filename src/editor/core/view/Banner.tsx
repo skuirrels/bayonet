@@ -47,7 +47,9 @@ export function VirtualBanner({
       ? path.startsWith("csharp:")
         ? tx("Decompiled assembly (read-only).")
         : tx("Decompiled .class file: sources are not available.")
-      : tx("Library source (read-only).");
+      : path.startsWith("dotnet-il:")
+        ? tx("IL disassembly (read-only).")
+        : tx("Library source (read-only).");
   const reason = generated ? null : classFileBreakpointReason(path);
   return (
     <div className={`${styles.banner} ${styles.libraryBanner}`} role="status">

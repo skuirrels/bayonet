@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { evaluate } from "./report.ts";
-import { frameSummary, keySummary, percentile, totalBlockingTime } from "./stats.ts";
+import { frameSummary, keySummary, percentile, pooledP99, totalBlockingTime } from "./stats.ts";
 
 describe("stats", () => {
   it("nearest-rank percentiles", () => {
@@ -19,6 +19,13 @@ describe("stats", () => {
     const s = keySummary([3, 10, 16, 20, 40], 16.7);
     expect(s.missedFramePct).toBe(40);
     expect(s.maxMs).toBe(40);
+  });
+
+  it("pools the runs before taking the 99th percentile", () => {
+    const run = (...slow: number[]) => ({ p99Ms: [...Array<number>(98).fill(10), ...slow] });
+    // 300 samples: the 99th percentile is the 297th, the fourth highest, not a run's maximum.
+    expect(pooledP99([run(40, 45), run(30, 35), run(20, 25)]).p99Ms).toBe(30);
+    expect(pooledP99([])).toEqual({});
   });
 
   it("total blocking time only counts the part above 50 ms", () => {

@@ -5,6 +5,7 @@ import {
   backingArray,
   buildGrid,
   elementsOf,
+  hashedEntries,
   isElementName,
   loadGrid,
   rangeSize,
@@ -82,6 +83,61 @@ describe("collection visualiser (DBG-6)", () => {
     expect(grid.columns).toEqual(["Value", "name"]);
     expect(grid.rows[2]?.cells.get("Value")?.value).toBe("7");
     expect(fetch.calls).not.toContain(99);
+  });
+
+  // Field names as netcoredbg 3.2 shows them for Dictionary<string, int> after `Remove("b")`.
+  const dictionary = () =>
+    adapter({
+      1: [
+        v("_buckets", "{int[3]}", 9),
+        v("_entries", "{Entry[3]}", 2),
+        v("_count", "3"),
+        v("_freeList", "1"),
+        v("_freeCount", "1"),
+        v("Count", "2"),
+      ],
+      2: [v("[0]", "{Entry}", 20), v("[1]", "{Entry}", 21), v("[2]", "{Entry}", 22)],
+      20: [v("hashCode", "972181027"), v("next", "-1"), v("key", '"a"'), v("value", "1")],
+      21: [v("hashCode", "3701064382"), v("next", "-2"), v("key", "null"), v("value", "2")],
+      22: [v("hashCode", "2134980441"), v("next", "-1"), v("key", '"c"'), v("value", "{Order}", 30)],
+      30: [v("Total", "40")],
+    });
+
+  it("shows a dictionary's live entries as Key and Value columns", async () => {
+    const fetch = dictionary();
+    const grid = await loadGrid(fetch, 1);
+    expect(grid.columns).toEqual(["Key", "Value"]);
+    expect(grid.rows.map((r) => [r.index, r.cells.get("Key")?.value, r.cells.get("Value")?.value])).toEqual([
+      ["[0]", '"a"', "1"],
+      ["[1]", '"c"', "{Order}"],
+    ]);
+    expect(grid.truncated).toBe(0);
+    expect(fetch.calls).not.toContain(30);
+  });
+
+  it("shows a set's live entries as their values", async () => {
+    const fetch = adapter({
+      1: [v("_buckets", "{int[3]}"), v("_entries", "{Entry[3]}", 2), v("_count", "3"), v("_freeCount", "1")],
+      2: [v("[0]", "{Entry}", 20), v("[1]", "{Entry}", 21), v("[2]", "{Entry}", 22)],
+      20: [v("HashCode", "10"), v("Next", "-1"), v("Value", "10")],
+      21: [v("HashCode", "20"), v("Next", "-2"), v("Value", "20")],
+      22: [v("HashCode", "30"), v("Next", "-1"), v("Value", "30")],
+    });
+    const grid = await loadGrid(fetch, 1);
+    expect(grid.columns).toEqual(["Value"]);
+    expect(grid.rows.map((r) => r.cells.get("Value")?.value)).toEqual(["10", "30"]);
+  });
+
+  it("leaves unknown entry layouts to the fallback", async () => {
+    const fetch = adapter({
+      1: [v("_buckets", ""), v("_entries", "", 2), v("_count", "1")],
+      2: [v("[0]", "{Entry}", 20)],
+      20: [v("hash", "1")],
+      3: [v("[0]", "copy")],
+    });
+    expect(hashedEntries([v("_entries", "", 2), v("_count", "1")])).toBeNull();
+    const grid = await loadGrid(fetch, 1, undefined, () => Promise.resolve(3));
+    expect(grid.rows.map((r) => r.element.value)).toEqual(["copy"]);
   });
 
   it("reads at most MAX_ROWS elements and counts the rest", async () => {

@@ -8,6 +8,7 @@ use ide_dotnet::Solution;
 use ide_dotnet::nuget::{self, InstalledPackages, PackageAudit, PackageSearch, PackageSource, SourceScope};
 use ide_dotnet::templates::{self, ProjectTemplate, TemplateValue};
 use ide_dotnet::testing::{self, SessionRequest, TestApp, TestEvent, TestPhase, TestProject, TestSelection};
+use ide_dotnet::vstest::{self, VsTestProject};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -867,23 +868,36 @@ async fn tests_inner(
         let phase =
             |phase, message: Option<String>| TestEvent::Phase { project: Some(project.clone()), phase, message };
         send(phase(if run { TestPhase::Running } else { TestPhase::Discovering }, None));
-        let mut app = match test_app(&dotnet, env, &t.project).await {
-            Ok(app) => app,
+        let dir = t.project.parent().map(Path::to_path_buf).unwrap_or_default();
+        let report_name = format!(
+            "{}.cobertura.xml",
+            t.project.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        );
+        let mut app = match test_target(&dotnet, env, &t.project).await {
+            Ok(TestTarget::Mtp(app)) => app,
+            Ok(TestTarget::VsTest(target)) => {
+                let report = coverage.map(|out| out.join(&report_name));
+                let result = vstest_project(&target, run, &t.uids, report.as_deref(), debug, token, on_event).await;
+                if let Some(report) = report.filter(|r| r.is_file()) {
+                    send(TestEvent::Coverage { project: project.clone(), report: report.into() });
+                }
+                match result {
+                    Ok(()) => send(phase(TestPhase::Finished, None)),
+                    Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled => return Err(e),
+                    Err(e) => send(phase(TestPhase::Failed, Some(e.message))),
+                }
+                continue;
+            }
             Err(e) => {
                 send(phase(TestPhase::Failed, Some(e.message)));
                 continue;
             }
         };
         let request = if run { SessionRequest::Run(t.uids.clone()) } else { SessionRequest::Discover };
-        let dir = t.project.parent().map(Path::to_path_buf).unwrap_or_default();
         // Projects without the coverage extension run without coverage (the window says so).
         let report = coverage.filter(|_| testing::has_coverage_extension(&dir)).map(|out| {
-            let name = format!(
-                "{}.cobertura.xml",
-                t.project.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
-            );
-            app.args = testing::coverage_args(out, &name);
-            out.join(name)
+            app.args = testing::coverage_args(out, &report_name);
+            out.join(&report_name)
         });
         app.wait_for_debugger = debug;
         let out = on_event.clone();
@@ -922,8 +936,15 @@ async fn tests_inner(
     Ok(())
 }
 
-/// The built test app of `project`: its `TargetPath` (first target framework when it has several).
-async fn test_app(dotnet: &Path, env: &Env, project: &Path) -> IdeResult<TestApp> {
+/// How a test project's tests are reached.
+enum TestTarget {
+    /// A Microsoft.Testing.Platform app, driven in server mode.
+    Mtp(TestApp),
+    VsTest(VsTestProject),
+}
+
+/// The built tests of `project`: its `TargetPath` (first target framework when it has several).
+async fn test_target(dotnet: &Path, env: &Env, project: &Path) -> IdeResult<TestTarget> {
     let names = ["TargetPath", "IsTestingPlatformApplication"];
     let mut args: Vec<String> = vec!["msbuild".into(), project.to_string_lossy().into_owned()];
     args.extend(names.iter().map(|n| format!("-getProperty:{n}")));
@@ -933,9 +954,8 @@ async fn test_app(dotnet: &Path, env: &Env, project: &Path) -> IdeResult<TestApp
             .await
             .map_err(|e| IdeError::internal(e.to_string()))??
     };
-    if info.target_frameworks.len() > 1
-        && let Some(first) = info.target_frameworks.first()
-    {
+    let framework = info.target_frameworks.first().filter(|_| info.target_frameworks.len() > 1).cloned();
+    if let Some(first) = &framework {
         args.push(format!("-p:TargetFramework={first}"));
     }
     let dir = project.parent().unwrap_or(project);
@@ -952,19 +972,61 @@ async fn test_app(dotnet: &Path, env: &Env, project: &Path) -> IdeResult<TestApp
         return Err(IdeError::not_found(format!("{} has no built test assembly", project.display())));
     }
     if !get("IsTestingPlatformApplication").eq_ignore_ascii_case("true") {
-        return Err(IdeError::new(
-            ide_core::error::ErrorKind::Unavailable,
-            "this project runs on VSTest; only Microsoft.Testing.Platform test projects are supported so far",
-        ));
+        return Ok(TestTarget::VsTest(VsTestProject {
+            dotnet: dotnet.to_path_buf(),
+            project: project.to_path_buf(),
+            assembly: PathBuf::from(assembly),
+            framework,
+            env: env.clone(),
+        }));
     }
-    Ok(TestApp {
+    Ok(TestTarget::Mtp(TestApp {
         dotnet: dotnet.to_path_buf(),
         assembly: PathBuf::from(assembly),
         cwd: dir.to_path_buf(),
         env: Vec::new(),
         args: Vec::new(),
         wait_for_debugger: false,
-    })
+    }))
+}
+
+/// Discovers or runs the tests of a VSTest project; a run's results arrive when it ends.
+async fn vstest_project(
+    target: &VsTestProject,
+    run: bool,
+    uids: &[String],
+    coverage: Option<&Path>,
+    debug: bool,
+    token: &ide_core::CancellationToken,
+    on_event: &Channel<TestEvent>,
+) -> IdeResult<()> {
+    let project = IpcPath::from(target.project.as_path());
+    let dir = target.project.parent().map(Path::to_path_buf).unwrap_or_default();
+    let (out, out_project) = (on_event.clone(), project.clone());
+    let on_output = move |line| {
+        let _ = out.send(TestEvent::Output { project: Some(out_project.clone()), line });
+    };
+    let mut tests = if run {
+        let options = vstest::RunOptions {
+            uids: uids.to_vec(),
+            coverage: coverage.map(Path::to_path_buf),
+            wait_for_debugger: debug,
+        };
+        let (started, started_project) = (on_event.clone(), project.clone());
+        vstest::run(target, &options, token, on_output, move |pid| {
+            let _ = started.send(TestEvent::Debug { project: started_project.clone(), pid });
+        })
+        .await?
+    } else {
+        vstest::discover(target, token, on_output).await?
+    };
+    if !run {
+        testing::resolve_locations(&dir, &mut tests);
+    }
+    if !tests.is_empty() {
+        let _ = on_event.send(TestEvent::Tests { project, tests });
+    }
+    Ok(())
 }
 
 /// Runs `dotnet <args>`, calling `on_line` per output line; the exit code (cancellation kills it).

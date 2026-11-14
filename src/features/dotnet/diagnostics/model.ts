@@ -4,7 +4,15 @@
  * the trigger rules evaluated on the live counters. Pure, so the view and the
  * tests share it.
  */
-import type { FlameNode, HeapType, ManagedFrame, MetricSample, ThreadStack } from "@/bindings";
+import type {
+  FlameNode,
+  HeapRetention,
+  HeapType,
+  ManagedFrame,
+  MetricSample,
+  RetainedType,
+  ThreadStack,
+} from "@/bindings";
 
 // ---------------------------------------------------------------- live counters
 
@@ -264,6 +272,11 @@ export function heapDiff(before: readonly HeapType[], after: readonly HeapType[]
   });
   for (const b of old.values()) rows.push({ ...b, bytes: 0, count: 0, deltaBytes: -b.bytes, deltaCount: -b.count });
   return rows.sort((a, b) => (b.deltaBytes ?? 0) - (a.deltaBytes ?? 0) || b.bytes - a.bytes);
+}
+
+/** Retained sizes and paths by type name, for joining onto the heap report's rows. */
+export function retainedByName(retention: HeapRetention | null | undefined): Map<string, RetainedType> {
+  return new Map((retention?.types ?? []).map((t) => [t.name, t]));
 }
 
 export function filterHeap<T extends HeapType>(rows: readonly T[], query: string): T[] {

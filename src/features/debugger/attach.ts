@@ -5,6 +5,7 @@
 import { workflowSettings } from "@/platform/workflowSettings";
 import { call, commands } from "@/platform/ipc";
 import type { AttachKind, AttachableProcess, LaunchConfig } from "@/platform/ipc";
+import { prepareSshDebugger, sshHostName } from "./dotnetSsh";
 import { javaAttachConfig } from "./java";
 
 export const KIND_LABELS: Record<AttachKind, string> = {
@@ -40,23 +41,29 @@ export function attachRows(list: readonly AttachableProcess[], filter: string): 
     for (const p of items)
       rows.push({
         kind: "process",
-        key: p.container != null ? `${kind}:${p.container}:${p.pid}` : `${kind}:${p.pid}`,
+        key: where(p) != null ? `${kind}:${where(p)}:${p.pid}` : `${kind}:${p.pid}`,
         process: p,
       });
   }
   return rows;
 }
 
+/** The container or SSH host (its display name) the process runs in; null on this machine. */
+function where(p: AttachableProcess): string | null {
+  if (p.container != null) return p.container;
+  return p.ssh != null ? sshHostName(p.ssh) : null;
+}
+
 /** A short description of how the process will be attached to. */
 export function attachDetail(p: AttachableProcess): string {
-  if (p.container != null) return `${p.container}, pid ${p.pid}`;
+  if (where(p) != null) return `${where(p)}, pid ${p.pid}`;
   if (p.port != null) return `${p.host ?? "localhost"}:${p.port}`;
   return `pid ${p.pid}`;
 }
 
 function base(p: AttachableProcess, cwd: string, extra: Record<string, unknown>): LaunchConfig {
   return {
-    name: p.container != null ? `${p.name} (${p.container})` : `${p.name} (${p.pid})`,
+    name: `${p.name} (${where(p) ?? p.pid})`,
     adapter: p.adapter,
     request: "attach",
     program: null,
@@ -94,8 +101,13 @@ export async function attachConfig(p: AttachableProcess, root: string): Promise<
       );
     case "dotnet": {
       // In a container: netcoredbg is copied in and run there through `docker exec -i`.
+      // On an SSH host: it is installed there and run on the configuration's connection.
       const pipeTransport =
-        p.container != null ? JSON.parse(await call(commands.debugPrepareContainer(p.container))) : undefined;
+        p.container != null
+          ? JSON.parse(await call(commands.debugPrepareContainer(p.container)))
+          : p.ssh != null
+            ? await prepareSshDebugger(p.ssh)
+            : undefined;
       return base(p, root, { processId: p.pid, justMyCode: skip, ...(pipeTransport ? { pipeTransport } : {}) });
     }
     case "go":

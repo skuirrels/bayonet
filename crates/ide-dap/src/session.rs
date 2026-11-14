@@ -3,7 +3,8 @@
 
 use crate::adapter::AdapterSpec;
 use crate::connection::{Connection, DapError, Incoming};
-use crate::{Breakpoint, BreakpointState, DataBreakpoint, DebugManager, FunctionBreakpoint, SessionOwner};
+use crate::dotnet_eval::Synthetic;
+use crate::{Breakpoint, BreakpointState, DataBreakpoint, DebugManager, FunctionBreakpoint, SessionOwner, Variable};
 use ide_core::event::DebugEvent;
 use ide_core::{DebugSessionId, IdeEvent, TaskId};
 use parking_lot::Mutex;
@@ -58,6 +59,10 @@ pub(crate) struct Session {
     progress: Mutex<HashMap<String, TaskId>>,
     pub kotlin_relay: Mutex<Option<crate::kotlin_jdwp::StartupRelay>>,
     pub kotlin_mirror: Mutex<Option<crate::kotlin::SourceMirror>>,
+    /// Sequence results evaluated for netcoredbg, which has no reference for them.
+    pub synthetic: Mutex<Synthetic>,
+    /// Frame id → its name and source, as last listed (netcoredbg type lookup).
+    pub frames: Mutex<HashMap<i64, (String, Option<PathBuf>)>>,
 }
 
 /// Adapters that only match files by their resolved path: Godot maps a script to
@@ -102,11 +107,57 @@ impl Session {
             progress: Mutex::new(HashMap::new()),
             kotlin_relay: Mutex::new(None),
             kotlin_mirror: Mutex::new(None),
+            synthetic: Mutex::default(),
+            frames: Mutex::default(),
         }
     }
 
     pub fn emit(&self, event: DebugEvent) {
+        if matches!(event, DebugEvent::Continued { .. }) {
+            // Variable references and frame ids end when the program resumes.
+            self.synthetic.lock().clear();
+            self.frames.lock().clear();
+        }
         self.owner.sink.emit(IdeEvent::Debug { session: self.id, event });
+    }
+
+    /// DAP `evaluate` in `context` (`repl`, `watch`, `hover`, `clipboard`).
+    pub async fn evaluate(&self, frame_id: Option<i64>, expression: &str, context: &str) -> Result<Variable, DapError> {
+        let mut args = json!({ "expression": expression, "context": context });
+        if let Some(f) = frame_id {
+            args["frameId"] = f.into();
+        }
+        let body = self.conn.request_timeout("evaluate", args, crate::REQUEST_TIMEOUT).await?;
+        Ok(Variable {
+            name: expression.to_owned(),
+            value: body.get("result").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            type_name: body.get("type").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_owned),
+            variables_reference: body.get("variablesReference").and_then(Value::as_i64).unwrap_or(0),
+            evaluate_name: Some(expression.to_owned()),
+        })
+    }
+
+    /// The children of `reference`: the first `count` of them, or all.
+    pub async fn variables(&self, reference: i64, count: Option<usize>) -> Result<Vec<Variable>, DapError> {
+        if Synthetic::is(reference) {
+            let mut children = self.synthetic.lock().get(reference).ok_or_else(|| DapError::Failed {
+                command: "variables".into(),
+                message: "the value is gone: the program has resumed since it was evaluated".into(),
+            })?;
+            children.truncate(count.unwrap_or(usize::MAX));
+            return Ok(children);
+        }
+        let mut args = json!({ "variablesReference": reference });
+        if let Some(count) = count {
+            args["start"] = 0.into();
+            args["count"] = count.into();
+        }
+        let body = self.conn.request_timeout("variables", args, crate::REQUEST_TIMEOUT).await?;
+        Ok(body
+            .get("variables")
+            .and_then(Value::as_array)
+            .map(|v| v.iter().map(crate::variable_from).collect())
+            .unwrap_or_default())
     }
 
     /// `path` as sent to the adapter (resolved for [`RESOLVES_PATHS`] adapters).

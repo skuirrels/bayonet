@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import type { DiagArtifact, DumpType, HeapType } from "@/bindings";
+import type { DiagArtifact, DumpType, HeapType, RetainedType } from "@/bindings";
 import { tx } from "@/platform/i18n";
 import {
   Button,
@@ -30,6 +30,7 @@ import { TraceTab } from "./TraceView";
 import {
   artifactInfo,
   filterHeap,
+  retainedByName,
   formatBytes,
   formatValue,
   groupStacks,
@@ -50,6 +51,7 @@ import {
   attachSosShell,
   closeRecording,
   collectDump,
+  analyzeRetention,
   collectGcdump,
   collectStacks,
   compareWith,
@@ -420,7 +422,19 @@ function ThreadsTab() {
 
 const HEAP_ROWS = 500;
 
-function HeapTable({ rows, compare }: { rows: readonly HeapRow[]; compare: boolean }) {
+function HeapTable({
+  rows,
+  compare,
+  retained,
+  selected,
+  onSelect,
+}: {
+  rows: readonly HeapRow[];
+  compare: boolean;
+  retained?: ReadonlyMap<string, RetainedType>;
+  selected?: string | null;
+  onSelect?: (name: string) => void;
+}) {
   const max = Math.max(1, ...rows.map((r) => Math.abs(compare ? (r.deltaBytes ?? 0) : r.bytes)));
   return (
     <table className={styles.table}>
@@ -435,6 +449,11 @@ function HeapTable({ rows, compare }: { rows: readonly HeapRow[]; compare: boole
           <th className={styles.num}>
             <T>Size</T>
           </th>
+          {retained && (
+            <th className={styles.num}>
+              <T>Retained</T>
+            </th>
+          )}
           {compare && (
             <>
               <th className={styles.num}>
@@ -452,13 +471,20 @@ function HeapTable({ rows, compare }: { rows: readonly HeapRow[]; compare: boole
         {rows.slice(0, HEAP_ROWS).map((r) => {
           const v = compare ? (r.deltaBytes ?? 0) : r.bytes;
           return (
-            <tr key={`${r.module}|${r.name}`} title={r.module}>
+            <tr
+              key={`${r.module}|${r.name}`}
+              title={r.module}
+              className={clsx(onSelect && styles.clickable, selected === r.name && styles.rowSelected)}
+              onClick={onSelect && (() => onSelect(r.name))}
+              aria-selected={onSelect ? selected === r.name : undefined}
+            >
               <td className={styles.typeName}>
                 {r.name}
                 {r.module && <span className={styles.muted}> {r.module}</span>}
               </td>
               <td className={styles.num}>{r.count.toLocaleString()}</td>
               <td className={styles.num}>{formatBytes(r.bytes)}</td>
+              {retained && <td className={styles.num}>{retainedSize(retained.get(r.name))}</td>}
               {compare && (
                 <>
                   <td className={styles.num}>{signed(r.deltaCount ?? 0, (n) => n.toLocaleString())}</td>
@@ -481,13 +507,67 @@ function HeapTable({ rows, compare }: { rows: readonly HeapRow[]; compare: boole
   );
 }
 
+const retainedSize = (t: RetainedType | undefined) => (t ? formatBytes(t.retainedBytes) : "");
+
+function RetainedBy({ type }: { type: RetainedType | undefined }) {
+  if (!type) {
+    return (
+      <p className={styles.muted}>
+        <T>Select a type to see what keeps its objects alive.</T>
+      </p>
+    );
+  }
+  return (
+    <>
+      <div className={styles.sectionBar}>
+        <h3 className={styles.heading}>
+          <T>Retained by</T>
+        </h3>
+        <span className={styles.muted}>{type.name}</span>
+      </div>
+      {type.paths.length === 0 ? (
+        <p className={styles.muted}>
+          <T>No paths from the roots were recorded for this type.</T>
+        </p>
+      ) : (
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>
+                <T>Path from the GC roots</T>
+              </th>
+              <th className={styles.num}>
+                <T>Objects</T>
+              </th>
+              <th className={styles.num}>
+                <T>Retained</T>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {type.paths.map((p) => (
+              <tr key={p.frames.join("\u001f")}>
+                <td className={styles.typeName}>{p.frames.join(" → ")}</td>
+                <td className={styles.num}>{p.count.toLocaleString()}</td>
+                <td className={styles.num}>{formatBytes(p.retainedBytes)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
 const signed = (n: number, f: (n: number) => string) => (n > 0 ? `+${f(n)}` : n < 0 ? `-${f(-n)}` : "0");
 
 function MemoryTab() {
   const heap = useDiagnostics((s) => s.heap);
   const baseline = useDiagnostics((s) => s.baseline);
   const artifacts = useDiagnostics((s) => s.artifacts);
+  const retention = useDiagnostics((s) => s.retention);
   const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<string | null>(null);
   const others = artifacts.filter((a) => a.kind === "gcdump" && a.path !== heap?.path);
   const compare = !!(heap && baseline);
   const rows = useMemo<HeapRow[]>(() => {
@@ -495,6 +575,8 @@ function MemoryTab() {
     const all: HeapType[] = heap.report.types;
     return filterHeap(compare ? heapDiff(baseline!.report.types, all) : all, query);
   }, [heap, baseline, compare, query]);
+  const current = !compare && heap && retention?.path === heap.path ? retention.data : null;
+  const retained = useMemo(() => (current ? retainedByName(current) : undefined), [current]);
   return (
     <div className={styles.scroll}>
       <div className={styles.actions}>
@@ -502,6 +584,12 @@ function MemoryTab() {
           <T>Capture GC Heap</T>
         </Button>
         <Busy job="gcdump" label={tx`Snapshotting the heap…`} />
+        {heap && !compare && !current && (
+          <Button size="small" icon="search" onClick={() => void analyzeRetention()}>
+            <T>Find What Retains Objects</T>
+          </Button>
+        )}
+        <Busy job="retention" label={tx`Working out what retains the objects…`} />
         {heap && (
           <Select
             value={baseline?.path ?? ""}
@@ -558,8 +646,15 @@ function MemoryTab() {
               aria-label={tx`Filter types`}
             />
           </div>
-          <HeapTable rows={rows} compare={compare} />
+          <HeapTable
+            rows={rows}
+            compare={compare}
+            retained={retained}
+            selected={retained ? picked : null}
+            onSelect={retained ? setPicked : undefined}
+          />
           {rows.length > HEAP_ROWS && <p className={styles.muted}>{moreRows(rows.length - HEAP_ROWS)}</p>}
+          {retained && <RetainedBy type={picked ? retained.get(picked) : undefined} />}
         </>
       )}
     </div>

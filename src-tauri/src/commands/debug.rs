@@ -309,6 +309,24 @@ pub async fn debug_prepare_container(state: State<'_, AppState>, container: Stri
     ide_host::ops::debug::debug_prepare_container(&state.host, container).await
 }
 
+/// Attach to Process on an SSH host: the .NET processes on the host of an SSH configuration (its id).
+#[tauri::command]
+#[specta::specta]
+pub async fn debug_ssh_processes(
+    state: State<'_, AppState>,
+    configuration: String,
+) -> IdeResult<Vec<attach::AttachableProcess>> {
+    ide_host::ops::debug::debug_ssh_processes(&state.host, configuration).await
+}
+
+/// Installs a Linux netcoredbg on an SSH configuration's host when it has none; the
+/// `pipeTransport` JSON that attaches through it.
+#[tauri::command]
+#[specta::specta]
+pub async fn debug_prepare_ssh(state: State<'_, AppState>, configuration: String) -> IdeResult<String> {
+    ide_host::ops::debug::debug_prepare_ssh(&state.host, configuration).await
+}
+
 /// Remote JVM Debug in listen mode: waits (cancellable through `request`) for the remote
 /// JVM to connect to `host:port`; returns the loopback port java-debug attaches to.
 #[tauri::command]

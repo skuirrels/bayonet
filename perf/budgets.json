@@ -1,5 +1,5 @@
 {
-  "$comment": "Upper bounds, lower is better. ui: `<scenario>.<metric>` from `pnpm perf` (medians of the measured runs; enforced at CPU 1x only). Latencies are input → start of the first frame showing the result, so ~16.7 ms is 'next frame'. rust: criterion bench id → mean in microseconds, from `pnpm perf:rust` (`plugins/…`: the plugin runtime budgets).",
+  "$comment": "Upper bounds, lower is better. ui: `<scenario>.<metric>` from `pnpm perf` (medians of the measured runs, except `p99Ms`, which pools the runs' keystrokes; enforced at CPU 1x only). Latencies are input → start of the first frame showing the result, so ~16.7 ms is 'next frame'. rust: criterion bench id → mean in microseconds, from `pnpm perf:rust` (`plugins/…`: the plugin runtime budgets).",
   "regressionTolerance": 0.2,
   "regressionFloor": 1,
   "ui": {
@@ -12,6 +12,7 @@
     "startup.domNodes": 1500,
 
     "typing.p95Ms": 20,
+    "typing.p99Ms": 17.5,
     "typing.maxMs": 33,
     "typing.missedFramePct": 2,
     "typing.styleLayoutMsPerKey": 3,
@@ -20,6 +21,7 @@
 
     "typingLarge.openMs": 200,
     "typingLarge.p95Ms": 20,
+    "typingLarge.p99Ms": 17.5,
     "typingLarge.maxMs": 33,
     "typingLarge.missedFramePct": 2,
     "typingLarge.styleLayoutMsPerKey": 3,
@@ -27,6 +29,7 @@
     "typingLarge.tbtMs": 50,
 
     "keyRepeat.p95Ms": 20,
+    "keyRepeat.p99Ms": 17.5,
     "keyRepeat.maxMs": 33,
     "keyRepeat.missedFramePct": 2,
     "keyRepeat.mainThreadMsPerKey": 16,

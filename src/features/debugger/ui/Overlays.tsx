@@ -4,7 +4,7 @@ import { basename, relativePath, useProject } from "@/platform/project";
 import { executeAction, getAction } from "@/platform/actions";
 import { call, commands, type AttachableProcess, type RunConfig, type Variable } from "@/platform/ipc";
 import { maybeEditorService, notifications } from "@/workbench/contributions";
-import { Button, Checkbox, Dialog, Icon, IconButton, Input, Kbd, List, Menu, Popup, Toggle, T } from "@/ui";
+import { Button, Checkbox, Dialog, Icon, IconButton, Input, Kbd, List, Menu, Popup, Select, Toggle, T } from "@/ui";
 import { isConditional, suspends, type BreakpointEntry } from "../breakpoints/model";
 import {
   removeAllBreakpoints,
@@ -23,6 +23,8 @@ import {
   type SpecialBreakpoint,
 } from "../breakpoints/special";
 import { attachConfig, attachDetail, attachRows, type AttachRow } from "../attach";
+import { loadAttachProcesses } from "../attachPopup";
+import { attachTargets, CONFIGURE_SSH, sshHostName } from "../dotnetSsh";
 import {
   exceptionGroups,
   refreshExceptionFilters,
@@ -36,6 +38,7 @@ import { useExpressionCompletion } from "./ExpressionCompletion";
 import { pushHistory, readHistory } from "./expressionHistory";
 import styles from "./Overlays.module.css";
 import { isImeKey } from "@/platform/ime";
+import { useWorkflowSettings } from "@/platform/workflowSettings";
 import { tx } from "@/platform/i18n";
 
 export function DebuggerOverlays() {
@@ -873,6 +876,8 @@ function ConfigChooser() {
 function AttachPopup() {
   const state = useOverlays((s) => s.attach);
   const root = useProject((s) => s.project?.root ?? null);
+  const sshConfigs = useWorkflowSettings((s) => s.ssh.configs);
+  const targets = useMemo(() => attachTargets(sshConfigs), [sshConfigs]);
   const [filter, setFilter] = useState("");
   const [active, setActive] = useState(0);
   const rows = useMemo(() => attachRows(state?.processes ?? [], filter), [state?.processes, filter]);
@@ -896,6 +901,14 @@ function AttachPopup() {
           title: `Preparing the debugger in ${p.container}…`,
           body: "The first attach copies netcoredbg into the container.",
         });
+      else if (p.ssh != null)
+        notifications().notify({
+          group: "run",
+          level: "info",
+          key: "debug.attach",
+          title: `Preparing the debugger on ${sshHostName(p.ssh)}…`,
+          body: "The first attach installs netcoredbg on the host.",
+        });
       const config = await attachConfig(p, root);
       notifications().expire?.("debug.attach");
       await startSession(config, { rerunnable: false });
@@ -917,9 +930,25 @@ function AttachPopup() {
       }
     }
   };
+  const chooseTarget = (target: string) => {
+    if (target === CONFIGURE_SSH) {
+      close();
+      void executeAction("file.settings", "tools.sshConfigurations");
+      return;
+    }
+    setActive(0);
+    void loadAttachProcesses(target);
+  };
   return (
     <Dialog open onClose={close} title="Attach to Process" width={640} position="top" aria-label="Attach to process">
       <div className={styles.evalBody}>
+        <Select
+          value={state.target}
+          options={targets}
+          onChange={chooseTarget}
+          aria-label="Where the process runs"
+          className={styles.attachTarget}
+        />
         <Input
           value={filter}
           onChange={(e) => {
@@ -966,7 +995,11 @@ function AttachPopup() {
             className={styles.attachList}
             empty={
               <div className={styles.empty}>
-                {filter ? tx`No attachable processes match the filter.` : tx`No attachable processes.`}
+                {filter
+                  ? tx`No attachable processes match the filter.`
+                  : state.target
+                    ? tx`No .NET processes are running on this host.`
+                    : tx`No attachable processes.`}
               </div>
             }
             renderItem={(r) =>

@@ -24,6 +24,7 @@ import { registerEditorContribution } from "@/editor/api";
 import { loadInstalled, resetNuget } from "./nuget/store";
 import { testGutter } from "./tests/gutter";
 import { msbuildNavigation } from "./msbuild/navigation";
+import { registerIlBanner, showIl } from "./il";
 import { traceHeat } from "./diagnostics/heatGutter";
 import { SolutionDialogs } from "./projects/SolutionDialogs";
 import {
@@ -277,6 +278,7 @@ export function activate(): () => void {
         void diagnostics().then((m) => m.revealTraceFrame(frame));
       }),
   });
+  const disposeIlBanner = registerIlBanner();
   const disposeDialogs = registerOverlay({
     id: "dotnet.solutionDialogs",
     component: SolutionDialogs,
@@ -345,6 +347,16 @@ export function activate(): () => void {
       when: "projectOpen",
       keywords: ["binlog", "binary log", "msbuild", "structured log", "build log"],
       run: () => void showLastBinlog(),
+    },
+    {
+      id: "dotnet.showIl",
+      title: "Show IL",
+      description:
+        "Opens the IL of the C# type at the caret: of the implementation assembly in decompiled library code, of the built project in your own code",
+      category: "Navigate",
+      when: "textEditorActive && editorLangId == 'csharp'",
+      keywords: ["il", "cil", "msil", "ildasm", "disassemble", "disassembly", "intermediate language", "bytecode"],
+      run: () => void showIl(),
     },
     {
       id: "dotnet.newProject",
@@ -644,6 +656,7 @@ export function activate(): () => void {
     disposeMsbuild();
     disposeTraceHeat();
     disposeXamlPreview();
+    disposeIlBanner();
     disposeDialogs();
     disposeSignatureDialog();
     disposeChangeSignature();

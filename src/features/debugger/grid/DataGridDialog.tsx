@@ -81,7 +81,11 @@ function GridBody({ target }: { target: GridTarget }) {
       // netcoredbg shows collections without type proxies as their fields: read an array copy.
       const fallback =
         expression && session && DOTNET_ADAPTERS.has(session.adapter)
-          ? async () => (await evaluate(`(${expression}).ToArray()`, "watch", session)).variablesReference
+          ? async () => {
+              const copy = await evaluate(`(${expression}).ToArray()`, "watch", session);
+              // An exception object (no `ToArray()` for this type) has fields, not elements.
+              return copy.typeName?.endsWith("]") ? copy.variablesReference : null;
+            }
           : undefined;
       const grid = await loadGrid(
         (ref) => call(commands.debugVariables(target.session, ref)),

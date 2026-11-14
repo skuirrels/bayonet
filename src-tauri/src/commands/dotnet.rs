@@ -497,3 +497,28 @@ pub async fn dotnet_edit_references(
 ) -> IdeResult<()> {
     ide_host::ops::dotnet::dotnet_edit_references(&state.host, window.label(), project, add, remove).await
 }
+
+/// The URI of the IL document for the C# type declared around `pos` in `path` (the first
+/// type of the file without a position): a read-only virtual document to open. Library
+/// code decompiled by Roslyn shows the implementation assembly, project code its built output.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_il_uri(
+    window: Window,
+    state: State<'_, AppState>,
+    path: IpcPath,
+    pos: Option<ide_core::Pos>,
+) -> IdeResult<String> {
+    ide_host::ops::il::dotnet_il_uri(&state.host, window.label(), path, pos).await
+}
+
+/// The elements, attributes and values the XAML file at `path` can use (CI-16).
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_xaml_types(
+    window: Window,
+    state: State<'_, AppState>,
+    path: IpcPath,
+) -> IdeResult<ide_dotnet::helper::XamlTypes> {
+    ide_host::ops::xaml::dotnet_xaml_types(&state.host, window.label(), path).await
+}

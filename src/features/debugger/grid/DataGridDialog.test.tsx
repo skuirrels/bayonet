@@ -13,6 +13,34 @@ const children: Record<number, Variable[]> = {
   51: [{ name: "Total", value: "3", typeName: "decimal", variablesReference: 0, evaluateName: null }],
   52: [{ name: "Total", value: "40", typeName: "decimal", variablesReference: 0, evaluateName: null }],
   6: [{ name: "[0]", value: "1", typeName: "int", variablesReference: 0, evaluateName: null }],
+  // A Dictionary<string, int> as netcoredbg shows it: fields, with a removed entry in slot 1.
+  8: [
+    { name: "_buckets", value: "{int[3]}", typeName: "int[]", variablesReference: 0, evaluateName: null },
+    { name: "_entries", value: "{Entry[3]}", typeName: "Entry[]", variablesReference: 80, evaluateName: null },
+    { name: "_count", value: "3", typeName: "int", variablesReference: 0, evaluateName: null },
+    { name: "_freeCount", value: "1", typeName: "int", variablesReference: 0, evaluateName: null },
+  ],
+  80: [81, 82, 83].map((r, i) => ({
+    name: `[${i}]`,
+    value: "{Entry}",
+    typeName: "Entry",
+    variablesReference: r,
+    evaluateName: null,
+  })),
+  ...Object.fromEntries(
+    [
+      [81, '"a"', "1", "-1"],
+      [82, "null", "2", "-2"],
+      [83, '"c"', "3", "-1"],
+    ].map(([ref, key, value, next]) => [
+      ref,
+      [
+        { name: "next", value: next, typeName: "int", variablesReference: 0, evaluateName: null },
+        { name: "key", value: key, typeName: "string", variablesReference: 0, evaluateName: null },
+        { name: "value", value, typeName: "int", variablesReference: 0, evaluateName: null },
+      ],
+    ]),
+  ),
 };
 
 vi.mock("@/platform/ipc", async (importOriginal) => {
@@ -71,6 +99,16 @@ describe("collection visualiser dialog", () => {
     expect(totals()).toEqual(["3", "12.5", "40"]);
     fireEvent.click(screen.getByRole("button", { name: "Total" }));
     expect(totals()).toEqual(["40", "12.5", "3"]);
+  });
+
+  it("shows a dictionary's entries as Key and Value", async () => {
+    useDebug.setState({ sessions: { 1: session }, active: 1, stopSeq: 4 });
+    render(<DataGridDialog />);
+    act(() => openDataGrid(1, 8, "dict", "dict"));
+    expect(await screen.findByText("2 elements")).toBeTruthy();
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toContain("Key");
+    expect(totals()).toEqual(['"a"', '"c"']);
+    act(() => useOverlays.setState({ grid: null }));
   });
 
   it("marks the values stale at a later stop when it cannot read them again", async () => {

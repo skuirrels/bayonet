@@ -4,6 +4,7 @@ use crate::state::AppState;
 use ide_core::{IdeResult, IpcPath, RequestId};
 use ide_dap::attach::AttachableProcess;
 use ide_dotnet::diagnostics::{DiagToolStatus, DumpAnalysis, DumpType, MetricSample, TraceProfile};
+use ide_dotnet::helper::HeapRetention;
 use ide_host::ops::diagnostics::{
     self as ops, CounterRecording, DiagArtifact, HeapSnapshot, MonitorStatus, StackSnapshot,
 };
@@ -66,6 +67,18 @@ pub async fn diag_gcdump_read(
     path: PathBuf,
 ) -> IdeResult<HeapSnapshot> {
     ops::diag_gcdump_read(&state.host, request, path).await
+}
+
+/// What keeps the objects of a `.gcdump` alive: retained size by type and paths from the roots.
+#[tauri::command]
+#[specta::specta]
+pub async fn diag_gcdump_retention(
+    _window: Window,
+    state: State<'_, AppState>,
+    request: RequestId,
+    path: PathBuf,
+) -> IdeResult<HeapRetention> {
+    ops::diag_gcdump_retention(&state.host, request, path).await
 }
 
 /// Writes a dump of `pid` (`dotnet-dump collect`).

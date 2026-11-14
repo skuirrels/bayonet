@@ -998,6 +998,13 @@ export const commands = {
 	debugAttachableProcesses: () => typedError<AttachableProcess[], IdeError>(__TAURI_INVOKE("debug_attachable_processes")),
 	/**  Copies a Linux netcoredbg into a container; the `pipeTransport` JSON that attaches through it. */
 	debugPrepareContainer: (container: string) => typedError<string, IdeError>(__TAURI_INVOKE("debug_prepare_container", { container })),
+	/**  Attach to Process on an SSH host: the .NET processes on the host of an SSH configuration (its id). */
+	debugSshProcesses: (configuration: string) => typedError<AttachableProcess[], IdeError>(__TAURI_INVOKE("debug_ssh_processes", { configuration })),
+	/**
+	 *  Installs a Linux netcoredbg on an SSH configuration's host when it has none; the
+	 *  `pipeTransport` JSON that attaches through it.
+	 */
+	debugPrepareSsh: (configuration: string) => typedError<string, IdeError>(__TAURI_INVOKE("debug_prepare_ssh", { configuration })),
 	/**
 	 *  Remote JVM Debug in listen mode: waits (cancellable through `request`) for the remote
 	 *  JVM to connect to `host:port`; returns the loopback port java-debug attaches to.
@@ -1118,6 +1125,8 @@ export const commands = {
 	diagGcdump: (request: RequestId, pid: number) => typedError<HeapSnapshot, IdeError>(__TAURI_INVOKE("diag_gcdump", { request, pid })),
 	/**  Reports a `.gcdump` file by type. */
 	diagGcdumpRead: (request: RequestId, path: string) => typedError<HeapSnapshot, IdeError>(__TAURI_INVOKE("diag_gcdump_read", { request, path })),
+	/**  What keeps the objects of a `.gcdump` alive: retained size by type and paths from the roots. */
+	diagGcdumpRetention: (request: RequestId, path: string) => typedError<HeapRetention, IdeError>(__TAURI_INVOKE("diag_gcdump_retention", { request, path })),
 	/**  Writes a dump of `pid` (`dotnet-dump collect`). */
 	diagDump: (request: RequestId, pid: number, kind: DumpType) => typedError<IpcPath, IdeError>(__TAURI_INVOKE("diag_dump", { request, pid, kind })),
 	/**  Runs SOS `clrthreads` and `dumpheap -stat` on a dump. */
@@ -1166,6 +1175,17 @@ export const commands = {
 	dotnetRestore: (targets: IpcPath[], clear: IpcPath[], request: RequestId) => typedError<RestoreResult, IdeError>(__TAURI_INVOKE("dotnet_restore", { targets, clear, request })),
 	/**  Adds and removes project references. */
 	dotnetEditReferences: (project: IpcPath, add: IpcPath[], remove: IpcPath[]) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_edit_references", { project, add, remove })),
+	/**
+	 *  The URI of the IL document for the C# type declared around `pos` in `path` (the first
+	 *  type of the file without a position): a read-only virtual document to open. Library
+	 *  code decompiled by Roslyn shows the implementation assembly, project code its built output.
+	 */
+	dotnetIlUri: (path: IpcPath, pos: {
+	line: number,
+	col: number,
+} | null) => typedError<string, IdeError>(__TAURI_INVOKE("dotnet_il_uri", { path, pos })),
+	/**  The elements, attributes and values the XAML file at `path` can use (CI-16). */
+	dotnetXamlTypes: (path: IpcPath) => typedError<XamlTypes, IdeError>(__TAURI_INVOKE("dotnet_xaml_types", { path })),
 	/**  The browsers installed on this machine. */
 	webBrowsers: () => typedError<Browser[], IdeError>(__TAURI_INVOKE("web_browsers")),
 	/**  The built-in server's URL for `path` (started on first use). */
@@ -2111,6 +2131,8 @@ export type AttachableProcess = {
 	port: number | null,
 	/**  The container it runs in (its name); attached to with netcoredbg inside it (DBG-8). */
 	container: string | null,
+	/**  The SSH configuration (its id) of the host it runs on; attached to with netcoredbg there. */
+	ssh?: string | null,
 };
 
 /**  A package of a project with known vulnerabilities or a deprecation (NUG-4). */
@@ -4715,6 +4737,14 @@ export type HeapReport = {
 	totalObjects: number,
 	/**  Largest first. */
 	types: HeapType[],
+};
+
+/**  What keeps the objects of a heap snapshot alive. */
+export type HeapRetention = {
+	totalBytes: number,
+	objects: number,
+	/**  Largest retained size first. */
+	types: RetainedType[],
 };
 
 export type HeapSnapshot = {
@@ -7350,6 +7380,26 @@ export type RestoreResult = {
 
 export type RestoreSeverity = "error" | "warning";
 
+export type RetainedType = {
+	name: string,
+	/**
+	 *  What the collector would free with this type's objects: their own size and that of
+	 *  everything only they keep alive.
+	 */
+	retainedBytes: number,
+	/**  The commonest paths, for the types that retain most; empty for the rest. */
+	paths: RetentionPath[],
+};
+
+/**  A reference path from a GC root to objects of a type, as type names, root first. */
+export type RetentionPath = {
+	/**  How many of the type's objects are reached this way. */
+	count: number,
+	/**  What those objects retain. */
+	retainedBytes: number,
+	frames: string[],
+};
+
 export type ReviewEvent = "approve" | "requestChanges" | "comment";
 
 /**  A file changed across several commits: its content at `before` ↔ at `after`. */
@@ -8982,6 +9032,38 @@ export type Worktree = {
 	main: boolean,
 	locked: boolean,
 	prunable: boolean,
+};
+
+/**  A property XAML can set, or an attached property (`Grid.Row`). */
+export type XamlProperty = {
+	name: string,
+	/**  `System.Double`, `Avalonia.Layout.HorizontalAlignment`, `System.Int32?`. */
+	type: string,
+	/**  The values of an enum or `bool` property. */
+	values?: string[] | null,
+};
+
+/**  A type XAML can name, with only its own members: `base` leads to the inherited ones. */
+export type XamlType = {
+	namespace: string,
+	name: string,
+	base: string | null,
+	abstract: boolean,
+	properties: XamlProperty[],
+	events: string[],
+	attached: XamlProperty[],
+};
+
+/**  What the XAML of a project can name (CI-16). */
+export type XamlTypes = {
+	namespaces: XmlnsMapping[],
+	types: XamlType[],
+};
+
+/**  An XML namespace a UI framework assembly maps to one of its CLR namespaces. */
+export type XmlnsMapping = {
+	xmlns: string,
+	clrNamespace: string,
 };
 
 /* Tauri Specta runtime */

@@ -1,18 +1,20 @@
 /**
  * XAML completion and navigation (CI-16): binding paths complete with the
  * members of the binding's data type (followed through each segment, into a
- * collection's element type after an indexer), and Go to Declaration opens the
- * C# member or type a binding, element or type attribute names.
+ * collection's element type after an indexer); elements, attributes and enum
+ * values complete from the UI framework and project types; and Go to Declaration
+ * opens the C# member or type a binding, element or type attribute names.
  */
 import type { Completion, CompletionContext, CompletionSource } from "@codemirror/autocomplete";
 import { EditorState, type Extension } from "@codemirror/state";
-import { commands, type BindableMember, type BindableType } from "@/bindings";
+import { commands, type BindableMember, type BindableType, type XamlTypes } from "@/bindings";
 import { CONTRIBUTED_DEFINITION, type ContributedDefinition, type EditorDocContext } from "@/editor/api";
 import { showHint } from "@/editor/lsp/hint";
 import { tx } from "@/platform/i18n";
 import { call, isTauri } from "@/platform/ipc";
 import { isVirtualUri } from "@/platform/virtualDocs";
 import { editorService } from "@/workbench/contributions";
+import { catalog, xamlOptions, xamlSiteAt, type XamlCatalog, type XamlOption } from "./elements";
 import {
   XAML_FILE,
   bindingPathAt,
@@ -73,6 +75,40 @@ const source: CompletionSource = async (ctx: CompletionContext) => {
   return { from: site.from, options: type.members.map(option), validFor: /^\w*$/ };
 };
 
+const TYPES_MS = 30_000;
+const catalogs = new Map<string, { at: number; value: Promise<XamlCatalog | null> }>();
+
+/** What the XAML file at `path` can name; cached a while, as resolving references runs MSBuild. */
+export function xamlCatalog(path: string): Promise<XamlCatalog | null> {
+  const hit = catalogs.get(path);
+  if (hit && Date.now() - hit.at < TYPES_MS) return hit.value;
+  const value = call(commands.dotnetXamlTypes(path))
+    .then((types: XamlTypes) => catalog(types))
+    .catch(() => null);
+  catalogs.set(path, { at: Date.now(), value });
+  return value;
+}
+
+const KIND: Record<XamlOption["kind"], string> = { type: "class", property: "property", event: "event", enum: "enum" };
+
+/** Elements, attributes and attribute values from the project's types. */
+export function elementSource(path: string): CompletionSource {
+  return async (ctx: CompletionContext) => {
+    const text = ctx.state.doc.toString();
+    const site = xamlSiteAt(text, ctx.pos);
+    if (!site) return null;
+    if (!ctx.explicit && site.from === ctx.pos && !/[<\s"]$/.test(text.slice(0, ctx.pos))) return null;
+    const cat = await xamlCatalog(path);
+    if (!cat || ctx.aborted) return null;
+    const options = xamlOptions(text, site, cat).map((o): Completion => ({
+      label: o.label,
+      type: KIND[o.kind],
+      detail: o.detail,
+    }));
+    return options.length ? { from: site.from, options, validFor: /^[\w.:]*$/ } : null;
+  };
+}
+
 const open = (path: string, line: number, col: number) =>
   editorService().openFile(path, { selection: { line, col }, focus: true });
 
@@ -118,5 +154,7 @@ export function xamlEditor(ctx: EditorDocContext): Extension {
     });
     return true;
   };
-  return EditorState.languageData.of(() => [{ openideaCompletion: source, [CONTRIBUTED_DEFINITION]: definition }]);
+  const elements = elementSource(ctx.path);
+  const completion: CompletionSource = async (c) => (await source(c)) ?? elements(c);
+  return EditorState.languageData.of(() => [{ openideaCompletion: completion, [CONTRIBUTED_DEFINITION]: definition }]);
 }

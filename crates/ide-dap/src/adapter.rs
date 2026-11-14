@@ -46,6 +46,9 @@ pub struct AdapterSpec {
     pub connect: Option<String>,
     /// A plugin language's adapter: start exactly this approved program.
     pub pinned: Option<ProgramPin>,
+    /// The adapter runs on the host of this SSH configuration (id or name): `command` and
+    /// `args` are remote. Started by the host's launcher over that connection.
+    pub ssh: Option<String>,
 }
 
 /// Built-in adapters used when no language definition names `adapter`.
@@ -143,6 +146,7 @@ pub fn resolve(config: &DebuggerConfig, cwd: PathBuf) -> AdapterSpec {
         server_host: None,
         connect: config.connect.clone(),
         pinned: config.pinned.clone(),
+        ssh: None,
     }
 }
 
@@ -398,6 +402,9 @@ impl AdapterLauncher for ProcessLauncher {
     fn launch(&self, mut spec: AdapterSpec, reuse_port: Option<u16>) -> LaunchFuture {
         Box::pin(async move {
             let stderr = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            if spec.ssh.is_some() {
+                return Err(IdeError::unavailable("debugging over an SSH configuration is not available here"));
+            }
             if let Some(port) = reuse_port {
                 // A remote adapter (`dlv --headless` on another machine) may answer slowly.
                 let (host, timeout) = match spec.server_host.as_deref() {

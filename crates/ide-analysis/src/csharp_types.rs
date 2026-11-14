@@ -4,7 +4,7 @@
 //! `…Command` properties the toolkit generates.
 
 use crate::lines::Lines;
-use ide_core::{LanguageId, Range};
+use ide_core::{LanguageId, Pos, Range};
 use ide_language::Syntax;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -202,6 +202,82 @@ pub fn simple_type_name(type_name: &str) -> String {
     base.rsplit('.').next().unwrap_or(base).trim().to_string()
 }
 
+/// Every declaration that makes a type of its own in the assembly.
+const METADATA_TYPES: &[&str] = &[
+    "class_declaration",
+    "struct_declaration",
+    "record_declaration",
+    "record_struct_declaration",
+    "interface_declaration",
+    "enum_declaration",
+    "delegate_declaration",
+];
+
+/// The metadata name of the type declared around `pos`, as reflection and IL spell it:
+/// `Namespace.Outer`1+Inner`. Without a position, or outside every type, the first type
+/// the file declares; `Program` for a file of top-level statements only.
+pub fn metadata_name_at(syntax: &Syntax, text: &str, pos: Option<Pos>) -> Option<String> {
+    let lines = Lines::new(text);
+    syntax
+        .with_parsed(&LanguageId::new("csharp"), text, &|| false, |parsed| {
+            let root = parsed.tree.root_node();
+            let around = pos.and_then(|p| {
+                let byte = lines.byte(p);
+                let mut node = root.descendant_for_byte_range(byte, byte)?;
+                while !METADATA_TYPES.contains(&node.kind()) {
+                    node = node.parent()?;
+                }
+                Some(node)
+            });
+            match around.or_else(|| first_type(root)) {
+                Some(node) => metadata_name(node, text),
+                None => children(root).any(|c| c.kind() == "global_statement").then(|| "Program".to_string()),
+            }
+        })
+        .ok()
+        .flatten()
+}
+
+fn first_type(node: Node) -> Option<Node> {
+    children(node).find_map(|child| match child.kind() {
+        k if METADATA_TYPES.contains(&k) => Some(child),
+        "namespace_declaration" | "file_scoped_namespace_declaration" | "declaration_list" => first_type(child),
+        _ => None,
+    })
+}
+
+fn metadata_name(node: Node, text: &str) -> Option<String> {
+    let mut types = Vec::new();
+    let mut namespaces = Vec::new();
+    let mut at = Some(node);
+    while let Some(n) = at {
+        let name = || n.child_by_field_name("name").map(|name| &text[name.byte_range()]);
+        match n.kind() {
+            k if METADATA_TYPES.contains(&k) => {
+                let arity = children(n)
+                    .find(|c| c.kind() == "type_parameter_list")
+                    .map_or(0, |list| children(list).filter(|c| c.kind() == "type_parameter").count());
+                types.push(if arity == 0 { name()?.to_string() } else { format!("{}`{arity}", name()?) });
+            }
+            "namespace_declaration" | "file_scoped_namespace_declaration" => namespaces.push(name()?),
+            // `namespace A.B;` is followed by its types rather than containing them.
+            "compilation_unit" => namespaces.extend(
+                children(n)
+                    .find(|c| c.kind() == "file_scoped_namespace_declaration" && c.end_byte() <= node.start_byte())
+                    .and_then(|c| c.child_by_field_name("name"))
+                    .map(|name| &text[name.byte_range()]),
+            ),
+            _ => {}
+        }
+        at = n.parent();
+    }
+    types.reverse();
+    namespaces.reverse();
+    let namespace = namespaces.join(".").split_whitespace().collect::<String>();
+    let types = types.join("+");
+    Some(if namespace.is_empty() { types } else { format!("{namespace}.{types}") })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +341,36 @@ public partial class MainViewModel : ViewModelBase, INotifyPropertyChanged
         assert_eq!(simple_type_name("ObservableCollection<Item>?"), "ObservableCollection");
         assert_eq!(simple_type_name("Models.User?"), "User");
         assert_eq!(simple_type_name("Item[]"), "Item");
+    }
+
+    const NAMES: &str = "namespace A.B;\npublic class Outer<T>\n{\n    public struct Inner<U, V> { void M() { } }\n    public delegate R Make<R>();\n    enum Kind { One }\n}\nrecord Point(int X);\n";
+
+    #[test]
+    fn metadata_names_count_type_parameters_and_nest_with_a_plus() {
+        let syntax = Syntax::new();
+        let at = |needle: &str| {
+            let byte = NAMES.find(needle).unwrap();
+            let line = NAMES[..byte].matches('\n').count();
+            let col = byte - NAMES[..byte].rfind('\n').map_or(0, |i| i + 1);
+            metadata_name_at(&syntax, NAMES, Some(Pos::new(line as u32, col as u32)))
+        };
+        assert_eq!(at("M()").as_deref(), Some("A.B.Outer`1+Inner`2"));
+        assert_eq!(at("Make").as_deref(), Some("A.B.Outer`1+Make`1"));
+        assert_eq!(at("One").as_deref(), Some("A.B.Outer`1+Kind"));
+        assert_eq!(at("public class").as_deref(), Some("A.B.Outer`1"));
+        assert_eq!(at("Point").as_deref(), Some("A.B.Point"));
+        // Outside every type, and with no position: the first type of the file.
+        assert_eq!(at("namespace").as_deref(), Some("A.B.Outer`1"));
+        assert_eq!(metadata_name_at(&syntax, NAMES, None).as_deref(), Some("A.B.Outer`1"));
+    }
+
+    #[test]
+    fn metadata_names_follow_block_namespaces_and_top_level_statements() {
+        let syntax = Syntax::new();
+        let nested = "namespace A { namespace B.C { interface IShape<in T> { } } }";
+        assert_eq!(metadata_name_at(&syntax, nested, None).as_deref(), Some("A.B.C.IShape`1"));
+        assert_eq!(metadata_name_at(&syntax, "class Plain { }", None).as_deref(), Some("Plain"));
+        assert_eq!(metadata_name_at(&syntax, "System.Console.WriteLine(1);\n", None).as_deref(), Some("Program"));
+        assert_eq!(metadata_name_at(&syntax, "using System;\n", None), None);
     }
 }

@@ -14,6 +14,7 @@ import type {
   DiagToolStatus,
   DumpAnalysis,
   DumpType,
+  HeapRetention,
   HeapSnapshot,
   MetricSample,
   RequestId,
@@ -40,7 +41,7 @@ import { heatByFile, lineHeatByFile } from "./trace";
 export type DiagTab = "live" | "threads" | "memory" | "dumps" | "trace" | "triggers" | "files" | "tools";
 /** How the CPU Trace tab shows the trace. */
 export type TraceView = "flame" | "tree" | "methods";
-export type Job = "stacks" | "gcdump" | "dump" | "analyze" | "trace" | "counters" | "symbols";
+export type Job = "stacks" | "gcdump" | "retention" | "dump" | "analyze" | "trace" | "counters" | "symbols";
 
 export interface Firing {
   rule: string;
@@ -66,6 +67,8 @@ export interface DiagnosticsState {
   heap: HeapSnapshot | null;
   /** The snapshot `heap` is compared with. */
   baseline: HeapSnapshot | null;
+  /** What retains the objects of the snapshot at `path`, once worked out. */
+  retention: { path: string; data: HeapRetention } | null;
   dump: DumpAnalysis | null;
   trace: TraceProfile | null;
   traceView: TraceView;
@@ -117,6 +120,7 @@ const initial = (): DiagnosticsState => ({
   stacks: null,
   heap: null,
   baseline: null,
+  retention: null,
   dump: null,
   trace: null,
   traceView: "flame",
@@ -300,8 +304,17 @@ export async function collectStacks(pid = selectedPid()) {
 export async function collectGcdump(pid = selectedPid()) {
   if (pid == null) return null;
   const heap = await job("gcdump", "gcdump", (r) => call(commands.diagGcdump(r, pid)));
-  if (heap) set((s) => ({ heap, baseline: s.baseline?.path === heap.path ? null : s.baseline }));
+  if (heap) set((s) => ({ heap, retention: null, baseline: s.baseline?.path === heap.path ? null : s.baseline }));
   return heap;
+}
+
+/** Works out what retains the objects of the current snapshot: retained sizes and paths from the roots. */
+export async function analyzeRetention() {
+  const path = get().heap?.path;
+  if (!path) return null;
+  const data = await job("retention", "gcdump", (r) => call(commands.diagGcdumpRetention(r, path)));
+  if (data) set({ retention: { path, data } });
+  return data;
 }
 
 export async function collectDump(pid = selectedPid(), kind = get().dumpType) {
@@ -417,7 +430,7 @@ export async function openArtifact(a: DiagArtifact) {
     case "gcdump": {
       set({ tab: "memory" });
       const heap = await job("gcdump", "gcdump", (r) => call(commands.diagGcdumpRead(r, a.path)));
-      if (heap) set({ heap });
+      if (heap) set({ heap, retention: null });
       return;
     }
     case "trace": {

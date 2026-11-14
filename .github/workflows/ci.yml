@@ -135,6 +135,9 @@ jobs:
         working-directory: fixtures/dotnet
       - run: dotnet build DotnetFixture.sln
         working-directory: fixtures/dotnet
+      # The VSTest projects (no Microsoft.Testing.Platform runner) live in a solution of their own.
+      - run: dotnet test VstestFixture.slnx
+        working-directory: fixtures/dotnet-vstest
 
   # The remote development server ships as a static Linux binary: keep that build working.
   server:
