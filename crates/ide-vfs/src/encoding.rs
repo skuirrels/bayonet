@@ -306,14 +306,8 @@ pub(crate) fn is_atomic_temp(path: &Path) -> bool {
 /// F_FULLFSYNC/fsync with "Inappropriate ioctl for device") and EINVAL (some
 /// network filesystems). Other errors keep failing the write.
 fn sync_error_is_tolerable(e: &std::io::Error) -> bool {
-    if e.kind() == std::io::ErrorKind::InvalidInput {
-        return true;
-    }
     // EINVAL is already covered by InvalidInput; ENOTTY has no ErrorKind of its own.
-    #[cfg(unix)]
-    return e.raw_os_error() == Some(25);
-    #[cfg(not(unix))]
-    false
+    e.kind() == std::io::ErrorKind::InvalidInput || (cfg!(unix) && e.raw_os_error() == Some(25))
 }
 
 /// Writes `bytes` to `path` atomically: temp file in the same directory, fsync,

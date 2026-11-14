@@ -266,14 +266,8 @@ fn snapshot(file: &Path) -> IdeResult<Option<Snapshot>> {
 /// network filesystems). Mirrors `sync_error_is_tolerable` in ide-vfs atomic
 /// writes; other errors keep failing the update.
 fn sync_error_is_tolerable(e: &std::io::Error) -> bool {
-    if e.kind() == std::io::ErrorKind::InvalidInput {
-        return true;
-    }
     // EINVAL is already covered by InvalidInput; ENOTTY has no ErrorKind of its own.
-    #[cfg(unix)]
-    return e.raw_os_error() == Some(25);
-    #[cfg(not(unix))]
-    false
+    e.kind() == std::io::ErrorKind::InvalidInput || (cfg!(unix) && e.raw_os_error() == Some(25))
 }
 
 fn append(file: &Path, rules: &[IgnoreRule]) -> IdeResult<()> {
