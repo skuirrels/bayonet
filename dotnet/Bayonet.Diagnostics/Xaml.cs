@@ -37,7 +37,7 @@ static class Xaml
     public static XamlTypes Types(XamlTypesParams p, CancellationToken ct)
     {
         var mappings = new List<XmlnsMapping>();
-        var read = new List<(MetadataReader Reader, bool Own, HashSet<string> Namespaces)>();
+        var read = new List<(MetadataReader Reader, bool Own)>();
         var files = new List<PEReader>();
         try
         {
@@ -57,26 +57,23 @@ static class Xaml
                 }
                 files.Add(pe);
                 var reader = pe.GetMetadataReader();
-                var mapped = XmlnsDefinitions(reader);
-                mappings.AddRange(mapped);
-                var isOwn = own.Contains(path);
-                if (mapped.Count > 0 || isOwn)
-                    read.Add((reader, isOwn, mapped.Select(m => m.ClrNamespace).ToHashSet()));
+                mappings.AddRange(XmlnsDefinitions(reader));
+                read.Add((reader, own.Contains(path)));
             }
-            var enums = new Dictionary<string, string[]>();
-            var shapes = new Dictionary<string, Shape>();
-            foreach (var pe in files)
+            var known = new Known();
+            foreach (var (reader, _) in read)
             {
-                var reader = pe.GetMetadataReader();
-                CollectEnums(reader, enums);
-                CollectShapes(reader, shapes);
+                CollectEnums(reader, known.Enums);
+                CollectShapes(reader, known.Shapes);
             }
-            collections = shapes;
+            // A mapped namespace may hold types of assemblies that map nothing themselves
+            // (MAUI maps namespaces of other assemblies; libraries add to a framework's).
+            var mappedNamespaces = mappings.Select(m => m.ClrNamespace).ToHashSet();
             var types = new List<XamlType>();
-            foreach (var (reader, isOwn, namespaces) in read)
+            foreach (var (reader, isOwn) in read)
             {
                 ct.ThrowIfCancellationRequested();
-                types.AddRange(TypesOf(reader, isOwn ? null : namespaces, enums));
+                types.AddRange(TypesOf(reader, isOwn ? null : mappedNamespaces, known));
             }
             return new XamlTypes([.. mappings.Distinct()], [.. types]);
         }
@@ -136,7 +133,12 @@ static class Xaml
     /// <summary>A type's base and interfaces, to tell collections from other types.</summary>
     sealed record Shape(string? Base, string[] Interfaces);
 
-    [ThreadStatic] static Dictionary<string, Shape>? collections;
+    /// <summary>What every read assembly declares, by full type name: enum values and type shapes.</summary>
+    sealed class Known
+    {
+        public readonly Dictionary<string, string[]> Enums = [];
+        public readonly Dictionary<string, Shape> Shapes = [];
+    }
 
     static string Bare(string type)
     {
@@ -169,14 +171,14 @@ static class Xaml
     }
 
     /// <summary>Whether XAML can fill a property of <c>type</c> in place, as a list or dictionary.</summary>
-    static bool IsCollection(string type)
+    static bool IsCollection(string type, Known known)
     {
         var name = Bare(type);
         for (var depth = 0; depth < 16 && name is not null; depth++)
         {
             if (name.EndsWith("Collection", StringComparison.Ordinal)) return true;
             if (name is "System.Collections.IList" or "System.Collections.IDictionary" or "System.Collections.Generic.IList" or "System.Collections.Generic.ICollection" or "System.Collections.Generic.IDictionary") return true;
-            if (collections is null || !collections.TryGetValue(name, out var shape)) return false;
+            if (!known.Shapes.TryGetValue(name, out var shape)) return false;
             if (shape.Interfaces.Any(i => i.Contains("IList", StringComparison.Ordinal) || i.Contains("ICollection", StringComparison.Ordinal) || i.Contains("IDictionary", StringComparison.Ordinal))) return true;
             name = shape.Base;
         }
@@ -198,7 +200,7 @@ static class Xaml
         }
     }
 
-    static IEnumerable<XamlType> TypesOf(MetadataReader reader, HashSet<string>? namespaces, Dictionary<string, string[]> enums)
+    static IEnumerable<XamlType> TypesOf(MetadataReader reader, HashSet<string>? namespaces, Known known)
     {
         var names = new TypeNames(reader);
         foreach (var handle in reader.TypeDefinitions)
@@ -206,7 +208,7 @@ static class Xaml
             XamlType? type;
             try
             {
-                type = TypeOf(reader, handle, names, namespaces, enums);
+                type = TypeOf(reader, handle, names, namespaces, known);
             }
             catch (BadImageFormatException)
             {
@@ -217,7 +219,7 @@ static class Xaml
         }
     }
 
-    static XamlType? TypeOf(MetadataReader reader, TypeDefinitionHandle handle, TypeNames names, HashSet<string>? namespaces, Dictionary<string, string[]> enums)
+    static XamlType? TypeOf(MetadataReader reader, TypeDefinitionHandle handle, TypeNames names, HashSet<string>? namespaces, Known known)
     {
         {
             var t = reader.GetTypeDefinition(handle);
@@ -245,9 +247,9 @@ static class Xaml
                 var settable = !accessors.Setter.IsNil && IsPublicMethod(reader, accessors.Setter);
                 // Collections are filled in place (`<Grid.RowDefinitions>`), so a get-only one counts.
                 var collection = !settable && !accessors.Getter.IsNil && IsPublicMethod(reader, accessors.Getter)
-                    && IsCollection(type);
+                    && IsCollection(type, known);
                 if (!settable && !collection) continue;
-                properties.Add(new XamlProperty(reader.GetString(prop.Name), type, ValuesOf(type, enums)));
+                properties.Add(new XamlProperty(reader.GetString(prop.Name), type, ValuesOf(type, known.Enums)));
             }
             foreach (var eh in t.GetEvents())
             {
@@ -266,7 +268,7 @@ static class Xaml
                 var signature = m.DecodeSignature(names, null);
                 if (signature.ParameterTypes.Length != 2 || signature.ReturnType != "System.Void") continue;
                 var type = signature.ParameterTypes[1];
-                attached.Add(new XamlProperty(method[3..], type, ValuesOf(type, enums)));
+                attached.Add(new XamlProperty(method[3..], type, ValuesOf(type, known.Enums)));
             }
             if (sealedAbstract && attached.Count == 0) return null;
             return new XamlType(

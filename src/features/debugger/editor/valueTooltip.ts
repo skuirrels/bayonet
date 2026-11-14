@@ -122,16 +122,28 @@ export function valueHint(
 /** Hover evaluations of the current stop, shared by the value tooltip and its claim on the hover. */
 let hovered: { stop: string; values: Map<string, Promise<Variable | null>> } = { stop: "", values: new Map() };
 
-/** The value tooltip's expression at `pos` and its value, or `null` when there is none to show. */
-function hoverValue(
-  view: EditorView,
-  pos: number,
-): { expr: { from: number; to: number; text: string }; session: DebugSession; value: Promise<Variable | null> } | null {
+interface HoverTarget {
+  expr: { from: number; to: number; text: string };
+  session: DebugSession;
+}
+
+/** The value tooltip's expression at `pos`, or `null` when there is none to show. Evaluates nothing. */
+function hoverTarget(view: EditorView, pos: number): HoverTarget | null {
   if (!workflowSettings().debugger.valueTooltip || navigationModifierHeld()) return null;
   const session = activeSession();
   if (!session || session.status !== "paused") return null;
   const expr = expressionAt(view, pos);
-  if (!expr) return null;
+  return expr ? { expr, session } : null;
+}
+
+/**
+ * The value of a hover target, once the mouse has rested for the value tooltip's delay:
+ * nothing is evaluated in the program for a hover that only passes by.
+ */
+async function hoverValue({ expr, session }: HoverTarget): Promise<Variable | null> {
+  const delay = workflowSettings().debugger.valueTooltipDelay - BASE_HOVER;
+  if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+  if (navigationModifierHeld()) return null;
   const stop = `${session.id}:${useDebug.getState().stopSeq}:${session.selectedFrame}`;
   if (hovered.stop !== stop) hovered = { stop, values: new Map() };
   let value = hovered.values.get(expr.text);
@@ -139,7 +151,7 @@ function hoverValue(
     value = evaluate(expr.text, "hover", session).catch(() => null);
     hovered.values.set(expr.text, value);
   }
-  return { expr, session, value };
+  return value;
 }
 
 /**
@@ -147,8 +159,8 @@ function hoverValue(
  * the editor asks this before showing its own popup.
  */
 async function valueTipClaims(view: EditorView, pos: number): Promise<boolean> {
-  const hover = hoverValue(view, pos);
-  return !!hover && (await hover.value) != null;
+  const target = hoverTarget(view, pos);
+  return !!target && (await hoverValue(target)) != null;
 }
 
 export function valueTooltip(): Extension {
@@ -158,15 +170,12 @@ export function valueTooltip(): Extension {
 function valueTooltipSource(): Extension {
   return hoverTooltip(
     async (view, pos) => {
-      const dbg = workflowSettings().debugger;
       // ⌘/Ctrl-hover shows the navigation info instead (closed on press by the LSP hover).
-      const hover = hoverValue(view, pos);
-      if (!hover) return null;
-      const { expr, session } = hover;
-      if (dbg.valueTooltipDelay > BASE_HOVER)
-        await new Promise((r) => setTimeout(r, dbg.valueTooltipDelay - BASE_HOVER));
-      const value = await hover.value;
+      const target = hoverTarget(view, pos);
+      if (!target) return null;
+      const value = await hoverValue(target);
       if (!value || navigationModifierHeld()) return null;
+      const { expr, session } = target;
       return {
         pos: expr.from,
         end: expr.to,

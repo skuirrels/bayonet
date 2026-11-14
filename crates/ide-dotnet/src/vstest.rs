@@ -403,22 +403,28 @@ pub async fn discover(
         .arg("--ListFullyQualifiedTests")
         .arg(format!("--ListTestsTargetPath:{}", list.display()));
     let listed = Arc::new(std::sync::Mutex::new(String::new()));
-    let sink = listed.clone();
-    let errors = on_output.clone();
-    let (names, fqns) = tokio::join!(
-        run_lines(names_cmd, cancel, move |line| {
-            let mut text = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fqns_output = Arc::new(std::sync::Mutex::new(String::new()));
+    let collect = |text: Arc<std::sync::Mutex<String>>| {
+        move |line: String| {
+            let mut text = text.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             text.push_str(&line);
             text.push('\n');
-        }),
-        run_lines(fqns_cmd, cancel, |_| {}),
+        }
+    };
+    let errors = on_output.clone();
+    let (names, fqns) = tokio::join!(
+        run_lines(names_cmd, cancel, collect(listed.clone())),
+        run_lines(fqns_cmd, cancel, collect(fqns_output.clone())),
     );
     let fqns_text = std::fs::read_to_string(&list);
     let _ = std::fs::remove_file(&list);
-    let listed = listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    if fqns? != 0 || names? != 0 {
-        // Why it failed is in what it printed.
-        listed.lines().for_each(|l| errors(l.to_owned()));
+    let text = |t: &Arc<std::sync::Mutex<String>>| t.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let listed = text(&listed);
+    let (fqns, names) = (fqns?, names?);
+    if fqns != 0 || names != 0 {
+        // Why it failed is in what the failing listing printed.
+        let printed = if names != 0 { listed } else { text(&fqns_output) };
+        printed.lines().for_each(|l| errors(l.to_owned()));
         return Err(io_error("the tests could not be listed; see the output"));
     }
     let fqns: Vec<String> = fqns_text.map_err(io_error)?.lines().map(str::to_owned).collect();

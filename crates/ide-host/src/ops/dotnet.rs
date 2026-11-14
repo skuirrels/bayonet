@@ -877,6 +877,10 @@ async fn tests_inner(
             Ok(TestTarget::Mtp(app)) => app,
             Ok(TestTarget::VsTest(target)) => {
                 let report = coverage.map(|out| out.join(&report_name));
+                // Only this run's report counts: the collector may write none.
+                if let Some(old) = &report {
+                    let _ = std::fs::remove_file(old);
+                }
                 let result = vstest_project(&target, run, &t.uids, report.as_deref(), debug, token, on_event).await;
                 if let Some(report) = report.filter(|r| r.is_file()) {
                     send(TestEvent::Coverage { project: project.clone(), report: report.into() });

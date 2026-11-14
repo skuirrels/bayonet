@@ -567,7 +567,8 @@ function MemoryTab() {
   const artifacts = useDiagnostics((s) => s.artifacts);
   const retention = useDiagnostics((s) => s.retention);
   const [query, setQuery] = useState("");
-  const [picked, setPicked] = useState<string | null>(null);
+  // The type selected for its retainers, in the snapshot it was selected in.
+  const [pick, setPick] = useState<{ path: string; name: string } | null>(null);
   const others = artifacts.filter((a) => a.kind === "gcdump" && a.path !== heap?.path);
   const compare = !!(heap && baseline);
   const rows = useMemo<HeapRow[]>(() => {
@@ -577,6 +578,7 @@ function MemoryTab() {
   }, [heap, baseline, compare, query]);
   const current = !compare && heap && retention?.path === heap.path ? retention.data : null;
   const retained = useMemo(() => (current ? retainedByName(current) : undefined), [current]);
+  const picked = heap && pick?.path === heap.path ? pick.name : null;
   return (
     <div className={styles.scroll}>
       <div className={styles.actions}>
@@ -651,7 +653,7 @@ function MemoryTab() {
             compare={compare}
             retained={retained}
             selected={retained ? picked : null}
-            onSelect={retained ? setPicked : undefined}
+            onSelect={retained && heap ? (name) => setPick({ path: heap.path, name }) : undefined}
           />
           {rows.length > HEAP_ROWS && <p className={styles.muted}>{moreRows(rows.length - HEAP_ROWS)}</p>}
           {retained && <RetainedBy type={picked ? retained.get(picked) : undefined} />}
