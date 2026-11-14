@@ -43,6 +43,9 @@ export function formatInlineBlame(line: BlameLine, now = Date.now()): string {
 }
 
 /** Only the current document version is retained, including its in-flight request. */
+/** How long a caret move or an edit waits before the file is blamed. */
+const BLAME_DELAY_MS = 300;
+
 class BlameCache {
   private doc: Text | undefined;
   private pending: Promise<BlameLine[]> | undefined;
@@ -50,6 +53,11 @@ class BlameCache {
   clear() {
     this.doc = undefined;
     this.pending = undefined;
+  }
+
+  /** Whether `doc`'s blame is loaded or loading: showing another of its lines runs no git. */
+  has(doc: Text): boolean {
+    return doc === this.doc && !!this.pending;
   }
 
   get(doc: Text, load: () => Promise<BlameLine[]>): Promise<BlameLine[]> {
@@ -163,14 +171,17 @@ export function inlineBlame(ctx: EditorDocContext): Extension {
         if (update.docChanged) this.cache.clear();
         if (update.docChanged || update.selectionSet) {
           this.line = undefined;
-          this.schedule();
+          // The caret moved within a document whose blame is at hand: follow it at once. Edits
+          // (and a document not blamed yet) wait, so typing doesn't run git per keystroke.
+          this.schedule(this.cache.has(update.state.doc) ? 0 : BLAME_DELAY_MS);
         }
       }
 
-      private schedule() {
+      private schedule(delay = BLAME_DELAY_MS) {
         clearTimeout(this.timer);
         ++this.generation;
-        this.timer = setTimeout(() => void this.refresh(), 300);
+        if (delay === 0) void this.refresh();
+        else this.timer = setTimeout(() => void this.refresh(), delay);
       }
 
       private async refresh() {
