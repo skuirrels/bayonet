@@ -89,6 +89,10 @@ jobs:
       # The newest 10.0 SDK: fixtures/dotnet/global.json takes 10.0.400 or later.
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: 10.0.x }
+      # A fresh SDK's first run, raced by parallel tests, can crash the CLI.
+      - name: Warm up the .NET SDK
+        shell: bash
+        run: dotnet new console -o "$RUNNER_TEMP/dotnet-warmup" && dotnet build "$RUNNER_TEMP/dotnet-warmup"
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
