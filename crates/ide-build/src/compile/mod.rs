@@ -182,7 +182,7 @@ fn detect_dir(dir: &Path, model: &BuildModel, root: &Path) -> Option<BuildSystem
         Some(BuildSystem::Cargo)
     } else if has(dir, &["go.mod"]) {
         Some(BuildSystem::Go)
-    } else if dotnet_target(dir).is_some() {
+    } else if dotnet_target(dir, root).is_some() {
         Some(BuildSystem::Dotnet)
     } else if has(dir, &["tsconfig.json", "package.json"]) {
         Some(BuildSystem::TypeScript)
@@ -239,9 +239,7 @@ pub fn plan(
     let system = detect_dir(&dir, model, root)
         .or((!model.gradle.is_empty()).then_some(BuildSystem::Gradle))
         .or_else(|| model.maven.as_ref().filter(|m| !m.projects.is_empty()).map(|_| BuildSystem::Maven))
-        .ok_or_else(|| {
-            IdeError::not_found("no supported build system (.NET, Maven, Gradle, Cargo, Go, TypeScript, CMake) found")
-        })?;
+        .ok_or_else(|| no_build_system(&dir))?;
     let module = module_dir.as_deref().filter(|d| *d != root);
     let title = match module {
         Some(d) => format!(
@@ -258,10 +256,21 @@ pub fn plan(
         // Go builds the file's package (a module holds many).
         BuildSystem::Go => go_steps(file.and_then(Path::parent).unwrap_or(&dir), kind),
         BuildSystem::TypeScript => ts_steps(&dir, kind),
-        BuildSystem::Dotnet => dotnet_steps(&dir, model, kind)?,
+        BuildSystem::Dotnet => dotnet_steps(&dir, root, model, kind)?,
         BuildSystem::CMake => cmake_steps(&dir, kind, cmake.and_then(<[_]>::first)),
     };
     Ok(BuildPlan { system, title, steps })
+}
+
+/// The error of a folder with nothing to build; one that only has solutions in subfolders says
+/// how to pick one.
+fn no_build_system(dir: &Path) -> IdeError {
+    match ide_dotnet::find_nested(dir).len() {
+        0 => IdeError::not_found("no supported build system (.NET, Maven, Gradle, Cargo, Go, TypeScript, CMake) found"),
+        n => IdeError::not_found(format!(
+            "the project folder has no solution of its own, and {n} in its subfolders: choose one with Choose Solution…"
+        )),
+    }
 }
 
 pub(super) fn maven_steps(
@@ -438,9 +447,11 @@ fn ts_steps(dir: &Path, kind: BuildKind) -> Vec<BuildStep> {
     vec![BuildStep::new(program, &["--noEmit", "--pretty", "false", "-p", "."], dir, Format::Tsc)]
 }
 
-/// What `dotnet build` builds in `dir`: its solution (`.slnx` first), else its project file.
-fn dotnet_target(dir: &Path) -> Option<PathBuf> {
-    ide_dotnet::find(dir).into_iter().next().or_else(|| {
+/// What `dotnet build` builds in `dir`: the solution of the project at `root` when it is in
+/// `dir`, else `dir`'s solution (`.slnx` first), else its project file.
+fn dotnet_target(dir: &Path, root: &Path) -> Option<PathBuf> {
+    let project_solution = ide_dotnet::find(root).into_iter().next().filter(|s| s.parent() == Some(dir));
+    project_solution.or_else(|| ide_dotnet::find(dir).into_iter().next()).or_else(|| {
         let mut projects: Vec<PathBuf> = std::fs::read_dir(dir)
             .into_iter()
             .flatten()
@@ -491,9 +502,11 @@ fn built_project<'a>(line: &str, projects: &'a [PathBuf]) -> Option<&'a PathBuf>
     projects.iter().find(|p| p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(name)))
 }
 
-fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Vec<BuildStep>> {
-    let target = dotnet_target(dir).ok_or_else(|| IdeError::not_found("no .NET solution or project found"))?;
-    let target = target.file_name().map_or_else(|| target.to_string_lossy(), |n| n.to_string_lossy()).into_owned();
+fn dotnet_steps(dir: &Path, root: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Vec<BuildStep>> {
+    let target = dotnet_target(dir, root).ok_or_else(|| IdeError::not_found("no .NET solution or project found"))?;
+    let projects = dotnet_projects(&target);
+    // Relative to `dir`: a solution chosen in a subfolder keeps its folder.
+    let target = target.strip_prefix(dir).unwrap_or(&target).to_string_lossy().into_owned();
     let program = model.dotnet.as_ref().map_or_else(|| "dotnet".to_owned(), |p| p.to_string_lossy().into_owned());
     // Plain console output in English with absolute paths, so the parser can read it.
     let common = ["-nologo", "-tl:off", "-clp:NoSummary", "-p:GenerateFullPaths=true"];
@@ -504,7 +517,7 @@ fn dotnet_steps(dir: &Path, model: &BuildModel, kind: BuildKind) -> IdeResult<Ve
     };
     let mut step = BuildStep::new(program, &args, dir, Format::MsBuild);
     step.args.extend(common.iter().map(|a| (*a).to_owned()));
-    step.projects = dotnet_projects(&dir.join(&target));
+    step.projects = projects;
     if let Some(binlogs) = &model.dotnet_binlogs {
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
         let stem = Path::new(&target).file_stem().map_or_else(|| "build".into(), |s| s.to_string_lossy());
@@ -1225,6 +1238,29 @@ mod tests {
         let p = plan(&root, &BuildModel::default(), BuildKind::Artifacts, None, None).unwrap();
         assert_eq!(&p.steps[0].args[..4], ["publish", "App.slnx", "-c", "Release"]);
         assert_eq!(progress_of("  Lib -> /p/src/Lib/bin/Debug/net10.0/Lib.dll"), Some(("Built Lib".into(), None)));
+    }
+
+    #[test]
+    fn dotnet_builds_the_solution_chosen_in_a_subfolder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repos");
+        write(&root, "Api/Api.sln", "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+        write(&root, "Tools/Tools.slnx", "<Solution />");
+        let err = plan(&root, &BuildModel::default(), BuildKind::Rebuild, None, None).unwrap_err();
+        assert!(err.message.contains("2 in its subfolders"), "{}", err.message);
+
+        ide_dotnet::choose_solution_in(&root, &root.join("Api/Api.sln")).unwrap();
+        let p = plan(&root, &BuildModel::default(), BuildKind::Rebuild, None, None).unwrap();
+        assert_eq!((p.system, p.steps[0].cwd.as_path()), (BuildSystem::Dotnet, root.as_path()));
+        let solution = Path::new("Api").join("Api.sln").to_string_lossy().into_owned();
+        assert_eq!(p.steps[0].args[..3], ["build", solution.as_str(), "--no-incremental"]);
+
+        // Building a file in its folder builds it too, not the folder's first solution by name.
+        write(&root, "Api/A.sln", "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+        write(&root, "Api/Directory.Build.props", "<Project />");
+        let file = root.join("Api/Directory.Build.props");
+        let p = plan(&root, &BuildModel::default(), BuildKind::Build, Some(&file), None).unwrap();
+        assert_eq!(p.steps[0].args[..2], ["build", "Api.sln"]);
     }
 
     /// Against the machine's own .NET SDK, when there is one: a compile error in the

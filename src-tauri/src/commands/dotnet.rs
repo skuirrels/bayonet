@@ -18,6 +18,23 @@ pub async fn dotnet_solutions(window: Window, state: State<'_, AppState>) -> Ide
     ide_host::ops::dotnet::dotnet_solutions(&state.host, window.label()).await
 }
 
+/// The solutions Choose Solution… offers: the project root's, then those in its subfolders.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_solution_choices(
+    window: Window,
+    state: State<'_, AppState>,
+) -> IdeResult<ide_dotnet::SolutionChoices> {
+    ide_host::ops::dotnet::dotnet_solution_choices(&state.host, window.label()).await
+}
+
+/// Makes `path`, in the project root or a folder below it, the project's solution.
+#[tauri::command]
+#[specta::specta]
+pub async fn dotnet_use_solution(window: Window, state: State<'_, AppState>, path: IpcPath) -> IdeResult<()> {
+    ide_host::ops::dotnet::dotnet_use_solution(&state.host, window.label(), path).await
+}
+
 /// The folder that opens as the project for the solution file `path` (File › Open Solution…,
 /// a drop on the Welcome screen); None when `path` is not one (a folder named `App.sln`).
 #[tauri::command]

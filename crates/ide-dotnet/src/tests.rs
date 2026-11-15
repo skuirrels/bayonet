@@ -179,13 +179,57 @@ fn an_opened_solution_is_found_first_and_kept_out_of_git() {
     let ignore = std::fs::read_to_string(root.join(".openidea/.gitignore")).unwrap();
     assert_eq!(ignore, "/shelf/\n/solution.local\n");
 
-    solution_replaced(&root.join("App.sln"), &root.join("App.slnx")).unwrap();
+    solution_replaced(root, &root.join("App.sln"), &root.join("App.slnx")).unwrap();
     assert_eq!(names()[0], "App.slnx");
-    solution_replaced(&root.join("Other.sln"), &root.join("Other.slnx")).unwrap();
+    solution_replaced(root, &root.join("Other.sln"), &root.join("Other.slnx")).unwrap();
     assert_eq!(names()[0], "App.slnx");
 
     std::fs::remove_file(root.join("App.slnx")).unwrap();
     assert_eq!(names(), ["App.sln", "Other.sln"]);
+}
+
+#[test]
+fn a_solution_in_a_subfolder_can_be_the_folders_solution() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in [
+        "Api/Api.sln",
+        "Api/Api.Tools.sln",
+        "Api/tools/Tools.slnx",
+        "Web/src/Web.slnx",
+        ".worktrees/x/Api.sln",
+        "Api/bin/Copy.sln",
+    ] {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    let rel = |paths: Vec<PathBuf>| {
+        paths.iter().map(|p| p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rel(find_nested(root)),
+        ["Api/Api.Tools.sln", "Api/Api.sln", "Api/tools/Tools.slnx", "Web/src/Web.slnx"]
+    );
+    assert!(find(root).is_empty());
+    let choices = solution_choices(root);
+    assert_eq!((choices.current, choices.solutions.len()), (None, 4));
+
+    choose_solution_in(root, &root.join("Api/Api.sln")).unwrap();
+    assert_eq!(rel(find(root)), ["Api/Api.sln"]);
+    assert_eq!(solution_choices(root).current, Some(IpcPath::from(root.join("Api/Api.sln"))));
+    assert_eq!(std::fs::read_to_string(root.join(".openidea/solution.local")).unwrap(), "Api/Api.sln\n");
+
+    // Converting it to .slnx next to it keeps it chosen.
+    std::fs::write(root.join("Api/Api.slnx"), "").unwrap();
+    solution_replaced(root, &root.join("Api/Api.sln"), &root.join("Api/Api.slnx")).unwrap();
+    assert_eq!(rel(find(root)), ["Api/Api.slnx"]);
+
+    assert!(choose_solution_in(root, &root.join("Api/Missing.sln")).is_err());
+    assert!(choose_solution_in(&root.join("Web"), &root.join("Api/Api.sln")).is_err());
+    // A hand-edited path out of the folder is ignored.
+    std::fs::write(root.join(".openidea/solution.local"), "Api/../../x/Api.sln\n").unwrap();
+    assert!(find(root).is_empty());
 }
 
 #[test]

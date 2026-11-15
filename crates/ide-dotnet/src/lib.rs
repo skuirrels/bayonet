@@ -139,14 +139,45 @@ pub fn format_of(path: &Path) -> Option<SolutionFormat> {
 }
 
 /// Solution files directly in `dir`: the one chosen last ([`choose_solution`]) first, then
-/// `.slnx` before `.sln` before `.slnf`, then by name.
+/// `.slnx` before `.sln` before `.slnf`, then by name. A solution chosen in a subfolder
+/// ([`choose_solution_in`]) comes first too.
 pub fn find(dir: &Path) -> Vec<PathBuf> {
     let mut found = by_format(dir);
-    if let Some(i) = chosen(dir).and_then(|c| found.iter().position(|p| *p == c)) {
-        let chosen = found.remove(i);
+    if let Some(chosen) = chosen(dir).filter(|c| is_solution_file(c)) {
+        found.retain(|p| *p != chosen);
         found.insert(0, chosen);
     }
     found
+}
+
+/// Solution files in the subfolders of `root`, by a bounded walk that skips hidden, output and
+/// dependency folders: the choices of a folder that holds several solutions of its own projects.
+pub fn find_nested(root: &Path) -> Vec<PathBuf> {
+    use ide_core::project_roots::{SEARCH_DEPTH, discover_matching};
+    discover_matching(root, SEARCH_DEPTH, false, |dir| dir != root && !by_format(dir).is_empty())
+        .iter()
+        .flat_map(|dir| by_format(dir))
+        .collect()
+}
+
+/// What Choose Solution… offers: the solutions of `root`, then those in its subfolders, and
+/// the one in use (none when `root` has none and none was chosen).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+pub struct SolutionChoices {
+    pub current: Option<IpcPath>,
+    pub solutions: Vec<IpcPath>,
+}
+
+/// The [`SolutionChoices`] of the project folder `root`.
+pub fn solution_choices(root: &Path) -> SolutionChoices {
+    let mut found = find(root);
+    let current = found.first().cloned().map(IpcPath::from);
+    for nested in find_nested(root) {
+        if !found.contains(&nested) {
+            found.push(nested);
+        }
+    }
+    SolutionChoices { current, solutions: found.into_iter().map(IpcPath::from).collect() }
 }
 
 /// Per-user file (git-ignored) naming the solution the user opened, relative to the root.
@@ -154,8 +185,9 @@ const CHOSEN_FILE: &str = "solution.local";
 
 fn chosen(dir: &Path) -> Option<PathBuf> {
     let name = std::fs::read_to_string(ide_core::project_dir::path(dir, CHOSEN_FILE)).ok()?;
-    let name = name.trim();
-    (!name.is_empty() && !name.contains(['/', '\\'])).then(|| dir.join(name))
+    let rel = Path::new(name.trim());
+    let below = rel.components().all(|c| matches!(c, Component::Normal(_)));
+    (!rel.as_os_str().is_empty() && below).then(|| dir.join(rel))
 }
 
 /// Whether `path` is a solution file on disk (`.sln`, `.slnx` or `.slnf`).
@@ -170,17 +202,31 @@ pub fn solution_folder(path: &Path) -> Option<&Path> {
 
 /// Makes the solution file `path` its folder's solution, which [`find`] then lists first.
 pub fn choose_solution(path: &Path) -> IdeResult<()> {
-    let (Some(dir), Some(name)) = (solution_folder(path), path.file_name()) else {
+    let Some(dir) = solution_folder(path) else {
         return Err(IdeError::invalid(format!("{} is not a solution file", path.display())));
     };
-    remember(dir, &name.to_string_lossy())
+    choose_solution_in(dir, path)
 }
 
-/// After `old` was converted to `new` (SLN-6): a chosen `old` becomes `new`.
-pub fn solution_replaced(old: &Path, new: &Path) -> IdeResult<()> {
-    let (Some(dir), Some(name)) = (new.parent(), new.file_name()) else { return Ok(()) };
-    if old.parent() == Some(dir) && chosen(dir).as_deref() == Some(old) {
-        remember(dir, &name.to_string_lossy())?;
+/// Makes the solution file `path`, in `root` or a folder below it, the solution of `root`.
+pub fn choose_solution_in(root: &Path, path: &Path) -> IdeResult<()> {
+    match path.strip_prefix(root) {
+        Ok(rel) if is_solution_file(path) && !rel.as_os_str().is_empty() => remember(root, &slash_path(rel)),
+        _ => Err(IdeError::invalid(format!("{} is not a solution file in {}", path.display(), root.display()))),
+    }
+}
+
+fn slash_path(rel: &Path) -> String {
+    rel.to_string_lossy().replace('\\', "/")
+}
+
+/// After `old` was converted to `new` next to it (SLN-6): `root`'s chosen `old` becomes `new`.
+pub fn solution_replaced(root: &Path, old: &Path, new: &Path) -> IdeResult<()> {
+    if old.parent() == new.parent()
+        && chosen(root).as_deref() == Some(old)
+        && let Ok(rel) = new.strip_prefix(root)
+    {
+        remember(root, &slash_path(rel))?;
     }
     Ok(())
 }

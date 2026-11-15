@@ -155,6 +155,11 @@ function disposed(popup: LspPopup | null) {
   if (popup?.kind === "list") popup.onClose?.();
 }
 
+/** Where a chooser opened from an action (not from the caret) shows: centred under the toolbar. */
+export function topCentreAnchor(): PopupPoint {
+  return { x: window.innerWidth / 2 - 200, y: 96 };
+}
+
 export function openPopup(popup: LspPopup) {
   const previous = useLspPopup.getState().popup;
   useLspPopup.setState((s) => ({ popup, seq: s.seq + 1 }));
