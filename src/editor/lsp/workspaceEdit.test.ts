@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Text } from "@codemirror/state";
-import { describeSummary, editPreviewLines, needsPreview, summarizeWorkspaceEdit } from "./workspaceEdit";
+import {
+  describeSummary,
+  editPreviewLines,
+  needsPreview,
+  splitFileMoves,
+  summarizeWorkspaceEdit,
+} from "./workspaceEdit";
 
 const edit = (line: number) => ({ range: { start: { line, col: 0 }, end: { line, col: 3 } }, new_text: "new" });
 
@@ -41,6 +47,19 @@ describe("summarizeWorkspaceEdit", () => {
   it("applies single-file renames directly", () => {
     const s = summarizeWorkspaceEdit({ files: [{ kind: "edit", path: "/p/a.ts", edits: [edit(0), edit(3)] }] });
     expect(needsPreview(s)).toBe(false);
+  });
+
+  it("splits a type's file rename from its text edits", () => {
+    const text = { kind: "edit" as const, path: "/p/Greeter.cs", edits: [edit(0)] };
+    const move = { kind: "rename" as const, from: "/p/Greeter.cs", to: "/p/Welcomer.cs" };
+    expect(splitFileMoves({ files: [text, move], preconditions: [{ path: "/p/Greeter.cs", hash: "h" }] })).toEqual({
+      edit: { files: [text], preconditions: [{ path: "/p/Greeter.cs", hash: "h" }] },
+      moves: [{ from: "/p/Greeter.cs", to: "/p/Welcomer.cs" }],
+    });
+    expect(splitFileMoves({ files: [text] })).toBeNull();
+    // Edits after a move, or other operations, name paths the split would break.
+    expect(splitFileMoves({ files: [move, text] })).toBeNull();
+    expect(splitFileMoves({ files: [{ kind: "create", path: "/p/x.cs", overwrite: false }, move] })).toBeNull();
   });
 
   it("handles empty edits", () => {

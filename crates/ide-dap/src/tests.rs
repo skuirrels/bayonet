@@ -185,6 +185,13 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
             "scopes" => {
                 ok!(msg, json!({"scopes": [{"name": "Locals", "variablesReference": 100, "expensive": false}]}))
             }
+            "variables" if msg["arguments"]["variablesReference"] == 300 => ok!(
+                msg,
+                json!({"variables": [
+                    {"name": "[0]", "value": "1", "type": "int", "variablesReference": 0, "evaluateName": "xs[0]"},
+                    {"name": "[1]", "value": "5", "type": "int", "variablesReference": 0, "evaluateName": "xs[1]"},
+                ]})
+            ),
             "variables" => ok!(
                 msg,
                 json!({"variables": [
@@ -192,6 +199,18 @@ async fn fake_adapter<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream
                     {"name": "req", "value": "{Req}", "type": "Req", "variablesReference": 101, "evaluateName": "req"},
                 ]})
             ),
+            // netcoredbg-like answers for the LINQ helper: no lambdas, `xs` an `int[2]`.
+            "evaluate" if msg["arguments"]["expression"].as_str().unwrap().contains("=>") => send!(
+                json!({"type": "response", "request_seq": msg["seq"], "command": "evaluate", "success": false, "message": "Parameter not implemented!"})
+            ),
+            "evaluate" if msg["arguments"]["expression"] == "xs" => {
+                ok!(msg, json!({"result": "{int[2]}", "type": "int[]", "variablesReference": 300}))
+            }
+            "evaluate" if msg["arguments"]["expression"].as_str().unwrap().starts_with("xs[") => {
+                let e = msg["arguments"]["expression"].as_str().unwrap();
+                let big = e.starts_with("xs[1]");
+                ok!(msg, json!({"result": if big { "true" } else { "false" }, "type": "bool", "variablesReference": 0}))
+            }
             "evaluate" => ok!(msg, json!({"result": "42", "type": "int", "variablesReference": 0})),
             "completions" => ok!(
                 msg,
@@ -432,6 +451,46 @@ async fn full_protocol_flow() {
     let terminated =
         h.events.lock().iter().filter(|e| matches!(e, IdeEvent::Debug { event: DebugEvent::Terminated, .. })).count();
     assert_eq!(terminated, 1, "terminated emitted once");
+}
+
+#[tokio::test]
+async fn netcoredbg_linq_is_evaluated_by_the_client_and_dropped_on_resume() {
+    let h = harness(Script::default());
+    let mut cfg = config();
+    cfg.adapter = "netcoredbg".into();
+    let id = h.start(cfg).await.unwrap();
+    h.wait_event(|e| matches!(e, DebugEvent::Stopped { .. })).await;
+    let count = h.manager.evaluate(id, Some(10), "xs.Count(x => x > 2)".into()).await.unwrap();
+    assert_eq!((count.value.as_str(), count.type_name.as_deref()), ("1", Some("int")));
+    let asked: Vec<Value> = h
+        .log
+        .lock()
+        .iter()
+        .filter(|m| m["command"] == "evaluate" && m["type"] == "request")
+        .map(|m| m["arguments"]["expression"].clone())
+        .collect();
+    assert!(asked.contains(&json!("xs[0] > 2")) && asked.contains(&json!("xs[1] > 2")), "{asked:?}");
+
+    let seq = h.manager.evaluate_in(id, Some(10), "xs.Where(x => x > 2)".into(), Some("watch".into())).await.unwrap();
+    assert_eq!(seq.value, "Count = 1");
+    let children = h.manager.variables(id, seq.variables_reference).await.unwrap();
+    assert_eq!(
+        children.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.evaluate_name.as_deref())).collect::<Vec<_>>(),
+        [("[0]", "5", Some("xs[1]"))]
+    );
+    assert!(
+        !h.log
+            .lock()
+            .iter()
+            .any(|m| m["command"] == "variables" && m["arguments"]["variablesReference"] == seq.variables_reference),
+        "synthetic references never reach the adapter"
+    );
+    // Other adapters get the adapter's answer unchanged.
+    let other = h.start(config()).await.unwrap();
+    assert!(h.manager.evaluate(other, Some(10), "xs.Count(x => x > 2)".into()).await.is_err());
+
+    h.manager.resume(id, 1).await.unwrap();
+    assert!(h.manager.variables(id, seq.variables_reference).await.is_err(), "gone after resuming");
 }
 
 #[tokio::test]

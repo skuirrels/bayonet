@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Legacy.Core/Legacy.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Legacy.Core.MSTests/Legacy.Core.MSTests.csproj" />
+    <Project Path="tests/Legacy.Core.NUnitTests/Legacy.Core.NUnitTests.csproj" />
+    <Project Path="tests/Legacy.Core.XunitTests/Legacy.Core.XunitTests.csproj" />
+  </Folder>
+</Solution>

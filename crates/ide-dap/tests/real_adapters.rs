@@ -735,6 +735,17 @@ const DEMO_CSPROJ: &str = r#"<Project Sdk="Microsoft.NET.Sdk">
 
 const DEMO_PROGRAM: &str = r#"record Order(int Id, decimal Total);
 
+class Basket
+{
+    private int count = 2;
+
+    public int Run()
+    {
+        var local = count + 1;
+        return local; // in method
+    }
+}
+
 static class Program
 {
     static readonly CountdownEvent Started = new(4);
@@ -767,8 +778,13 @@ static class Program
         }
         Started.Wait();
         var orders = new List<Order> { new(1, 12.5m), new(2, 3m), new(3, 40m) };
+        var list = new List<int> { 1, 2, 3, 4, 5 };
+        var dict = new Dictionary<string, int> { ["a"] = 1, ["b"] = 2, ["c"] = 3 };
+        dict.Remove("b");
+        var set = new HashSet<int> { 10, 20, 30 };
+        set.Remove(20);
         total = orders.Sum(o => o.Total); // break here
-        total += 1; // next
+        total += new Basket().Run(); // next
         Gate.Set();
         foreach (var w in workers) w.Join();
         return total > 0 ? 0 : 1;
@@ -881,6 +897,48 @@ async fn netcoredbg_launches_a_project_and_reads_threads_and_collections() {
     let total = members.iter().find(|v| v.name == "Total").expect("Total member");
     assert_eq!(total.value, "12.5");
 
+    // DBG-3: LINQ with lambdas runs client-side, element by element; static calls are qualified.
+    let count = m.evaluate(s, Some(top.id), "list.Where(x => x > 2).Count()".into()).await.expect("LINQ evaluates");
+    assert_eq!((count.value.as_str(), count.type_name.as_deref()), ("3", Some("int")));
+    for (expression, expected) in [
+        ("orders.Where(o => o.Total > 5).Select(o => o.Id).Sum()", "4"),
+        ("orders.Max(o => o.Total)", "40"),
+        ("orders.Sum(o => o.Total)", "55.5"),
+        ("list.Any(x => x > 4)", "true"),
+        ("list.Average()", "3"),
+        ("list.OrderByDescending(x => x).First()", "5"),
+        ("dict.Where(kv => kv.Value > 1).Count()", "1"),
+        ("dict.Count()", "2"),
+        ("set.Sum()", "40"),
+        ("Math.Max(1, 2)", "2"),
+        ("string.IsNullOrEmpty(\"\")", "true"),
+        ("orders[0] != null", "true"),
+    ] {
+        let v = m
+            .evaluate(s, Some(top.id), expression.into())
+            .await
+            .unwrap_or_else(|e| panic!("{expression}: {}", e.message));
+        assert_eq!(v.value, expected, "{expression}");
+    }
+    let seq = m.evaluate(s, Some(top.id), "list.Where(x => x > 2)".into()).await.unwrap();
+    let elements = m.variables(s, seq.variables_reference).await.unwrap();
+    assert_eq!(elements.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(), ["3", "4", "5"]);
+    // The collection visualiser's dictionary input: `_entries` slots, free ones marked by `next < -1`.
+    let dict = locals.iter().find(|v| v.name == "dict").expect("dict local");
+    let fields = m.variables(s, dict.variables_reference).await.unwrap();
+    let entries = fields.iter().find(|f| f.name == "_entries").expect("_entries field");
+    assert_eq!(fields.iter().find(|f| f.name == "_count").map(|f| f.value.as_str()), Some("3"));
+    let slots = m.variables(s, entries.variables_reference).await.unwrap();
+    let free = m.variables(s, slots[1].variables_reference).await.unwrap();
+    let names: Vec<&str> = free.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["hashCode", "next", "key", "value"]);
+    assert_eq!(free[1].value, "-2", "the removed entry is a free slot");
+    // DBG-6 data tips: `hover` evaluation of a local and a member path.
+    for (expression, expected) in [("total", "0"), ("orders[0].Total", "12.5"), ("list[1]", "2")] {
+        let v = m.evaluate_in(s, Some(top.id), expression.into(), Some("hover".into())).await.expect(expression);
+        assert_eq!(v.value, expected, "{expression}");
+    }
+
     let caps = m.capabilities(s).unwrap();
     println!("netcoredbg gotoTargets: {}", caps.goto_targets);
     if caps.goto_targets {
@@ -889,6 +947,18 @@ async fn netcoredbg_launches_a_project_and_reads_threads_and_collections() {
         m.set_next_statement(s, thread, source.clone(), next).await.expect("set next statement");
         let _ = stopped_within(&run, seen, 10).await;
         assert_eq!(run.top(s, thread).await.line, next);
+    }
+    // `this.field` in an instance method.
+    let in_method = line_of(DEMO_PROGRAM, "// in method");
+    m.set_breakpoints(source.clone(), vec![line_bp_at(in_method)]).await.unwrap();
+    let seen = run.seen();
+    m.resume(s, thread).await.unwrap();
+    let (_, thread, _) = stopped_within(&run, seen, 30).await.expect("stopped in Basket.Run");
+    let frame = run.top(s, thread).await;
+    assert_eq!(frame.line, in_method);
+    for (expression, expected) in [("this.count", "2"), ("count", "2"), ("local", "3")] {
+        let v = m.evaluate_in(s, Some(frame.id), expression.into(), Some("hover".into())).await.expect(expression);
+        assert_eq!(v.value, expected, "{expression}");
     }
     m.stop(s).await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);

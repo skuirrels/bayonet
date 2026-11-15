@@ -14,6 +14,7 @@ mod cargo;
 pub mod connection;
 pub mod container;
 mod dotnet;
+mod dotnet_eval;
 pub mod jdwp;
 pub mod kotlin;
 mod kotlin_jdwp;
@@ -1155,7 +1156,9 @@ impl DebugManager {
         value: String,
     ) -> IdeResult<Variable> {
         let session = self.session(s)?;
-        let body = if container > 0 && session.supports("supportsSetVariable") {
+        // The children of a sequence evaluated for netcoredbg are set by their own expression.
+        let in_adapter = container > 0 && !dotnet_eval::Synthetic::is(container);
+        let body = if in_adapter && session.supports("supportsSetVariable") {
             session
                 .conn
                 .request_timeout(
@@ -1215,7 +1218,18 @@ impl DebugManager {
             }
             frame
         };
-        Ok(body.get("stackFrames").and_then(Value::as_array).map(|f| f.iter().map(frame).collect()).unwrap_or_default())
+        let frames: Vec<StackFrame> = body
+            .get("stackFrames")
+            .and_then(Value::as_array)
+            .map(|f| f.iter().map(frame).collect())
+            .unwrap_or_default();
+        if session.adapter == dotnet_eval::ADAPTER {
+            let mut known = session.frames.lock();
+            for f in &frames {
+                known.insert(f.id, (f.name.clone(), f.path.clone().map(ide_core::IpcPath::into_path_buf)));
+            }
+        }
+        Ok(frames)
     }
 
     pub async fn scopes(&self, s: DebugSessionId, frame_id: i64) -> IdeResult<Vec<Scope>> {
@@ -1237,16 +1251,7 @@ impl DebugManager {
     }
 
     pub async fn variables(&self, s: DebugSessionId, reference: i64) -> IdeResult<Vec<Variable>> {
-        let body = self
-            .session(s)?
-            .conn
-            .request_timeout("variables", json!({ "variablesReference": reference }), REQUEST_TIMEOUT)
-            .await?;
-        Ok(body
-            .get("variables")
-            .and_then(Value::as_array)
-            .map(|v| v.iter().map(variable_from).collect())
-            .unwrap_or_default())
+        Ok(self.session(s)?.variables(reference, None).await?)
     }
 
     /// Evaluates in the `repl` context.
@@ -1267,18 +1272,13 @@ impl DebugManager {
         if context == "hover" && !session.supports("supportsEvaluateForHovers") {
             context = "watch".into();
         }
-        let mut args = json!({ "expression": expression, "context": context });
-        if let Some(f) = frame_id {
-            args["frameId"] = f.into();
+        let answer = session.evaluate(frame_id, &expression, &context).await;
+        if session.adapter != dotnet_eval::ADAPTER {
+            return Ok(answer?);
         }
-        let body = session.conn.request_timeout("evaluate", args, REQUEST_TIMEOUT).await?;
-        Ok(Variable {
-            name: expression.clone(),
-            value: body.get("result").and_then(Value::as_str).unwrap_or_default().to_owned(),
-            type_name: body.get("type").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_owned),
-            variables_reference: body.get("variablesReference").and_then(Value::as_i64).unwrap_or(0),
-            evaluate_name: Some(expression),
-        })
+        // netcoredbg has no lambdas, unqualified type names or null tests: run those here.
+        let host = dotnet_eval::SessionHost::new(&session, frame_id, &context);
+        dotnet_eval::assist(&host, &expression, answer).await
     }
 
     /// Completions for `text` at `line` / `column` (0-based, UTF-16) in the frame's scope; none

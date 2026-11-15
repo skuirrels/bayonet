@@ -91,9 +91,14 @@ fn json_start(stdout: &str) -> Option<usize> {
 
 /// The `Analyzer` items of `dotnet msbuild -getItem:Analyzer` (after any errors the build printed).
 pub fn parse_analyzers(stdout: &str) -> Vec<PathBuf> {
+    parse_items(stdout, "Analyzer")
+}
+
+/// The paths of the `item` items of `dotnet msbuild -getItem:<item>`.
+pub fn parse_items(stdout: &str, item: &str) -> Vec<PathBuf> {
     let Some(start) = json_start(stdout) else { return Vec::new() };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout[start..]) else { return Vec::new() };
-    let mut out: Vec<PathBuf> = json["Items"]["Analyzer"]
+    let mut out: Vec<PathBuf> = json["Items"][item]
         .as_array()
         .into_iter()
         .flatten()

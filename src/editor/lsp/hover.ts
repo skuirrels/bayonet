@@ -33,7 +33,7 @@ import { basename } from "@/platform/project";
 import { iconNode } from "./iconMarkup";
 import { applyCodeAction, quickFixesAt } from "./intentions";
 import { editorPrefs } from "@/platform/editorSettings";
-import { CONTRIBUTED_HOVER, contributedAt, type ContributedHover } from "@/editor/api";
+import { CONTRIBUTED_HOVER, contributedAt, hoverPreemptions, type ContributedHover } from "@/editor/api";
 import { navigationModifierHeld, onNavigationModifier, pointerTarget } from "@/platform/navigationModifier";
 import { phpConstructAt } from "./phpConstructs";
 
@@ -143,9 +143,20 @@ export function hoverYields(): boolean {
   return navigationModifierHeld() || !!pointerTarget()?.closest?.(".cm-lsp-inlay");
 }
 
+/** Whether a {@link hoverPreemptions} popup owns `pos` (asked alongside the language server). */
+async function preemptedAt(view: EditorView, pos: number): Promise<boolean> {
+  const claims = view.state.facet(hoverPreemptions).map((claim) =>
+    Promise.resolve()
+      .then(() => claim(view, pos))
+      .catch(() => false),
+  );
+  return (await Promise.all(claims)).some(Boolean);
+}
+
 /** Problems always; quick documentation per Settings › Editor › Code Editing. */
 export async function hoverSource(view: EditorView, pos: number) {
   if (hoverYields()) return null;
+  const preempted = preemptedAt(view, pos);
   const diags = diagnosticsAt(view, pos);
   let hover: Hover | null = null;
   if (editorPrefs().codeEditing.quickDocOnHover)
@@ -154,8 +165,8 @@ export async function hoverSource(view: EditorView, pos: number) {
     } catch (e) {
       reportLspError(view, e, false);
     }
-  // ⌘/Ctrl pressed while the server answered.
-  if (hoverYields()) return null;
+  // ⌘/Ctrl pressed while the server answered, or a value tooltip has the spot.
+  if (hoverYields() || (await preempted)) return null;
   if (!diags.length && !hover) return null;
   let from = pos,
     to = pos;

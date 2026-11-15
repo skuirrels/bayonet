@@ -396,28 +396,46 @@ pub fn prepare_container(data: &std::path::Path, name: &str) -> IdeResult<String
         let uname = ide_docker::exec(&ep, name, &["uname", "-m"])?;
         let arch = container::linux_arch(&uname)
             .ok_or_else(|| IdeError::unavailable(format!("netcoredbg has no build for {}", uname.trim())))?;
-        let platform = ide_tools::platform::Platform {
-            os: ide_tools::platform::Os::Linux,
-            arch: if arch == "arm64" { ide_tools::platform::Arch::Arm64 } else { ide_tools::platform::Arch::X64 },
-        };
-        let tools = ide_tools::Tools::with_paths(
-            data.join(format!("tools-linux-{arch}")),
-            ide_core::tool_path::search_path(),
-            platform,
-        );
-        let bin = tools.root().join("netcoredbg");
-        let installed = find_file(&bin, "netcoredbg");
-        let exe = match installed {
-            Some(exe) => exe,
-            None => {
-                tools.install("netcoredbg", &[], &ide_core::CancellationToken::new(), &|_| {})?;
-                find_file(&bin, "netcoredbg").ok_or_else(|| IdeError::internal("netcoredbg was not unpacked"))?
-            }
-        };
-        let dir = exe.parent().ok_or_else(|| IdeError::internal("netcoredbg has no folder"))?;
-        ide_docker::copy_dir_into(&ep, dir, name, container::DEBUGGER_DIR)?;
+        let dir = linux_netcoredbg(data, arch)?;
+        ide_docker::copy_dir_into(&ep, &dir, name, container::DEBUGGER_DIR)?;
     }
     Ok(container::pipe_transport(&docker.display().to_string(), name).to_string())
+}
+
+/// The folder of the Linux netcoredbg for `arch` (`x64`, `arm64`) on this machine, installed
+/// once per architecture by the tool installer (blocking; the first call downloads it).
+pub fn linux_netcoredbg(data: &std::path::Path, arch: &str) -> IdeResult<PathBuf> {
+    use ide_core::IdeError;
+    let platform = ide_tools::platform::Platform {
+        os: ide_tools::platform::Os::Linux,
+        arch: if arch == "arm64" { ide_tools::platform::Arch::Arm64 } else { ide_tools::platform::Arch::X64 },
+    };
+    let tools = ide_tools::Tools::with_paths(
+        data.join(format!("tools-linux-{arch}")),
+        ide_core::tool_path::search_path(),
+        platform,
+    );
+    let bin = tools.root().join("netcoredbg");
+    let exe = match find_file(&bin, "netcoredbg") {
+        Some(exe) => exe,
+        None => {
+            tools.install("netcoredbg", &[], &ide_core::CancellationToken::new(), &|_| {})?;
+            find_file(&bin, "netcoredbg").ok_or_else(|| IdeError::internal("netcoredbg was not unpacked"))?
+        }
+    };
+    exe.parent().map(std::path::Path::to_path_buf).ok_or_else(|| IdeError::internal("netcoredbg has no folder"))
+}
+
+/// The .NET processes on the host of SSH configuration `configuration` (its id).
+pub async fn debug_ssh_processes(host: &Host, configuration: String) -> IdeResult<Vec<attach::AttachableProcess>> {
+    crate::ssh_debug::processes(&host.ssh, &configuration).await
+}
+
+/// Installs a Linux netcoredbg on the host of SSH configuration `configuration` when it has
+/// none, and returns the `pipeTransport` JSON of an attach request that runs it there.
+pub async fn debug_prepare_ssh(host: &Host, configuration: String) -> IdeResult<String> {
+    let data = host.local_data_dir.clone();
+    crate::ssh_debug::prepare(&host.ssh, &configuration, move |arch| linux_netcoredbg(&data, arch)).await
 }
 
 /// The first file named `name` under `dir` (an unpacked release keeps it in a subfolder).
@@ -590,6 +608,8 @@ pub(crate) fn register(d: &mut Dispatcher) {
     });
     d.add("debug_attachable_processes", |c| async move { debug_attachable_processes(&c.host, &c.window).await });
     d.add("debug_prepare_container", |c| async move { debug_prepare_container(&c.host, c.arg("container")?).await });
+    d.add("debug_ssh_processes", |c| async move { debug_ssh_processes(&c.host, c.arg("configuration")?).await });
+    d.add("debug_prepare_ssh", |c| async move { debug_prepare_ssh(&c.host, c.arg("configuration")?).await });
     d.add("debug_listen_for_jvm", |c| async move {
         debug_listen_for_jvm(&c.host, &c.window, c.arg("request")?, c.arg("host")?, c.arg("port")?).await
     });

@@ -360,6 +360,12 @@ export interface ContributedIntention {
 /** A background provider has new context actions for the current document. */
 export const intentionsChanged = StateEffect.define<null>();
 
+/**
+ * Hover popups that win over the documentation and problems hover at `pos` (the
+ * debugger's value tooltip while paused): the plain hover stays out when one answers `true`.
+ */
+export const hoverPreemptions = Facet.define<(view: EditorView, pos: number) => boolean | Promise<boolean>>();
+
 /** Local fixes of a diagnostic range (hover link and Apply Quick Fix). */
 export const quickFixProviders = Facet.define<(view: EditorView, from: number, to: number) => ContributedIntention[]>();
 

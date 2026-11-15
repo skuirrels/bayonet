@@ -1,7 +1,8 @@
 //! The .NET diagnostics helper (`dotnet/Bayonet.Diagnostics`): records EventPipe traces
 //! and reads them with TraceEvent. That gives what `dotnet-trace`'s Speedscope export
 //! cannot: profiling from launch, source lines from portable PDBs, and runtime events
-//! such as garbage collections.
+//! such as garbage collections. It also disassembles a type of an assembly to IL
+//! (ILSpy's disassembler) for the IL view.
 //!
 //! Its sources are embedded here. The first use builds them with the installed SDK into
 //! the IDE's tools folder, under a fingerprint of the sources, so a changed helper is
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Must match `Protocol.Version` in the helper's `Program.cs`.
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 4;
 const PROJECT: &str = "Bayonet.Diagnostics.csproj";
 const ASSEMBLY: &str = "Bayonet.Diagnostics.dll";
 
@@ -25,6 +26,9 @@ const SOURCES: &[(&str, &str)] = &[
     ("Rpc.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Rpc.cs")),
     ("Recorder.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Recorder.cs")),
     ("Analyzer.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Analyzer.cs")),
+    ("Il.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Il.cs")),
+    ("Heap.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Heap.cs")),
+    ("Xaml.cs", include_str!("../../../dotnet/Bayonet.Diagnostics/Xaml.cs")),
 ];
 
 /// FNV-1a over the sources: stable across builds of the IDE, unlike `DefaultHasher`.
@@ -184,6 +188,96 @@ pub struct Analysis {
     pub collections: Vec<Collection>,
 }
 
+/// The IL of one type.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Disassembly {
+    pub text: String,
+    /// The assembly the type was found in, after following type forwards.
+    pub assembly: PathBuf,
+    /// Its metadata name, `Namespace.Outer`1+Inner`.
+    #[serde(rename = "type")]
+    pub type_name: String,
+    /// Set when only a reference assembly had the type: its members have no bodies.
+    pub reference_assembly: bool,
+}
+
+/// A reference path from a GC root to objects of a type, as type names, root first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionPath {
+    /// How many of the type's objects are reached this way.
+    pub count: u64,
+    /// What those objects retain.
+    pub retained_bytes: u64,
+    pub frames: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedType {
+    pub name: String,
+    /// What the collector would free with this type's objects: their own size and that of
+    /// everything only they keep alive.
+    pub retained_bytes: u64,
+    /// The commonest paths, for the types that retain most; empty for the rest.
+    pub paths: Vec<RetentionPath>,
+}
+
+/// What keeps the objects of a heap snapshot alive.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapRetention {
+    pub total_bytes: u64,
+    pub objects: u64,
+    /// Largest retained size first.
+    pub types: Vec<RetainedType>,
+}
+
+/// An XML namespace a UI framework assembly maps to one of its CLR namespaces.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct XmlnsMapping {
+    pub xmlns: String,
+    pub clr_namespace: String,
+}
+
+/// A property XAML can set, or an attached property (`Grid.Row`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct XamlProperty {
+    pub name: String,
+    /// `System.Double`, `Avalonia.Layout.HorizontalAlignment`, `System.Int32?`.
+    #[serde(rename = "type")]
+    pub type_name: String,
+    /// The values of an enum or `bool` property.
+    #[serde(default)]
+    pub values: Option<Vec<String>>,
+}
+
+/// A type XAML can name, with only its own members: `base` leads to the inherited ones.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct XamlType {
+    pub namespace: String,
+    pub name: String,
+    #[serde(rename = "base")]
+    pub base_type: Option<String>,
+    #[serde(rename = "abstract")]
+    pub is_abstract: bool,
+    pub properties: Vec<XamlProperty>,
+    pub events: Vec<String>,
+    pub attached: Vec<XamlProperty>,
+}
+
+/// What the XAML of a project can name (CI-16).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct XamlTypes {
+    pub namespaces: Vec<XmlnsMapping>,
+    pub types: Vec<XamlType>,
+}
+
 #[derive(Deserialize)]
 struct Info {
     version: u32,
@@ -263,6 +357,34 @@ impl Helper {
     pub async fn analyze(&self, path: &Path, token: &CancellationToken) -> IdeResult<Analysis> {
         self.call("trace/analyze", json!({ "path": path }), token).await
     }
+
+    /// The IL of the type with metadata name `type_name` (`Namespace.Outer`1+Inner`), from
+    /// the first of `assemblies` that has it or forwards it to an assembly beside it.
+    pub async fn disassemble(
+        &self,
+        assemblies: &[PathBuf],
+        type_name: &str,
+        token: &CancellationToken,
+    ) -> IdeResult<Disassembly> {
+        self.call("il/disassemble", json!({ "assemblies": assemblies, "type": type_name }), token).await
+    }
+
+    /// What retains the objects of the `.gcdump` at `path`, read with the installed
+    /// dotnet-gcdump's own library (`tool`, its `dotnet-gcdump.dll`).
+    pub async fn retention(&self, path: &Path, tool: &Path, token: &CancellationToken) -> IdeResult<HeapRetention> {
+        self.call("heap/retention", json!({ "path": path, "tool": tool }), token).await
+    }
+
+    /// The types XAML can name in a project compiled against `assemblies` whose own
+    /// assembly is `own`.
+    pub async fn xaml_types(
+        &self,
+        assemblies: &[PathBuf],
+        own: Option<&Path>,
+        token: &CancellationToken,
+    ) -> IdeResult<XamlTypes> {
+        self.call("xaml/types", json!({ "assemblies": assemblies, "own": own.map(|p| vec![p]) }), token).await
+    }
 }
 
 impl Drop for Helper {
@@ -281,6 +403,18 @@ mod tests {
         assert_eq!(f.len(), 16);
         assert_eq!(f, fingerprint());
         assert!(SOURCES.iter().any(|(name, text)| *name == PROJECT && text.contains("TraceEvent")));
+        // Every source of the helper is embedded, or its build would miss a file.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dotnet/Bayonet.Diagnostics");
+        let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".cs") || n.ends_with(".csproj"))
+            .collect();
+        on_disk.sort();
+        let mut embedded: Vec<&str> = SOURCES.iter().map(|(name, _)| *name).collect();
+        embedded.sort();
+        assert_eq!(embedded, on_disk);
     }
 
     #[test]
@@ -295,6 +429,54 @@ mod tests {
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join(ASSEMBLY), b"").unwrap();
         assert_eq!(installed(dir.path()), Some(current.join(ASSEMBLY)));
+    }
+
+    /// Builds the helper with the installed SDK and disassembles `List<T>` as Go to
+    /// Definition reaches it: through the reference assembly of the targeting pack, whose
+    /// implementation is forwarded to System.Private.CoreLib in the shared runtime.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs the .NET 10 SDK and NuGet access"]
+    async fn disassembles_a_framework_type() {
+        let tools = tempfile::tempdir().unwrap();
+        let root = dotnet().unwrap().canonicalize().unwrap().parent().unwrap().to_path_buf();
+        let newest = |dir: PathBuf| {
+            let mut versions: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+            versions.sort();
+            versions.pop().unwrap()
+        };
+        let pack = newest(root.join("packs/Microsoft.NETCore.App.Ref")).join("ref");
+        let reference = newest(pack).join("System.Collections.dll");
+        assert!(reference.is_file(), "{}", reference.display());
+        let candidates = crate::il::implementation_candidates(&reference, Some(&root));
+        assert_eq!(candidates.len(), 2, "no shared runtime for {}", reference.display());
+        assert!(candidates[0].starts_with(root.join("shared/Microsoft.NETCore.App")), "{candidates:?}");
+
+        let token = CancellationToken::new();
+        let helper = Helper::open(tools.path(), &token).await.unwrap();
+        let list = helper.disassemble(&candidates, "System.Collections.Generic.List`1", &token).await.unwrap();
+        assert_eq!(list.assembly.file_name().unwrap(), "System.Private.CoreLib.dll");
+        assert_eq!(list.type_name, "System.Collections.Generic.List`1");
+        assert!(!list.reference_assembly);
+        assert!(list.text.contains("beforefieldinit System.Collections.Generic.List`1<T>"));
+        let add = list.text.split("instance void Add (").nth(1).unwrap();
+        let body = &add[..add.find("} // end of method").unwrap()];
+        assert!(body.contains("IL_0000: ldarg.0") && body.contains("ret"), "{body}");
+
+        // A nested type, named without its number of type parameters, and the stubs of the
+        // reference assembly when that is all there is.
+        let nested =
+            helper.disassemble(&candidates, "System.Collections.Generic.List+Enumerator", &token).await.unwrap();
+        assert_eq!(nested.type_name, "System.Collections.Generic.List`1+Enumerator");
+        assert!(nested.text.contains("MoveNext"));
+        let stubs = helper
+            .disassemble(std::slice::from_ref(&reference), "System.Collections.Generic.List`1", &token)
+            .await
+            .unwrap();
+        assert!(stubs.reference_assembly);
+        assert_eq!(stubs.assembly, reference);
+        let missing =
+            helper.disassemble(&candidates, "System.Collections.Generic.NoSuchType", &token).await.unwrap_err();
+        assert!(missing.message.contains("NoSuchType was not found"), "{}", missing.message);
     }
 
     /// Builds the helper with the installed SDK, profiles a small app from launch and
@@ -344,5 +526,109 @@ mod tests {
             assert!(own.iter().any(|l| l.line == line && l.self_ms > 50.0), "line {line}: {own:?}");
         }
         assert!(!a.collections.is_empty());
+    }
+
+    /// CI-16: the Avalonia fixture's references, read for XAML.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs the .NET SDK and NuGet access"]
+    async fn lists_the_types_avalonia_xaml_can_name() {
+        let tools = tempfile::tempdir().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/avalonia/AvaloniaFixture");
+        let out = std::process::Command::new(dotnet().unwrap())
+            .args(["msbuild", "AvaloniaFixture.csproj", "-restore", "-t:ResolveReferences", "-getItem:ReferencePath"])
+            .current_dir(&fixture)
+            .output()
+            .unwrap();
+        let references = crate::generators::parse_items(&String::from_utf8_lossy(&out.stdout), "ReferencePath");
+        assert!(references.len() > 10, "{}", String::from_utf8_lossy(&out.stdout));
+        let token = CancellationToken::new();
+        let helper = Helper::open(tools.path(), &token).await.unwrap();
+        let xaml = helper.xaml_types(&references, None, &token).await.unwrap();
+        assert!(
+            xaml.namespaces
+                .iter()
+                .any(|m| m.xmlns == "https://github.com/avaloniaui" && m.clr_namespace == "Avalonia.Controls"),
+            "{:?}",
+            xaml.namespaces
+        );
+        let of = |name: &str| xaml.types.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("no {name}"));
+        let button = of("Button");
+        assert_eq!(button.namespace, "Avalonia.Controls");
+        assert!(button.events.iter().any(|e| e == "Click"), "{button:?}");
+        assert!(button.base_type.is_some());
+        let layoutable = of("Layoutable");
+        let align = layoutable.properties.iter().find(|p| p.name == "HorizontalAlignment").unwrap();
+        assert!(align.values.as_ref().is_some_and(|v| v.iter().any(|v| v == "Stretch")), "{align:?}");
+        let grid = of("Grid");
+        assert!(grid.attached.iter().any(|p| p.name == "Row" && p.type_name == "System.Int32"), "{grid:?}");
+        assert!(grid.properties.iter().any(|p| p.name == "RowDefinitions"), "{grid:?}");
+        assert!(of("Panel").properties.iter().any(|p| p.name == "Children"), "a get-only collection counts");
+    }
+
+    /// Builds the helper, snapshots the heap of an app that holds 2 MB through one static
+    /// object, and finds what retains it. Needs the dotnet-gcdump global tool too.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs the .NET 10 SDK, NuGet access and dotnet-gcdump"]
+    async fn finds_what_retains_a_real_apps_objects() {
+        let tools = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        std::fs::write(
+            app.path().join("Leak.csproj"),
+            r#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            app.path().join("Program.cs"),
+            // Filled in a method that has returned, so no local variable is a second root.
+            "Leak.Holder.Fill();\nConsole.WriteLine(\"ready\");\nThread.Sleep(120_000);\nnamespace Leak\n{\n    public sealed class Payload { public byte[] Data = new byte[1000]; }\n    public sealed class Holder\n    {\n        public static readonly Holder Instance = new();\n        public List<Payload> Items = new();\n        public static void Fill() { for (var i = 0; i < 2000; i++) Instance.Items.Add(new Payload()); }\n    }\n}\n",
+        )
+        .unwrap();
+        let dotnet = dotnet().unwrap();
+        let built = std::process::Command::new(&dotnet)
+            .args(["build", "-nologo", "-v", "q", "-o"])
+            .arg(app.path().join("out"))
+            .current_dir(app.path())
+            .status()
+            .unwrap();
+        assert!(built.success());
+        let gcdump = crate::diagnostics::require(crate::diagnostics::DiagTool::Gcdump).unwrap();
+        let library = crate::diagnostics::gcdump_library(&gcdump).expect("dotnet-gcdump.dll in the tool store");
+        let mut child = std::process::Command::new(&dotnet)
+            .arg(app.path().join("out").join("Leak.dll"))
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(child.stdout.take().unwrap()), &mut ready).unwrap();
+        let dump = app.path().join("leak.gcdump");
+        let collected = std::process::Command::new(&gcdump)
+            .args(["collect", "-p", &child.id().to_string(), "-o"])
+            .arg(&dump)
+            .output()
+            .unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(collected.status.success(), "{}", String::from_utf8_lossy(&collected.stdout));
+
+        let token = CancellationToken::new();
+        let helper = Helper::open(tools.path(), &token).await.unwrap();
+        let retention = helper.retention(&dump, &library, &token).await.unwrap();
+        assert!(
+            retention.total_bytes > 2_000_000 && retention.objects > 4000,
+            "{} {}",
+            retention.total_bytes,
+            retention.objects
+        );
+        let of = |name: &str| retention.types.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("no {name}"));
+        // The holder retains every payload and its array; a payload type retains its arrays.
+        let payloads = 2000 * 1000;
+        assert!(of("Leak.Holder").retained_bytes > payloads, "{:?}", of("Leak.Holder"));
+        assert!(of("Leak.Payload").retained_bytes > payloads, "{:?}", of("Leak.Payload"));
+        assert!(of("Leak.Holder").retained_bytes >= of("Leak.Payload").retained_bytes);
+        let path = &of("Leak.Payload").paths[0];
+        assert_eq!(path.count, 2000, "{path:?}");
+        let holder = path.frames.iter().position(|f| f == "Leak.Holder").unwrap_or_else(|| panic!("{path:?}"));
+        assert!(path.frames[..holder].iter().any(|f| f.starts_with('[')), "a root comes first: {path:?}");
+        assert!(path.frames[holder..].iter().any(|f| f.contains("List<Leak.Payload>")), "{path:?}");
     }
 }

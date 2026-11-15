@@ -32,6 +32,8 @@ import { isJavaAttachTarget, isJavaDebuggable, javaAttachConfig, javaLaunchConfi
 import { reloadChangedClasses } from "./hotswap";
 import { debugUnsupportedReason, launchConfigFor } from "./launch";
 import { isRemoteConfig, REMOTE_JVM, remoteAttachConfig, remoteJvmTarget } from "./remote";
+import { loadAttachProcesses } from "./attachPopup";
+import { DOTNET_SSH, dotnetSshAttachConfig, sshHostName } from "./dotnetSsh";
 import {
   activeSession,
   resumeExecution,
@@ -54,13 +56,7 @@ import { expressionAt, valueHint } from "./editor/valueTooltip";
 import { mouseEvaluateTarget } from "./editor/quickEvaluate";
 import { showHint } from "@/editor/lsp/hint";
 import { pausedLineTargets, startInlineSmartStep } from "./editor/smartStep";
-import {
-  openBreakpointsDialog,
-  openConfigChooser,
-  openEvaluateDialog,
-  openSmartStepChooser,
-  useOverlays,
-} from "./ui/popoverStore";
+import { openBreakpointsDialog, openConfigChooser, openEvaluateDialog, openSmartStepChooser } from "./ui/popoverStore";
 import { tx } from "@/platform/i18n";
 import { workflowSettings } from "@/platform/workflowSettings";
 
@@ -182,14 +178,7 @@ export async function openAttachPopup() {
     notifications().notify({ group: "run", level: "warning", title: "Attaching needs the desktop app" });
     return;
   }
-  useOverlays.setState({ attach: { processes: null, error: null } });
-  try {
-    const processes = await call(commands.debugAttachableProcesses());
-    if (useOverlays.getState().attach) useOverlays.setState({ attach: { processes, error: null } });
-  } catch (e) {
-    if (useOverlays.getState().attach)
-      useOverlays.setState({ attach: { processes: [], error: errorText(e) || "Cannot list processes" } });
-  }
+  await loadAttachProcesses();
 }
 
 function cursor(): { path: string; line: number; selection: string } | null {
@@ -277,6 +266,24 @@ async function startRemote(config: RunConfig, root: string) {
   if (launch) await startSession(launch, { runConfig: config });
 }
 
+/** .NET Remote (SSH): attach to a process on an SSH host through netcoredbg installed there. */
+async function startDotnetSsh(config: RunConfig, root: string) {
+  const key = `debug.prepare.${config.id}`;
+  notifications().notify({
+    group: "run",
+    level: "info",
+    key,
+    title: `Preparing the debugger on ${sshHostName(config.params?.ssh ?? "")}…`,
+    body: "The first attach installs netcoredbg on the host.",
+  });
+  try {
+    const launch = await dotnetSshAttachConfig(config, root);
+    await startSession(launch, { runConfig: config });
+  } finally {
+    notifications().expire?.(key);
+  }
+}
+
 /** Preparation belongs to a session from the moment the action begins. */
 async function startJavaConfig(config: RunConfig, root: string, origin: RunConfig) {
   await startPreparedSession(origin, async (signal, report) => {
@@ -328,6 +335,10 @@ async function startConfig(arg: unknown) {
       await executeAction("run.debugConfig", config);
       return;
     }
+  }
+  if (config.kind === DOTNET_SSH) {
+    await startDotnetSsh(config, root);
+    return;
   }
   if (isRemoteConfig(config)) {
     await startRemote(config, root);

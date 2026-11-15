@@ -52,6 +52,23 @@ export function keySummary(samples: readonly number[], refreshMs: number, prefix
   };
 }
 
+/**
+ * p99 of each key's samples pooled over the measured runs. One run has too few
+ * keystrokes for a 99th percentile (under 100 samples it is the maximum), so the
+ * runs are pooled instead of taking the median of per-run values.
+ */
+export function pooledP99(runs: ReadonlyArray<Readonly<Record<string, readonly number[]>>>): Record<string, number> {
+  const pooled = new Map<string, number[]>();
+  for (const run of runs) {
+    for (const [key, samples] of Object.entries(run)) {
+      const all = pooled.get(key) ?? [];
+      all.push(...samples);
+      pooled.set(key, all);
+    }
+  }
+  return Object.fromEntries([...pooled].map(([key, samples]) => [key, percentile(samples, 99)]));
+}
+
 /** Total blocking time: the part of each long task beyond 50 ms. */
 export function totalBlockingTime(tasks: ReadonlyArray<{ duration: number }>): number {
   return tasks.reduce((sum, t) => sum + Math.max(0, t.duration - 50), 0);

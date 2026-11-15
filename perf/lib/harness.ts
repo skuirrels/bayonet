@@ -19,6 +19,8 @@ export class Harness {
   // Plain fields: Node's type stripping does not support parameter properties.
   readonly page: Page;
   readonly cdp: CDPSession;
+  /** Raw samples by metric name; the runner pools them over the runs for a p99. */
+  readonly pooled: Record<string, number[]> = {};
 
   constructor(page: Page, cdp: CDPSession) {
     this.page = page;

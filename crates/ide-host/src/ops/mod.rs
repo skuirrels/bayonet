@@ -19,6 +19,7 @@ pub mod dotnet;
 pub mod env;
 pub mod fs;
 pub mod history;
+pub mod il;
 pub mod java;
 pub mod jvm_icons;
 pub mod lsp;
@@ -35,7 +36,9 @@ pub mod spell;
 pub mod syntax;
 pub mod term;
 pub mod tools;
+mod type_file;
 pub mod vcs;
+pub mod xaml;
 
 use crate::Host;
 use ide_core::{IdeError, IdeResult};
@@ -88,6 +91,8 @@ pub fn register_all(d: &mut crate::rpc::Dispatcher) {
     vcs::register(d);
     doc::register(d);
     dotnet::register(d);
+    il::register(d);
+    xaml::register(d);
     diagnostics::register(d);
     aspire::register(d);
     search::register(d);

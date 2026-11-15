@@ -157,16 +157,19 @@ Build FAILED.
 
     #[test]
     fn parses_nuget_and_msbuild_messages_once() {
-        let messages = parse_output(OUTPUT);
+        // Paths are absolute only with a drive on Windows.
+        let root = if cfg!(windows) { "C:/s/" } else { "/s/" };
+        let at = |p: &str| Some(PathBuf::from(p.replacen("/s/", root, 1)));
+        let messages = parse_output(&OUTPUT.replace("/s/", root));
         let summary: Vec<_> =
             messages.iter().map(|m| (m.severity, m.code.as_deref(), m.project.clone().map(PathBuf::from))).collect();
         assert_eq!(
             summary,
             [
-                (RestoreSeverity::Error, Some("NU1301"), Some(PathBuf::from("/s/App/App.csproj"))),
-                (RestoreSeverity::Warning, Some("NU1603"), Some(PathBuf::from("/s/App/App.csproj"))),
+                (RestoreSeverity::Error, Some("NU1301"), at("/s/App/App.csproj")),
+                (RestoreSeverity::Warning, Some("NU1603"), at("/s/App/App.csproj")),
                 // From an SDK targets file: about the solution in brackets.
-                (RestoreSeverity::Error, Some("MSB3202"), Some(PathBuf::from("/s/App.slnx"))),
+                (RestoreSeverity::Error, Some("MSB3202"), at("/s/App.slnx")),
             ]
         );
         assert_eq!(messages[0].text, "Unable to load the service index for source https://feed.example/v3/index.json.");

@@ -3,7 +3,8 @@
  * file's occurrences linked (`inplaceRename.ts`; ⇧F6 again opens the name
  * dialog) → `lsp_rename` → preview dialog when the edit spans several files
  * (or moves files) or may have missed usages, otherwise applied directly via
- * `apply_workspace_edit`.
+ * `apply_workspace_edit`. A C# type's rename also renames the file named after
+ * it (the backend adds that to the edit): the file is moved after the text edits.
  *
  * Dumb mode: when the server is not ready / failing, or answers nothing over
  * code with syntax errors, a *local* variable is renamed in place from the
@@ -14,6 +15,7 @@
 import type { EditorView } from "@codemirror/view";
 import {
   commands,
+  emitLocalIdeEvent,
   isCancelled,
   isNoServer,
   nextRequestId,
@@ -22,14 +24,16 @@ import {
   type RequestId,
   type WorkspaceEdit,
 } from "@/platform/ipc";
+import type { FileMove } from "@/bindings";
+import { maybeEditorService } from "@/workbench/contributions";
 import { executeAction } from "@/platform/actions";
-import { whenAllSynced, whenSynced, type EditorDocContext } from "@/editor/api";
+import { openEditorPaths, whenAllSynced, whenSynced, type EditorDocContext } from "@/editor/api";
 import { structure } from "@/editor/structure";
 import { docOf, incompleteNote, isUnavailable, lspRequest, reportLspError } from "./lsp";
 import { comparePos, offsetToPos, rangeToOffsets } from "./positions";
 import { showHint } from "./hint";
 import { caretAnchor, openPopup, type PreviewOccurrence } from "./popupStore";
-import { needsPreview, summarizeWorkspaceEdit } from "./workspaceEdit";
+import { needsPreview, splitFileMoves, summarizeWorkspaceEdit } from "./workspaceEdit";
 import { endInplaceRename, inplaceSession, startInplaceRename, type Span } from "./inplaceRename";
 import { shortcutLabel } from "@/platform/keymap";
 import {
@@ -45,10 +49,41 @@ import { tx } from "@/platform/i18n";
 async function applyEdit(view: EditorView, edit: WorkspaceEdit) {
   try {
     await whenAllSynced();
-    await lspRequest(() => commands.applyWorkspaceEdit(edit));
+    const split = splitFileMoves(edit);
+    if (!split) {
+      await lspRequest(() => commands.applyWorkspaceEdit(edit));
+      return;
+    }
+    if (split.edit.files.length) await lspRequest(() => commands.applyWorkspaceEdit(split.edit));
+    await moveFiles(view, split.moves);
   } catch (e) {
     reportLspError(view, e, true);
   }
+}
+
+/**
+ * Moves the files a rename takes along (a C# type's file) as the project tree's
+ * Rename does: the language servers hear of it and open editors follow.
+ */
+async function moveFiles(view: EditorView, moves: FileMove[]) {
+  const editor = maybeEditorService();
+  const open = editor ? openEditorPaths().filter((p) => moves.some((m) => m.from === p)) : [];
+  const active = editor?.activePath() ?? null;
+  // The move takes the file on disk: the renamed text must be in it.
+  await editor?.saveAll().catch(() => {});
+  await lspRequest(() => commands.refactorMoveFiles(moves, { files: [] }, "Rename"));
+  emitLocalIdeEvent({
+    type: "fsChanged",
+    created: moves.map((m) => m.to),
+    modified: [],
+    removed: moves.map((m) => m.from),
+  });
+  if (!editor) return;
+  const target = (path: string) => moves.find((m) => m.from === path)?.to ?? path;
+  // The caret stays on the renamed name.
+  const selection = offsetToPos(view.state.doc, view.state.selection.main.head);
+  for (const p of [...open.filter((p) => p !== active), ...open.filter((p) => p === active)])
+    await editor.openFile(target(p), p === active ? { focus: true, selection } : { focus: false }).catch(() => {});
 }
 
 async function hasSyntaxErrors(doc: number): Promise<boolean> {

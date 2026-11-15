@@ -37,6 +37,7 @@ import {
 } from "./state";
 import { DebuggerOverlays } from "./ui/Overlays";
 import { REMOTE_TYPES } from "./remote";
+import { dotnetSshType } from "./dotnetSsh";
 
 export function activate(): () => void {
   useDebugRunSessions.setState({
@@ -52,6 +53,7 @@ export function activate(): () => void {
     registerDebugActions(),
     // Remote JVM Debug, Go Remote, …: Run/Debug Configurations › Add New Configuration.
     ...REMOTE_TYPES.map(registerRunConfigType),
+    registerRunConfigType(dotnetSshType),
     registerToolWindow({
       id: "debug",
       title: "Debug",

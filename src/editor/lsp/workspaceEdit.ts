@@ -1,6 +1,6 @@
 /** Summaries of workspace edits for rename / refactoring previews, and the intention preview diff. */
 import { ChangeSet, type Text } from "@codemirror/state";
-import type { TextEdit, WorkspaceEdit } from "@/bindings";
+import type { FileMove, TextEdit, WorkspaceEdit } from "@/bindings";
 import type { DiffLine } from "./popupStore";
 import { textEditsToChanges } from "./positions";
 
@@ -72,6 +72,25 @@ export function describeSummary(s: WorkspaceEditSummary): string {
 /** Whether applying needs confirmation (IDEA previews multi-file refactorings). */
 export function needsPreview(s: WorkspaceEditSummary): boolean {
   return s.files > 1 || s.hasFileOperations;
+}
+
+/**
+ * A rename's edit whose file renames come after its text edits (a C# type and
+ * the file named after it): the text edits and the moves, to apply one after
+ * the other so open editors follow the files. Null for any other shape, which
+ * is applied as one edit.
+ */
+export function splitFileMoves(edit: WorkspaceEdit): { edit: WorkspaceEdit; moves: FileMove[] } | null {
+  const first = edit.files.findIndex((f) => f.kind === "rename");
+  if (first < 0) return null;
+  const moves: FileMove[] = [];
+  for (const f of edit.files.slice(first)) {
+    if (f.kind !== "rename") return null;
+    moves.push({ from: f.from, to: f.to });
+  }
+  const files = edit.files.slice(0, first);
+  if (files.some((f) => f.kind !== "edit")) return null;
+  return { edit: { ...edit, files }, moves };
 }
 
 /** Line diff of `a` → `b` (LCS; both short: they are the changed lines of one hunk). */

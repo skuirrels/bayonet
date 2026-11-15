@@ -17,6 +17,7 @@ mod proxy;
 mod requests;
 pub mod rpc;
 pub mod shell_env;
+pub mod ssh_debug;
 pub mod trust;
 
 pub use project::{Project, apply_git_executable, apply_workspace_edit, history_retention};
@@ -65,7 +66,8 @@ pub struct Host {
     pub dependency_versions: Arc<ide_workspace::dependencies::VersionCache>,
     pub terminals: TerminalManager,
     pub processes: ProcessManager,
-    /// Debug sessions (adapters run on this machine, next to the project).
+    /// Debug sessions (adapters run on this machine, next to the project, or on the host of
+    /// an SSH configuration).
     pub debugger: Arc<ide_dap::DebugManager>,
     /// SSH connections of Settings › SSH Configurations.
     pub ssh: Arc<ide_ssh::SshManager>,
@@ -110,6 +112,10 @@ impl Host {
         let global_settings = SettingsStore::load(&config_dir, None);
         let ssh = Arc::new(ide_ssh::SshManager::new(data_dir.join("ssh-passwords.json")));
         ssh.set_configs(global_settings.effective().ssh.configs);
+        let debugger = ide_dap::DebugManager::with_launcher(
+            languages.clone(),
+            Arc::new(ssh_debug::SshAdapterLauncher::new(ssh.clone())),
+        );
         let host = Self {
             trust: trust::TrustStore::load(&config_dir, &data_dir),
             proxy_password: ide_ssh::secrets::SecretFile::new(data_dir.join("proxy-password.json")),
@@ -124,7 +130,7 @@ impl Host {
             // Sessions, runs and terminals report to the window that started them (`window_sink`).
             terminals: TerminalManager::new(),
             processes: ProcessManager::new(),
-            debugger: ide_dap::DebugManager::new(languages.clone()),
+            debugger,
             languages,
             syntax,
             config_dir,

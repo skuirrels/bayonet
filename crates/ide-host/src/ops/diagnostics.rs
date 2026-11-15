@@ -15,7 +15,7 @@ use ide_dotnet::diagnostics::{
     self as diag, DiagTool, DiagToolStatus, DumpAnalysis, DumpType, FlameNode, FrameSource, HeapReport, MetricSample,
     ThreadStack, TraceProfile,
 };
-use ide_dotnet::helper::Helper;
+use ide_dotnet::helper::{HeapRetention, Helper};
 use ide_dotnet::trace_source::{self, MemberKind};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -213,6 +213,31 @@ pub async fn diag_gcdump_read(host: &Host, request: RequestId, path: PathBuf) ->
     let exe = tool(DiagTool::Gcdump).await?;
     let token = host.begin_request(request);
     let result = gcdump_report(&exe, &path, &token).await;
+    host.end_request(request);
+    result
+}
+
+/// What keeps the objects of a `.gcdump` alive: retained size by type and the commonest
+/// reference paths from the roots. The .NET diagnostics helper reads the object graph
+/// with the library of the installed dotnet-gcdump.
+pub async fn diag_gcdump_retention(host: &Host, request: RequestId, path: PathBuf) -> IdeResult<HeapRetention> {
+    let exe = tool(DiagTool::Gcdump).await?;
+    let library = host.blocking(move || Ok(diag::gcdump_library(&exe))).await?.ok_or_else(|| {
+        IdeError::unavailable(
+            "reading what retains objects needs dotnet-gcdump as a global tool: dotnet tool install --global dotnet-gcdump",
+        )
+    })?;
+    let token = host.begin_request(request);
+    let result = async {
+        let Some(helper) = helper(host, &token).await? else {
+            let reason = HELPER_FAILED.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();
+            return Err(IdeError::unavailable(format!(
+                "reading what retains objects needs the .NET diagnostics helper: {reason}"
+            )));
+        };
+        helper.retention(&path, &library, &token).await
+    }
+    .await;
     host.end_request(request);
     result
 }
@@ -731,6 +756,9 @@ pub(crate) fn register(d: &mut Dispatcher) {
     d.add("diag_stacks_read", |c| async move { diag_stacks_read(&c.host, c.arg("path")?).await });
     d.add("diag_gcdump", |c| async move { diag_gcdump(&c.host, &c.window, c.arg("request")?, c.arg("pid")?).await });
     d.add("diag_gcdump_read", |c| async move { diag_gcdump_read(&c.host, c.arg("request")?, c.arg("path")?).await });
+    d.add("diag_gcdump_retention", |c| async move {
+        diag_gcdump_retention(&c.host, c.arg("request")?, c.arg("path")?).await
+    });
     d.add("diag_dump", |c| async move {
         diag_dump(&c.host, &c.window, c.arg("request")?, c.arg("pid")?, c.arg("kind")?).await
     });

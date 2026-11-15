@@ -9,6 +9,7 @@ describe("editor banners", () => {
     ["jdt://contents/lib.jar/p/Lib.class", true, "Decompiled .class file: sources are not available."],
     ["csharp:/p/App.csproj/decompiled/Lib.cs", true, "Decompiled assembly (read-only)."],
     ["csharp:/p/App.csproj/generated/Lib.g.cs", false, "Library source (read-only)."],
+    ["dotnet-il://System.Collections.dll/List%601.il?7b7d", false, "IL disassembly (read-only)."],
   ])("describes %s", (path, decompiled, text) => {
     render(<VirtualBanner path={path} decompiled={decompiled} description="Example.Library" />);
     expect(screen.getByRole("status").textContent).toContain(text);

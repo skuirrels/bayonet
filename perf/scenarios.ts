@@ -129,6 +129,7 @@ async function typeAndMeasure(h: Harness, text: string, intervalMs: number): Pro
   const before = await h.counters();
   const lat = await h.typeMeasured(text, intervalMs);
   const work = Harness.delta(before, await h.counters());
+  h.pooled.p99Ms = lat;
   const keys = text.length;
   return {
     ...keySummary(lat, refresh),

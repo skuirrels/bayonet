@@ -237,6 +237,11 @@
   min-height: 0;
 }
 
+.attachTarget {
+  align-self: flex-start;
+  min-width: 240px;
+}
+
 .attachPid {
   min-width: 48px;
   color: var(--fg-subtle);

@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod ef;
 pub mod generators;
 pub mod helper;
+pub mod il;
 pub mod msbuild;
 pub mod nuget;
 mod project;
@@ -23,6 +24,7 @@ mod slnx;
 pub mod templates;
 pub mod testing;
 pub mod trace_source;
+pub mod vstest;
 
 pub use project::{LaunchProfile, ProjectInfo, launch_profiles, read_project};
 

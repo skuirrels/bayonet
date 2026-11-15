@@ -736,6 +736,53 @@ async fn roslyn_end_to_end() {
     tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
 }
 
+/// CI-10: Go to Definition on a framework type lands in the file Roslyn decompiles under
+/// `<temp>/MetadataAsSource/`, whose header names the assembly (what "Show IL" reads).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires the .NET SDK and roslyn-language-server"]
+async fn roslyn_metadata_source_names_its_assembly() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    copy_dotnet_fixture(&root);
+    let restore = std::process::Command::new("dotnet")
+        .args(["restore", "DotnetFixture.slnx"])
+        .current_dir(&root)
+        .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+        .output()
+        .unwrap();
+    assert!(restore.status.success(), "{}", String::from_utf8_lossy(&restore.stdout));
+
+    let mut csharp = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("csharp")).unwrap();
+    csharp.language_servers.retain(|s| s.name == "roslyn-language-server");
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_ROSLYN") {
+        csharp.language_servers[0].command = bin;
+    }
+    let (mgr, _events) = manager(&root, LanguageRegistry::from_configs(vec![csharp]));
+    let program = root.join("src/Fixture.Cli/Program.cs");
+    let source = std::fs::read_to_string(&program).unwrap();
+    let doc = DocId::next();
+    mgr.did_open(doc, &program, &LanguageId::new("csharp"), 1, &source);
+
+    // `Console` in `Console.WriteLine(...)` (line 3).
+    let defs = retry("definition", Duration::from_secs(240), || {
+        let mgr = mgr.clone();
+        async move { mgr.goto(doc, Pos::new(3, 2), GotoKind::Definition).await.ok().filter(|d| !d.is_empty()) }
+    })
+    .await;
+    let path = &defs[0].path;
+    assert!(path.components().any(|c| c.as_os_str() == "MetadataAsSource"), "{}", path.display());
+    assert_eq!(path.file_name().unwrap(), "Console.cs");
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut lines = text.trim_start_matches('\u{feff}').lines();
+    let region = lines.next().unwrap();
+    assert!(region.starts_with("#region Assembly System.Console, Version="), "{region}");
+    let assembly = lines.next().unwrap().strip_prefix("// ").unwrap();
+    assert!(assembly.ends_with("System.Console.dll") && Path::new(assembly).is_file(), "{assembly}");
+    assert!(text.contains("namespace System") && text.contains("public static class Console"));
+
+    tokio::time::timeout(Duration::from_secs(20), mgr.shutdown_all()).await.unwrap();
+}
+
 /// CI-14: FsAutoComplete on the fixture's F# project: a type error is reported,
 /// and members complete. Needs the .NET SDK and `fsautocomplete` on `PATH`, or its
 /// path in `OPENIDEA_TEST_FSAC`.

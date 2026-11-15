@@ -35,6 +35,9 @@ pub struct AttachableProcess {
     pub port: Option<u16>,
     /// The container it runs in (its name); attached to with netcoredbg inside it (DBG-8).
     pub container: Option<String>,
+    /// The SSH configuration (its id) of the host it runs on; attached to with netcoredbg there.
+    #[serde(default)]
+    pub ssh: Option<String>,
 }
 
 /// One row of the process table.
@@ -142,6 +145,7 @@ pub fn classify(
             host,
             port,
             container: None,
+            ssh: None,
         })
     };
     if dotnet {

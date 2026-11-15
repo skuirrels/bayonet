@@ -22,7 +22,7 @@ import { Harness, type Metrics, type Scenario } from "./lib/harness.ts";
 import { topFunctions, type CpuProfile } from "./lib/profile.ts";
 import { installInPage } from "./lib/inpage.ts";
 import { evaluate, loadBudgets, printReport, type ScenarioResult } from "./lib/report.ts";
-import { median } from "./lib/stats.ts";
+import { median, pooledP99 } from "./lib/stats.ts";
 import { SCENARIOS } from "./scenarios.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -119,12 +119,17 @@ function serve(): Promise<{ server: Server; url: string }> {
   );
 }
 
+interface Run {
+  metrics: Metrics;
+  pooled: Record<string, number[]>;
+}
+
 interface Capture {
   trace?: string;
   profile?: string;
 }
 
-async function runOnce(browser: Browser, url: string, scenario: Scenario, capture: Capture = {}): Promise<Metrics> {
+async function runOnce(browser: Browser, url: string, scenario: Scenario, capture: Capture = {}): Promise<Run> {
   const context = await browser.newContext({
     baseURL: url,
     viewport: { width: 1400, height: 900 },
@@ -160,15 +165,19 @@ async function runOnce(browser: Browser, url: string, scenario: Scenario, captur
       }
     }
     if (errors.length) throw new Error(`page errors: ${errors.join("; ")}`);
-    return metrics;
+    return { metrics, pooled: h.pooled };
   } finally {
     await context.close();
   }
 }
 
-function aggregate(samples: Metrics[]): Metrics {
+function aggregate(runs: Run[]): Metrics {
+  const samples = runs.map((r) => r.metrics);
   const keys = [...new Set(samples.flatMap((s) => Object.keys(s)))];
-  return Object.fromEntries(keys.map((k) => [k, median(samples.map((s) => s[k]!).filter(Number.isFinite))]));
+  return {
+    ...Object.fromEntries(keys.map((k) => [k, median(samples.map((s) => s[k]!).filter(Number.isFinite))])),
+    ...pooledP99(runs.map((r) => r.pooled)),
+  };
 }
 
 async function main() {
@@ -200,7 +209,7 @@ async function main() {
   try {
     for (const s of scenarios) {
       process.stdout.write(`${s.id.padEnd(14)} `);
-      const samples: Metrics[] = [];
+      const samples: Run[] = [];
       try {
         for (let i = 0; i < warmup + runs; i++) {
           const last = i === warmup + runs - 1;
