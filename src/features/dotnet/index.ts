@@ -25,6 +25,7 @@ import { loadInstalled, resetNuget } from "./nuget/store";
 import { testGutter } from "./tests/gutter";
 import { msbuildNavigation } from "./msbuild/navigation";
 import { registerIlBanner, showIl } from "./il";
+import { chooseSolution } from "./chooseSolution";
 import { traceHeat } from "./diagnostics/heatGutter";
 import { SolutionDialogs } from "./projects/SolutionDialogs";
 import {
@@ -512,6 +513,16 @@ export function activate(): () => void {
       category: "Project",
       when: "projectOpen",
       run: refresh,
+    },
+    {
+      id: "dotnet.chooseSolution",
+      title: "Choose Solution…",
+      description: "Picks the solution of a folder that holds several, in it or in its subfolders",
+      category: "Project",
+      icon: "module",
+      when: "projectOpen",
+      keywords: ["solution", "sln", "slnx", "open solution", "switch solution"],
+      run: () => void chooseSolution(() => void refresh()),
     },
     {
       id: "dotnet.diagnostics",

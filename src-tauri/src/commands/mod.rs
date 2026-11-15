@@ -470,6 +470,8 @@ pub fn builder() -> tauri_specta::Builder<tauri::Wry> {
         coverage::coverage_collect,
         coverage::coverage_import,
         dotnet::dotnet_solutions,
+        dotnet::dotnet_solution_choices,
+        dotnet::dotnet_use_solution,
         dotnet::dotnet_solution_folder,
         dotnet::dotnet_choose_solution,
         dotnet::dotnet_solution,

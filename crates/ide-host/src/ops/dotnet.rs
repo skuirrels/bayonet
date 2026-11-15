@@ -20,6 +20,18 @@ pub async fn dotnet_solutions(host: &Host, window: &str) -> IdeResult<Vec<IpcPat
     host.blocking(move || Ok(ide_dotnet::find(&root).into_iter().map(IpcPath::from).collect())).await
 }
 
+/// The solutions Choose Solution… offers: the project root's, then those in its subfolders.
+pub async fn dotnet_solution_choices(host: &Host, window: &str) -> IdeResult<ide_dotnet::SolutionChoices> {
+    let root = host.project(window)?.root.clone();
+    host.blocking(move || Ok(ide_dotnet::solution_choices(&root))).await
+}
+
+/// Makes `path`, in the project root or a folder below it, the project's solution.
+pub async fn dotnet_use_solution(host: &Host, window: &str, path: IpcPath) -> IdeResult<()> {
+    let root = host.project(window)?.root.clone();
+    host.blocking(move || ide_dotnet::choose_solution_in(&root, &PathBuf::from(path))).await
+}
+
 /// The solution at `path`: its folders, projects and solution items.
 pub async fn dotnet_solution(host: &Host, _window: &str, path: IpcPath) -> IdeResult<Solution> {
     host.blocking(move || ide_dotnet::read(&path)).await
@@ -363,7 +375,7 @@ pub async fn dotnet_migrate_solution(host: &Host, window: &str, solution: IpcPat
             ));
         }
         nuget::run(dotnet.as_deref(), &env, &root, &templates::sln_migrate_args(&solution))?;
-        ide_dotnet::solution_replaced(&solution, &target)?;
+        ide_dotnet::solution_replaced(&root, &solution, &target)?;
         Ok(IpcPath::from(target))
     })
     .await
@@ -1207,5 +1219,7 @@ pub(crate) fn register(d: &mut Dispatcher) {
     });
     d.add("nuget_remove", |c| async move { nuget_remove(&c.host, &c.window, c.arg("projects")?, c.arg("id")?).await });
     d.add("dotnet_solutions", |c| async move { dotnet_solutions(&c.host, &c.window).await });
+    d.add("dotnet_solution_choices", |c| async move { dotnet_solution_choices(&c.host, &c.window).await });
+    d.add("dotnet_use_solution", |c| async move { dotnet_use_solution(&c.host, &c.window, c.arg("path")?).await });
     d.add("dotnet_solution", |c| async move { dotnet_solution(&c.host, &c.window, c.arg("path")?).await });
 }

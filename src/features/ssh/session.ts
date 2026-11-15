@@ -1,5 +1,5 @@
 /** Tools › Start SSH Session…: pick an SSH configuration and run `ssh` for it in a terminal tab. */
-import { openPopup, type ListPopupItem } from "@/editor/lsp/popupStore";
+import { openPopup, topCentreAnchor, type ListPopupItem } from "@/editor/lsp/popupStore";
 import { executeAction } from "@/platform/actions";
 import { tx } from "@/platform/i18n";
 import { call, commands } from "@/platform/ipc";
@@ -57,7 +57,7 @@ export function chooseSshSession() {
   );
   openPopup({
     kind: "list",
-    anchor: { x: window.innerWidth / 2 - 200, y: 96 },
+    anchor: topCentreAnchor(),
     title: tx("Start SSH Session"),
     items,
   });

@@ -1026,6 +1026,10 @@ export const commands = {
 	coverageImport: (path: IpcPath) => typedError<CoverageSuite, IdeError>(__TAURI_INVOKE("coverage_import", { path })),
 	/**  Solution files at the project root: the one opened last first, then `.slnx` before `.sln` before `.slnf`. */
 	dotnetSolutions: () => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("dotnet_solutions")),
+	/**  The solutions Choose Solution… offers: the project root's, then those in its subfolders. */
+	dotnetSolutionChoices: () => typedError<SolutionChoices, IdeError>(__TAURI_INVOKE("dotnet_solution_choices")),
+	/**  Makes `path`, in the project root or a folder below it, the project's solution. */
+	dotnetUseSolution: (path: IpcPath) => typedError<null, IdeError>(__TAURI_INVOKE("dotnet_use_solution", { path })),
 	/**
 	 *  The folder that opens as the project for the solution file `path` (File › Open Solution…,
 	 *  a drop on the Welcome screen); None when `path` is not one (a folder named `App.sln`).
@@ -8062,6 +8066,15 @@ export type Solution = {
 	format: SolutionFormat,
 	/**  Top level: folders first, then projects, then files, each by name. */
 	items: SolutionItem[],
+};
+
+/**
+ *  What Choose Solution… offers: the solutions of `root`, then those in its subfolders, and
+ *  the one in use (none when `root` has none and none was chosen).
+ */
+export type SolutionChoices = {
+	current: IpcPath | null,
+	solutions: IpcPath[],
 };
 
 export type SolutionFormat = 

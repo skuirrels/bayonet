@@ -4,7 +4,7 @@
  * opens its Local History.
  */
 import type { HistoryEntry } from "@/bindings";
-import { openPopup, type ListPopupItem } from "@/editor/lsp/popupStore";
+import { openPopup, topCentreAnchor, type ListPopupItem } from "@/editor/lsp/popupStore";
 import { call, commands } from "@/platform/ipc";
 import { relativePath, useProject } from "@/platform/project";
 import { notifications } from "@/workbench/contributions";
@@ -55,5 +55,5 @@ export async function showRecentChanges() {
   }));
   if (!items.length)
     items.push({ id: "none", label: "No recent changes", disabled: "Local History has no entries yet", run: () => {} });
-  openPopup({ kind: "list", anchor: { x: window.innerWidth / 2 - 200, y: 96 }, title: "Recent Changes", items });
+  openPopup({ kind: "list", anchor: topCentreAnchor(), title: "Recent Changes", items });
 }

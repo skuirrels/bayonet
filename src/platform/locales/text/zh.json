@@ -6932,5 +6932,10 @@
   "Working out what retains the objects…": "正在分析保留对象的引用…",
   "Select a type to see what keeps its objects alive.": "选择一个类型以查看是什么让它的对象保持存活。",
   "No paths from the roots were recorded for this type.": "未记录此类型从根出发的路径。",
-  "Path from the GC roots": "从 GC 根出发的路径"
+  "Path from the GC roots": "从 GC 根出发的路径",
+  "Choose Solution…": "选择解决方案…",
+  "Choose Solution": "选择解决方案",
+  "Picks the solution of a folder that holds several, in it or in its subfolders": "为包含多个解决方案的文件夹选择解决方案，可在该文件夹或其子文件夹中",
+  "No solutions in this folder or its subfolders": "此文件夹及其子文件夹中没有解决方案",
+  "Cannot choose the solution": "无法选择解决方案"
 }
