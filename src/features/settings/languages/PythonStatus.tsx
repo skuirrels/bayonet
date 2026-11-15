@@ -4,22 +4,32 @@ import { executeAction, registerActions } from "@/platform/actions";
 import { call, commands, isTauri, onIdeEvent } from "@/platform/ipc";
 import { useProject } from "@/platform/project";
 import { tx } from "@/platform/i18n";
-import { notifications, registerStatusItem } from "@/workbench/contributions";
+import { maybeEditorService, notifications, registerStatusItem } from "@/workbench/contributions";
 import { BarButton, Menu, type MenuItem } from "@/ui";
 import { Icon } from "@/ui/icons";
 import { effectivePython, type Sdk } from "./api";
 import { tildify } from "./components";
 
+/**
+ * What a project holds: Python project files (`pyproject.toml`, `requirements.txt`…), only loose
+ * scripts, or nothing Python.
+ */
+type Found = "project" | "scripts" | null;
+
 /** What the widget last resolved for a project, so the popup action can read it without a render. */
 interface Status {
   root: string;
   configured: string;
-  visible: boolean;
+  found: Found;
   python: string | null;
   sdks: Sdk[];
 }
 
-const usePopup = create<{ open: boolean; status: Status | null }>(() => ({ open: false, status: null }));
+const usePopup = create<{ open: boolean; status: Status | null; editingScript: boolean }>(() => ({
+  open: false,
+  status: null,
+  editingScript: false,
+}));
 const close = () => usePopup.setState({ open: false });
 const reset = () => usePopup.setState({ open: false, status: null });
 
@@ -28,9 +38,10 @@ function popupShown(): boolean {
   const project = useProject.getState();
   const root = project.project?.root;
   const configured = project.settings?.languages?.python?.interpreter ?? "";
-  const status = usePopup.getState().status;
+  const { status, editingScript } = usePopup.getState();
   if (!root || !status || status.root !== root || status.configured !== configured) return false;
-  return status.visible || !!configured;
+  // Loose scripts in another kind of project (a .NET repository's tooling) only matter while editing one.
+  return !!configured || status.found === "project" || (status.found === "scripts" && editingScript);
 }
 const markers = [
   "pyproject.toml",
@@ -47,9 +58,15 @@ const markers = [
   ".python-version",
 ];
 
+const fileName = (path: string) => path.replaceAll("\\", "/").split("/").at(-1)!;
+const isScript = (path: string) => /\.(py|pyi|pyw)$/.test(fileName(path));
+const isMarker = (path: string) => {
+  const name = fileName(path);
+  return markers.includes(name) || /^requirements[\w.-]*\.txt$/.test(name);
+};
+
 export function isPythonPath(path: string): boolean {
-  const name = path.replaceAll("\\", "/").split("/").at(-1)!;
-  return /\.(py|pyi|pyw)$/.test(name) || markers.includes(name) || /^requirements[\w.-]*\.txt$/.test(name);
+  return isScript(path) || isMarker(path);
 }
 
 export function interpreterChoices(sdks: Sdk[], current: string | null): { path: string; name: string }[] {
@@ -58,20 +75,31 @@ export function interpreterChoices(sdks: Sdk[], current: string | null): { path:
   return [...choices, { path: current, name: current }];
 }
 
-async function hasPythonFiles(): Promise<boolean> {
+async function findPython(): Promise<Found> {
   const matches = await Promise.all(
     [".py", "requirements", ...markers].map((query) => call(commands.findFiles(query, 10000))),
   );
-  return matches.some((files) => files.some((file) => isPythonPath(file.path)));
+  const paths = matches.flat().map((file) => file.path);
+  if (paths.some(isMarker)) return "project";
+  return paths.some(isScript) ? "scripts" : null;
 }
+
+const activeIsScript = (path: string | null | undefined) => !!path && isScript(path);
 
 function PythonStatus() {
   const root = useProject((s) => s.project?.root);
   const trusted = useProject((s) => s.project?.trusted !== false);
   const configured = useProject((s) => s.settings?.languages?.python?.interpreter ?? "");
   const status = usePopup((s) => s.status);
+  // Re-render on tab switches: `popupShown()` reads the flag from the store.
+  usePopup((s) => s.editingScript);
   const open = usePopup((s) => s.open);
   const anchor = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const editor = maybeEditorService();
+    usePopup.setState({ editingScript: activeIsScript(editor?.activeInput?.()?.path) });
+    return editor?.onActiveInputChange?.((input) => usePopup.setState({ editingScript: activeIsScript(input?.path) }));
+  }, []);
   useEffect(() => {
     reset();
     if (!root || !trusted || !isTauri()) return;
@@ -82,13 +110,13 @@ function PythonStatus() {
     const refresh = async () => {
       const request = ++sequence;
       try {
-        const visible = await hasPythonFiles();
+        const found = await findPython();
         if (!live || sequence !== request) return;
         const [python, sdks] =
-          visible || configured
+          found || configured
             ? await Promise.all([effectivePython(), (detected ??= call(commands.sdkDetect("python")))])
             : [null, [] as Sdk[]];
-        if (live && sequence === request) usePopup.setState({ status: { root, configured, visible, python, sdks } });
+        if (live && sequence === request) usePopup.setState({ status: { root, configured, found, python, sdks } });
       } catch (e) {
         console.warn("Cannot refresh Python interpreter status", e);
       }
@@ -104,11 +132,7 @@ function PythonStatus() {
       }),
       onIdeEvent("fsChanged", (e) => {
         if (e.created.length || e.removed.length) detected = undefined;
-        if (
-          e.created.length ||
-          e.removed.length ||
-          e.modified.some((path) => markers.includes(path.replaceAll("\\", "/").split("/").at(-1)!))
-        )
+        if (e.created.length || e.removed.length || e.modified.some((path) => markers.includes(fileName(path))))
           schedule();
       }),
       onIdeEvent("settingsChanged", () => {
