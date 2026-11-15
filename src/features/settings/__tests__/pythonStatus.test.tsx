@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   detect: vi.fn(),
   set: vi.fn(),
   component: null as React.ComponentType | null,
+  active: null as string | null,
+  onActive: null as ((input: { path?: string } | null) => void) | null,
 }));
 vi.mock("@/platform/ipc", () => ({
   call: (p: unknown) => p,
@@ -25,6 +27,13 @@ vi.mock("@/platform/ipc", () => ({
   },
 }));
 vi.mock("@/workbench/contributions", () => ({
+  maybeEditorService: () => ({
+    activeInput: () => (mocks.active ? { kind: "file", key: mocks.active, path: mocks.active } : null),
+    onActiveInputChange: (fn: (input: { path?: string } | null) => void) => {
+      mocks.onActive = fn;
+      return () => {};
+    },
+  }),
   notifications: () => ({ notify: mocks.notify }),
   registerStatusItem: (item: { component: React.ComponentType }) => {
     mocks.component = item.component;
@@ -36,6 +45,7 @@ import { activatePythonStatus, interpreterChoices, isPythonPath } from "../langu
 let dispose: () => void;
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.active = null;
   mocks.files.mockResolvedValue([]);
   mocks.effective.mockResolvedValue(null);
   mocks.detect.mockResolvedValue([]);
@@ -76,15 +86,34 @@ describe("Python interpreter status", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(mocks.detect).not.toHaveBeenCalled();
   });
-  it("shows a warning for Python files without an interpreter", async () => {
-    mocks.files.mockResolvedValue([{ path: "/project/src/main.py" }]);
+  it("shows a warning for a Python project without an interpreter", async () => {
+    mocks.files.mockResolvedValue([{ path: "/project/pyproject.toml" }, { path: "/project/src/main.py" }]);
     mount();
     expect(await screen.findByText("No interpreter")).toBeTruthy();
     const button = screen.getByRole("button", { name: "Python Interpreter: No interpreter" });
     expect(button.querySelector("svg")).toBeTruthy();
   });
+  it("shows loose scripts' interpreter only while a script is the active tab", async () => {
+    mocks.files.mockResolvedValue([{ path: "/project/tools/gen.py" }]);
+    mocks.active = "/project/src/Program.cs";
+    mount();
+    await waitFor(() => expect(mocks.detect).toHaveBeenCalled());
+    expect(screen.queryByRole("button")).toBeNull();
+    act(() => mocks.onActive!({ path: "/project/tools/gen.py" }));
+    expect(screen.getByRole("button", { name: "Python Interpreter: No interpreter" })).toBeTruthy();
+    act(() => mocks.onActive!(null));
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+  it("shows loose scripts' interpreter when one is configured", async () => {
+    mocks.files.mockResolvedValue([{ path: "/project/tools/gen.py" }]);
+    useProject.setState({ settings: { languages: { python: { interpreter: "/venv/python" } } } as never });
+    mocks.effective.mockResolvedValue("/venv/python");
+    mount();
+    expect(await screen.findByRole("button", { name: "Python Interpreter: /venv/python" })).toBeTruthy();
+  });
   it("shows the paths of interpreters that share a name", async () => {
     mocks.files.mockResolvedValue([{ path: "/project/main.py" }]);
+    mocks.active = "/project/main.py";
     mocks.effective.mockResolvedValue("/usr/local/bin/python3.11");
     mocks.detect.mockResolvedValue([
       { path: "/usr/local/bin/python3.11", name: "Python 3.11" },
