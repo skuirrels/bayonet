@@ -187,7 +187,8 @@ fn chosen(dir: &Path) -> Option<PathBuf> {
     let name = std::fs::read_to_string(ide_core::project_dir::path(dir, CHOSEN_FILE)).ok()?;
     let rel = Path::new(name.trim());
     let below = rel.components().all(|c| matches!(c, Component::Normal(_)));
-    (!rel.as_os_str().is_empty() && below).then(|| dir.join(rel))
+    // Joined part by part: the file says `Api/Api.sln`, a path on Windows says `Api\Api.sln`.
+    (!rel.as_os_str().is_empty() && below).then(|| rel.components().fold(dir.to_path_buf(), |p, c| p.join(c)))
 }
 
 /// Whether `path` is a solution file on disk (`.sln`, `.slnx` or `.slnf`).
