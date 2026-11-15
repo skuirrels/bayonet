@@ -4465,6 +4465,7 @@ dependencies = [
  "ide-core",
  "ide-extension",
  "ide-text",
+ "memchr",
  "parking_lot",
  "regex-lite",
  "serde",
