@@ -204,6 +204,7 @@ function ListPopup({ popup }: { popup: Extract<LspPopup, { kind: "list" }> }) {
             activeIndex={activeIndex}
             onActiveChange={setActive}
             hoverSelects
+            autoFocus
             aria-label={popup.title}
             onActivate={(r) => activate(r.item)}
             empty={
