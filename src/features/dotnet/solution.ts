@@ -86,7 +86,7 @@ export function solutionRoot(
   return {
     id: SOLUTION_ROOT_ID,
     label: tx`Solution '${solution.name}'`,
-    icon: "module",
+    icon: "solution",
     detail: n === 1 ? tx("1 project") : tx`${n} projects`,
     scope: "solution",
     children: solution.items.map((i) => entry(i, dirs, deps)),

@@ -29,6 +29,12 @@ export function isModuleFolder(rel: string, root: boolean, modules: BuildPresent
   return !root && rel !== "" && modules.has(rel);
 }
 
+/** Icons of folders that hold a project of another build (a .NET project), by absolute path. */
+export const useProjectFolderIcons = create<{
+  icons: ReadonlyMap<string, string>;
+}>(() => ({ icons: new Map() }));
+export const setProjectFolderIcons = (icons: ReadonlyMap<string, string>) => useProjectFolderIcons.setState({ icons });
+
 export function moduleFolderIcon(rel: string, root: boolean, modules: BuildPresentation["modules"]): string | null {
   const tool = modules.get(rel);
   return tool ? `${tool}-${root ? "project" : "module"}` : null;

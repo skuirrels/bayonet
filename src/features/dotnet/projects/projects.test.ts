@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProjectTemplate, SolutionItem } from "@/bindings";
 import { matchesTemplate, sortTemplates, validName } from "./NewProjectDialog";
 import { referenceChanges } from "./ReferencesDialog";
-import { projectsOf } from "./store";
+import { projectFolderIcons, projectsOf } from "./store";
 
 const template = (shortName: string, name: string, tags: string[] = []): ProjectTemplate => ({
   id: shortName,
@@ -17,6 +17,50 @@ const template = (shortName: string, name: string, tags: string[] = []): Project
 });
 
 describe("solution edits", () => {
+  it("gives project folders their language's project icon", () => {
+    const items: SolutionItem[] = [
+      {
+        kind: "folder",
+        name: "src",
+        items: [
+          {
+            kind: "project",
+            name: "App",
+            path: "/s/src/App/App.csproj",
+            language: "csharp",
+            missing: false,
+          },
+        ],
+      },
+      {
+        kind: "project",
+        name: "Lib",
+        path: "/s/Lib/Lib.fsproj",
+        language: "fsharp",
+        missing: false,
+      },
+      {
+        kind: "project",
+        name: "Vb",
+        path: "/s/Vb/Vb.vbproj",
+        language: "visualbasic",
+        missing: false,
+      },
+      {
+        kind: "project",
+        name: "Gone",
+        path: "/s/Gone/Gone.csproj",
+        language: "csharp",
+        missing: true,
+      },
+    ];
+    expect([...projectFolderIcons(items)]).toEqual([
+      ["/s/src/App", "project-csharp"],
+      ["/s/Lib", "project-fsharp"],
+      ["/s/Vb", "module"],
+    ]);
+  });
+
   it("lists the solution's projects with their folders", () => {
     const items: SolutionItem[] = [
       {
