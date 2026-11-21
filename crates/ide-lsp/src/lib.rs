@@ -734,7 +734,7 @@ impl LspManager {
         self.clear_server_state(&server);
         self.file_watch_roots_changed();
         if intentional {
-            server.announce_down();
+            server.announce_closed(generation);
             return;
         }
         let tail = server.stderr_tail(5);
@@ -753,7 +753,7 @@ impl LspManager {
                 server.set_status(&self.sink, ServerStatus::Crashed, Some(format!("{message}\nRestarting…")));
                 // Woken after the crash is reported: a request that finds no instance
                 // reads this status to say why. The restart sets `Starting` again.
-                server.announce_down();
+                server.announce_closed(generation);
                 tokio::time::sleep(delay).await;
                 if server.is_idle_gen(generation) {
                     self.ensure_started(&server);
@@ -767,7 +767,7 @@ impl LspManager {
                     Some(format!("{message}\nCrashed repeatedly; restart it manually.")),
                 );
                 // Requests still waiting for a start read this status for their error.
-                server.announce_down();
+                server.announce_closed(generation);
             }
         }
     }
