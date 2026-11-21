@@ -47,6 +47,8 @@ export interface ListProps<T> {
   focusable?: boolean;
   /** Move the active row with the pointer (popup choosers). */
   hoverSelects?: boolean;
+  /** The list takes the focus when its popup opens, before any button in the popup's header. */
+  autoFocus?: boolean;
   empty?: ReactNode;
   className?: string;
   "aria-label"?: string;
@@ -127,6 +129,7 @@ export function List<T>({
   sectionHeightOf,
   focusable = true,
   hoverSelects = false,
+  autoFocus = false,
   empty,
   className,
   overscan = 8,
@@ -192,6 +195,7 @@ export function List<T>({
           : undefined
       }
       tabIndex={focusable ? 0 : -1}
+      data-autofocus={autoFocus ? "" : undefined}
       className={clsx(styles.list, className)}
       onKeyDown={focusable ? onKeyDown : undefined}
     >

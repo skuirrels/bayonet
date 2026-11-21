@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FIT_INTERVAL_MS, PROCESS_RESIZE_DELAY_MS, fitScheduler, settledResize } from "./fit";
+import { FIT_SETTLE_MS, PROCESS_RESIZE_DELAY_MS, fitScheduler, settledResize } from "./fit";
 import { isAllowedIdeShortcut, terminalKeyAction } from "./keys";
 import { matchCounter } from "./FindBar";
 import { buildSearchDecorations } from "./theme";
@@ -81,8 +81,35 @@ describe("terminal links", () => {
     expect(l?.kind === "file" && [l.path, l.line, l.col]).toEqual(["/Users/me/p/App.tsx", 14, 3]);
   });
 
+  it("keeps the directories and drive of Windows paths", () => {
+    const loc = (text: string) =>
+      findTerminalLinks(text).map((l) => (l.kind === "file" ? [l.text, l.path, l.line, l.col] : l.text));
+    expect(loc("  --> src\\bin\\main.rs:10:5")).toEqual([["src\\bin\\main.rs:10:5", "src\\bin\\main.rs", 10, 5]]);
+    expect(loc("    at run (C:\\p\\web\\index.js:3:7)")).toEqual([
+      ["C:\\p\\web\\index.js:3:7", "C:\\p\\web\\index.js", 3, 7],
+    ]);
+    expect(loc("C:\\p\\Program.cs(10,5): error CS1002")).toEqual([
+      ["C:\\p\\Program.cs(10,5)", "C:\\p\\Program.cs", 10, 5],
+    ]);
+    expect(loc(".\\main.go:5:2: undefined: x")).toEqual([[".\\main.go:5:2", ".\\main.go", 5, 2]]);
+    expect(loc("D:/p/a/b.ts:4")).toEqual([["D:/p/a/b.ts:4", "D:/p/a/b.ts", 4, undefined]]);
+  });
+
   it("ignores plain numbers and URL ports", () => {
     expect(findTerminalLinks("12:30 http://localhost:3000").map((l) => l.kind)).toEqual(["url"]);
+  });
+
+  it("opens file:// URLs as file locations", () => {
+    const line = "[ERROR] file:///develop/mc/src/main/kotlin/top/A%20B.kt:15:56 Unresolved reference 'x'.";
+    expect(findTerminalLinks(line)).toEqual([
+      expect.objectContaining({ kind: "file", path: "/develop/mc/src/main/kotlin/top/A B.kt", line: 15, col: 56 }),
+    ]);
+    expect(findTerminalLinks("see file:///C:/work/a.kt:3")).toEqual([
+      expect.objectContaining({ kind: "file", path: "C:/work/a.kt", line: 3, col: undefined }),
+    ]);
+    expect(findTerminalLinks("file://host/srv/x.txt")).toEqual([
+      expect.objectContaining({ kind: "file", path: "/srv/x.txt", line: undefined }),
+    ]);
   });
 
   it("trims trailing punctuation from URLs", () => {
@@ -285,7 +312,7 @@ describe("split layout", () => {
 });
 
 describe("terminalFont", () => {
-  const BASE = '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, monospace';
+  const BASE = '"JetBrains Mono", "JetBrains Mono Variable", ui-monospace, Menlo, monospace';
   const t = {
     useEditorFont: true,
     fontFamily: "JetBrains Mono",
@@ -303,13 +330,13 @@ describe("terminalFont", () => {
       "editor font, default family",
       t,
       editor,
-      `"JetBrains Mono Variable", "JetBrains Mono", ${BASE.replace(", monospace", "")}, `,
+      `"JetBrains Mono", "JetBrains Mono Variable", ${BASE.replace(", monospace", "")}, `,
     ],
     [
       "editor font, no editor settings",
       t,
       undefined,
-      `"JetBrains Mono Variable", "JetBrains Mono", ${BASE.replace(", monospace", "")}, `,
+      `"JetBrains Mono", "JetBrains Mono Variable", ${BASE.replace(", monospace", "")}, `,
     ],
     [
       "editor font, custom family",
@@ -321,13 +348,13 @@ describe("terminalFont", () => {
       "editor font, editor fallback",
       t,
       { ...editor, fallbackFont: "PingFang SC" },
-      `"JetBrains Mono Variable", "JetBrains Mono", "PingFang SC", ${BASE.replace(", monospace", "")}, `,
+      `"JetBrains Mono", "JetBrains Mono Variable", "PingFang SC", ${BASE.replace(", monospace", "")}, `,
     ],
     [
       "own font, default family",
       { ...t, useEditorFont: false },
       editor,
-      `"JetBrains Mono Variable", "JetBrains Mono", ${BASE.replace(", monospace", "")}, `,
+      `"JetBrains Mono", "JetBrains Mono Variable", ${BASE.replace(", monospace", "")}, `,
     ],
     [
       "own font, custom + fallback",
@@ -343,14 +370,14 @@ describe("terminalFont", () => {
   });
 
   it("resolves bundled Inter in inherited, independent and fallback selections", () => {
-    expect(terminalFont(t, { ...editor, fontFamily: "Inter" }, BASE).family).toMatch(/^"Inter Variable", "Inter",/);
+    expect(terminalFont(t, { ...editor, fontFamily: "Inter" }, BASE).family).toMatch(/^"Inter", "Inter Variable",/);
     expect(terminalFont({ ...t, useEditorFont: false, fontFamily: "Inter" }, editor, BASE).family).toMatch(
-      /^"Inter Variable", "Inter",/,
+      /^"Inter", "Inter Variable",/,
     );
     expect(terminalFont({ ...t, fallbackFontFamily: "Inter" }, editor, BASE).family).toContain(
-      '"Inter Variable", "Inter"',
+      '"Inter", "Inter Variable"',
     );
-    expect(terminalFont(t, { ...editor, fallbackFont: "Inter" }, BASE).family).toContain('"Inter Variable", "Inter"');
+    expect(terminalFont(t, { ...editor, fallbackFont: "Inter" }, BASE).family).toContain('"Inter", "Inter Variable"');
   });
 
   it("prefers the terminal's fallback over the editor's", () => {
@@ -421,24 +448,79 @@ describe("terminal tab titles", () => {
 describe("fit scheduling", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("refits at most once per interval while resizing, and once after it stops", () => {
+  it("fits an idle terminal on the next frame, and a resizing one once it settles", () => {
     vi.useFakeTimers();
     const fit = vi.fn();
     const f = fitScheduler(fit);
     f.schedule();
     vi.advanceTimersToNextFrame();
     expect(fit).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 30; i++) {
       f.schedule();
       vi.advanceTimersByTime(16);
     }
     expect(fit).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(FIT_INTERVAL_MS);
+    vi.advanceTimersByTime(FIT_SETTLE_MS);
     expect(fit).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(FIT_SETTLE_MS);
     f.schedule();
     f.cancel();
-    vi.advanceTimersByTime(FIT_INTERVAL_MS * 2);
+    vi.advanceTimersByTime(FIT_SETTLE_MS * 2);
     expect(fit).toHaveBeenCalledTimes(2);
+  });
+
+  it("fits a lone second request after it settles without needing another request", () => {
+    vi.useFakeTimers();
+    const fit = vi.fn();
+    const f = fitScheduler(fit);
+    f.schedule();
+    vi.advanceTimersToNextFrame();
+    vi.advanceTimersByTime(40);
+    f.schedule();
+    vi.advanceTimersByTime(FIT_SETTLE_MS - 1);
+    expect(fit).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fit).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("fits without animation frames in a background window", () => {
+    vi.useFakeTimers();
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    const fit = vi.fn();
+    try {
+      fitScheduler(fit).schedule();
+      vi.advanceTimersByTime(100);
+      expect(fit).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
+  it.each([false, true])("cancels all pending work after repeated requests: %s", (repeated) => {
+    vi.useFakeTimers();
+    const fit = vi.fn();
+    const f = fitScheduler(fit);
+    f.schedule();
+    if (repeated) f.schedule();
+    f.cancel();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(FIT_SETTLE_MS * 2);
+    expect(fit).not.toHaveBeenCalled();
+  });
+
+  it("flushes a deferred fit immediately and leaves no delayed duplicate", () => {
+    vi.useFakeTimers();
+    const fit = vi.fn();
+    const f = fitScheduler(fit);
+    f.schedule();
+    f.schedule();
+    f.flush();
+    expect(fit).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(FIT_SETTLE_MS * 2);
+    expect(fit).toHaveBeenCalledOnce();
   });
 
   it("reports only the size the terminal settles on", () => {

@@ -34,7 +34,7 @@ import { flashTaskbarForBreakpoint, stopTaskbarFlash } from "./taskbarFlash";
 import { missingAdapter } from "./missingAdapter";
 import { startFailureMessage } from "./startFailure";
 
-export type SessionStatus = "starting" | "running" | "paused" | "terminated";
+export type SessionStatus = "starting" | "running" | "paused" | "stopping" | "terminated";
 
 export interface DebugSession {
   id: DebugSessionId;
@@ -328,6 +328,7 @@ export function publishContext() {
           configId: session.runConfig?.id ?? null,
           name: session.runConfig?.name ?? session.name,
           startedAt: session.startedAt ?? 0,
+          status: session.status,
           paused: !!paused,
           rerun: session.runConfig || session.launch ? () => void rerunSession(session.id) : null,
           stop: () => void stopSession(session.id),
@@ -634,7 +635,7 @@ export async function startSession(
         sticky: true,
         actions: [
           {
-            label: "Install and Debug",
+            label: missing.action ?? "Install and Debug",
             run: () => void executeAction("tools.install", missing.tool).then(() => startSession(launch, options)),
           },
         ],
@@ -662,6 +663,12 @@ export async function stopSession(id: DebugSessionId, options: { stopProcess?: b
     appendConsole(root.id, "system", tx("Launch cancelled.") + "\n");
     markTerminated(root.id);
     return;
+  }
+  // Between the Stop press and the adapter's terminated event the session is shutting down:
+  // keep it live (Run stays disabled) and let the toolbar show the spinner.
+  for (const sid of new Set([root.id, s.id])) {
+    const target = useDebug.getState().sessions[sid];
+    if (target && isLive(target)) patch(sid, { status: "stopping" });
   }
   try {
     await call(commands.debugStop(root.id));
@@ -947,23 +954,38 @@ export function removeWatch(expression: string) {
   persistWatches();
 }
 
-const WATCH_KEY = "openidea.debugger.watches";
+/** Watches used to be one list for every project; it is only read now, as a project's first list. */
+const SHARED_WATCH_KEY = "openidea.debugger.watches";
+const watchKey = (root: string) => `${SHARED_WATCH_KEY}:${root}`;
+
+/** The project whose watches are loaded; without one they aren't stored. */
+let watchRoot: string | null = null;
 
 function persistWatches() {
+  if (watchRoot == null) return;
   try {
-    localStorage.setItem(WATCH_KEY, JSON.stringify(useDebug.getState().watches));
+    localStorage.setItem(watchKey(watchRoot), JSON.stringify(useDebug.getState().watches));
   } catch {
     // ignore
   }
 }
 
-export function loadWatches() {
+function storedWatches(key: string): string[] | null {
   try {
-    const raw = JSON.parse(localStorage.getItem(WATCH_KEY) ?? "[]") as unknown;
-    if (Array.isArray(raw)) useDebug.setState({ watches: raw.filter((w): w is string => typeof w === "string") });
+    const stored = localStorage.getItem(key);
+    const raw = stored == null ? null : (JSON.parse(stored) as unknown);
+    return Array.isArray(raw) ? raw.filter((w): w is string => typeof w === "string") : null;
   } catch {
-    // ignore
+    return null;
   }
+}
+
+/** The watches of the project at `root`. */
+export function loadWatches(root: string | null) {
+  watchRoot = root;
+  const own = root == null ? [] : storedWatches(watchKey(root));
+  useDebug.setState({ watches: own ?? storedWatches(SHARED_WATCH_KEY) ?? [] });
+  if (own == null) persistWatches();
 }
 
 /**

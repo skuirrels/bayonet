@@ -13,6 +13,7 @@ mod convert;
 mod external_project;
 mod file_ops;
 mod file_watch;
+mod go_scope;
 mod handler;
 mod inspect;
 pub mod jdtls;
@@ -53,7 +54,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use server::{Conn, Running, Server};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -303,6 +304,10 @@ impl<T> Outcome<T> {
         }
     }
 }
+
+/// How often a rename the server withdrew (`ContentModified`) is asked, and the pause between.
+const RENAME_ATTEMPTS: u32 = 5;
+const RENAME_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Implementation requests of one line-marker pass in flight at once.
 const IMPLEMENTATION_CONCURRENCY: usize = 4;
@@ -666,12 +671,14 @@ impl LspManager {
         if let Err(e) = peer.notify("initialized", json!({})) {
             tracing::warn!("{}: {e}", server.name);
         }
-        // Servers that don't ask with `workspace/configuration` only learn settings this way.
-        let cfg = server.effective_config();
-        if cfg.settings.is_some()
-            && let Err(e) =
-                peer.notify("workspace/didChangeConfiguration", json!({ "settings": handler::all_settings(&cfg) }))
-        {
+        // Sent even without settings: servers that don't ask with `workspace/configuration`
+        // only learn settings this way, and Pyright, given workspace folders, waits for it
+        // before asking and loading the workspace.
+        let mut settings = handler::all_settings(&server.effective_config());
+        if settings.is_null() {
+            settings = json!({});
+        }
+        if let Err(e) = peer.notify("workspace/didChangeConfiguration", json!({ "settings": settings })) {
             tracing::debug!("{}: didChangeConfiguration: {e}", server.name);
         }
 
@@ -727,7 +734,7 @@ impl LspManager {
         self.clear_server_state(&server);
         self.file_watch_roots_changed();
         if intentional {
-            server.announce_down();
+            server.announce_closed(generation);
             return;
         }
         let tail = server.stderr_tail(5);
@@ -746,7 +753,7 @@ impl LspManager {
                 server.set_status(&self.sink, ServerStatus::Crashed, Some(format!("{message}\nRestarting…")));
                 // Woken after the crash is reported: a request that finds no instance
                 // reads this status to say why. The restart sets `Starting` again.
-                server.announce_down();
+                server.announce_closed(generation);
                 tokio::time::sleep(delay).await;
                 if server.is_idle_gen(generation) {
                     self.ensure_started(&server);
@@ -760,7 +767,7 @@ impl LspManager {
                     Some(format!("{message}\nCrashed repeatedly; restart it manually.")),
                 );
                 // Requests still waiting for a start read this status for their error.
-                server.announce_down();
+                server.announce_closed(generation);
             }
         }
     }
@@ -1451,8 +1458,8 @@ impl LspManager {
         self.references_streaming(doc, pos, include_declaration, project_wide, true, cancel, None).await
     }
 
-    /// [`Self::references`]. Java, `project_wide`: without `libraries`, only the
-    /// workspace's sources are searched (`libraries_skipped`); with it, those found
+    /// [`Self::references`]. Java: without `libraries`, only the workspace's sources
+    /// are searched (`libraries_skipped`); with it and `project_wide`, those found
     /// there arrive on `partial` before the dependencies and the JDK are searched.
     #[allow(clippy::too_many_arguments)]
     pub async fn references_streaming(
@@ -1482,7 +1489,20 @@ impl LspManager {
         };
         let native =
             self.native_references(doc, pos, include_declaration, project_wide, libraries, cancel.clone(), partial);
-        let (configuration, result) = futures::join!(configuration, native);
+        futures::pin_mut!(configuration, native);
+        let (configuration, result) = match futures::future::select(configuration, native).await {
+            futures::future::Either::Left((configuration, native)) => (configuration, native.await),
+            futures::future::Either::Right((result, configuration)) => {
+                // The configuration index is rebuilt after Java changes, which takes seconds in a
+                // project with many dependencies: the usages found meanwhile are shown first.
+                if let (Some(partial), Ok(found)) = (partial, &result)
+                    && !found.locations.is_empty()
+                {
+                    partial(found.clone());
+                }
+                (configuration.await, result)
+            }
+        };
         let configuration = configuration?;
         let mut result = result?;
         if let Some(configuration) = configuration {
@@ -1606,7 +1626,10 @@ impl LspManager {
                     };
                     scope::Widened { first: all, second: Some(found), incomplete: sources.incomplete }
                 } else {
-                    let first = query(false).await?;
+                    // Scoped probes (usage counts, bulk scans) run for many symbols at once:
+                    // without `libraries`, the dependencies and the JDK are not searched.
+                    libraries_skipped = !libraries;
+                    let first = query(!libraries).await?;
                     let empty = first.is_empty();
                     scope::Widened::only(first, empty, &t.server)
                 };
@@ -1707,6 +1730,19 @@ impl LspManager {
         }
         let mut v = out.finish(References::default())?;
         convert::dedup_locations(&mut v.locations);
+        if project_wide && let Some(t) = targets.first().filter(|_| snap.language.as_str() == "go") {
+            // Usages in other modules take a view per module: those in reach come first.
+            if let Some(partial) = partial
+                && !v.locations.is_empty()
+            {
+                partial(v.clone());
+            }
+            v.locations.extend(self.go_other_module_references(&snap, t, pos, &cancel).await);
+            if cancel.is_cancelled() {
+                return Err(IdeError::cancelled());
+            }
+            convert::dedup_locations(&mut v.locations);
+        }
         Ok(v)
     }
 
@@ -2117,8 +2153,25 @@ impl LspManager {
         let query = || async {
             let mut params = snap.pos_params(t, pos);
             params["newName"] = json!(new_name);
-            let r: Option<lsp::WorkspaceEdit> =
-                self.call(t, "textDocument/rename", params, Some(cancel), LONG_TIMEOUT).await?;
+            // A server still analysing an edit withdraws the rename (`ContentModified`, which
+            // arrives as a cancellation). The user asked for it: ask again shortly instead of
+            // dropping it without a word, and say why if it keeps being withdrawn.
+            let mut attempt = 0;
+            let r: Option<lsp::WorkspaceEdit> = loop {
+                match self.call(t, "textDocument/rename", params.clone(), Some(cancel), LONG_TIMEOUT).await {
+                    Err(e) if e.kind == ide_core::error::ErrorKind::Cancelled && !cancel.is_cancelled() => {
+                        attempt += 1;
+                        if attempt >= RENAME_ATTEMPTS {
+                            return Err(IdeError::invalid(format!(
+                                "{} was still analysing a change and withdrew the rename; try again",
+                                t.server.name
+                            )));
+                        }
+                        tokio::time::sleep(RENAME_RETRY_DELAY).await;
+                    }
+                    r => break r?,
+                }
+            };
             Ok(r.map(|e| convert::workspace_edit(&self.conv(t.enc()), e)).unwrap_or_default())
         };
         // The Angular server renames in the file's own project only, whatever is open.
@@ -2139,7 +2192,20 @@ impl LspManager {
         };
         let w = self.widened(snap, t, pos, cancel, query, files).await?;
         // The second edit covers the first: its files stay analysed.
-        Ok(Renamed { edit: w.second.unwrap_or(w.first), incomplete: w.incomplete })
+        let mut edit = w.second.unwrap_or(w.first);
+        let mut more: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
+        for l in self.go_other_module_references(snap, t, pos, cancel).await {
+            more.entry(l.path.to_path_buf())
+                .or_default()
+                .push(TextEdit { range: l.range, new_text: new_name.to_owned() });
+        }
+        if cancel.is_cancelled() {
+            return Err(IdeError::cancelled());
+        }
+        let files =
+            more.into_iter().map(|(path, edits)| ide_core::FileEdit::Edit { path: path.into(), edits, version: None });
+        convert::merge_workspace_edit(&mut edit, WorkspaceEdit { files: files.collect(), ..Default::default() });
+        Ok(Renamed { edit, incomplete: w.incomplete })
     }
 
     // ---- file operations (`workspace/willRenameFiles`, `workspace/didRenameFiles`) ----
@@ -2298,6 +2364,13 @@ impl LspManager {
     /// into `.venv` or a `go.mod` rewritten by `go get` is picked up without a restart. Other
     /// servers hear of their languages' files under their root; without it jdtls's incremental
     /// build never sees them, so a launch runs stale classes.
+    ///
+    /// Creates and changes for documents synced on a server's current instance are left out.
+    /// Their text reaches the server through `didOpen`/`didChange`, including clean-buffer
+    /// reloads. A server that re-reads the file on the watched change (csharp-ls) would apply
+    /// the reload and then the `didChange` computed against the pre-reload copy, so it would
+    /// keep analysing content that diverges from both the disk and the editor (#1780).
+    /// Deletions still reach it: document sync does not describe workspace membership.
     pub fn watched_files_changed(
         &self,
         created: &[PathBuf],
@@ -2328,8 +2401,30 @@ impl LspManager {
             return;
         }
         let servers: Vec<Arc<Server>> = self.servers.lock().clone();
+        let open: HashMap<(ide_core::ServerId, u64), HashSet<PathBuf>> = {
+            let docs = self.docs.lock();
+            let mut open: HashMap<_, HashSet<_>> = HashMap::new();
+            for d in docs.values() {
+                for a in &d.servers {
+                    if let Some(generation) = a.opened_gen {
+                        open.entry((a.server.id, generation))
+                            .or_default()
+                            .extend([d.path.clone(), d.canonical.clone()]);
+                    }
+                }
+            }
+            open
+        };
+        let canonical: HashMap<_, _> =
+            created.iter().chain(modified).filter_map(|p| dunce::canonicalize(p).ok().map(|c| (p, c))).collect();
         for s in servers {
             let Some(run) = s.running() else { continue };
+            let open = open.get(&(s.id, run.generation)).filter(|_| run.caps.read().sync != SyncKind::None);
+            let send = |p: &PathBuf, change: Change| {
+                change == Change::Deleted
+                    || !open
+                        .is_some_and(|paths| paths.contains(p) || canonical.get(p).is_some_and(|c| paths.contains(c)))
+            };
             let all = [(created, Change::Created), (modified, Change::Changed), (removed, Change::Deleted)]
                 .into_iter()
                 .flat_map(|(paths, change)| paths.iter().map(move |p| (p, change)));
@@ -2339,11 +2434,13 @@ impl LspManager {
                     continue;
                 }
                 let languages = s.languages();
-                all.filter(|(p, _)| p.starts_with(&s.root) && languages.contains(&self.languages.detect(p, None)))
-                    .collect()
+                all.filter(|(p, change)| {
+                    p.starts_with(&s.root) && languages.contains(&self.languages.detect(p, None)) && send(p, *change)
+                })
+                .collect()
             } else {
                 all.chain(excluded_dirs.iter().map(|p| (p, Change::Created)))
-                    .filter(|(p, change)| watchers.wants(&s.root, p, *change))
+                    .filter(|(p, change)| watchers.wants(&s.root, p, *change) && send(p, *change))
                     .collect()
             };
             drop(watchers);
@@ -2456,7 +2553,7 @@ impl LspManager {
         let params = json!({ "textDocument": snap.ident() });
         let r: Option<Value> = self.call(t, "textDocument/semanticTokens/full", params, None, DEFAULT_TIMEOUT).await?;
         let Some(data) = r.as_ref().and_then(|v| v.get("data")).and_then(Value::as_array) else { return Ok(None) };
-        let data: Vec<u32> = data.iter().map(|n| n.as_u64().unwrap_or(0) as u32).collect();
+        let data: Vec<i64> = data.iter().map(|n| n.as_i64().unwrap_or(0)).collect();
         let (enc, legend) = {
             let caps = t.caps();
             (caps.encoding, caps.semantic_legend.clone().unwrap_or_default())

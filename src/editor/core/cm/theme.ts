@@ -121,8 +121,9 @@ export const overviewStyles = {
 };
 
 export const openideaTheme = EditorView.theme({
+  // Not on "&": the tooltip container in `body` carries the theme classes too.
+  "&.cm-editor": { height: "100%" },
   "&": {
-    height: "100%",
     backgroundColor: "var(--bg-editor, var(--bg-island, var(--bg-app)))",
     color: "var(--fg-editor, var(--fg))",
     "--editor-line-number": "var(--fg-line-number, var(--fg-gutter))",
@@ -152,7 +153,8 @@ export const openideaTheme = EditorView.theme({
     caretColor: "var(--caret, var(--fg-strong))",
     cursor: "text",
   },
-  ".cm-line": { padding: "0 16px 0 6px" },
+  // The right side also leaves room for the floating corner widgets (core/cm/cornerInset.ts).
+  ".cm-line": { padding: "0 calc(16px + var(--cm-corner-inset, 0px)) 0 6px" },
   ...caretStyles,
   "&.cm-openidea-ligatures .cm-scroller, &.cm-openidea-ligatures .cm-openidea-sticky": {
     fontVariantLigatures: "normal",
@@ -241,14 +243,23 @@ export const openideaTheme = EditorView.theme({
   },
   ".cm-openidea-laneDeleted": {
     position: "absolute",
-    left: "0",
-    top: "-3px",
+    left: "-4px",
+    top: "-6px",
+    width: "12px",
+    height: "12px",
+    cursor: "pointer",
+    zIndex: "1",
+  },
+  ".cm-openidea-laneDeleted::after": {
+    content: '""',
+    position: "absolute",
+    left: "4px",
+    top: "3px",
     width: "0",
     height: "0",
     borderTop: "3px solid transparent",
     borderBottom: "3px solid transparent",
     borderLeft: "6px solid var(--lane-color)",
-    zIndex: "1",
   },
   ".cm-foldGutter": { width: "16px" },
   ".cm-foldGutter .cm-gutterElement": {
@@ -370,5 +381,7 @@ export const openideaTheme = EditorView.theme({
   ".cm-openidea-stickyText": { flex: "1", overflow: "hidden" },
 
   // Soft-wrap: continuation rows indent slightly, like IDEA's wrap sign column.
-  "&.cm-lineWrapping .cm-line, .cm-lineWrapping .cm-line": { paddingRight: "24px" },
+  "&.cm-lineWrapping .cm-line, .cm-lineWrapping .cm-line": {
+    paddingRight: "calc(24px + var(--cm-corner-inset, 0px))",
+  },
 });

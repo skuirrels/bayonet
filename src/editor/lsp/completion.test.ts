@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EditorState, StateEffect } from "@codemirror/state";
+import { EditorState, StateEffect, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { CompletionItem } from "@/bindings";
 import type { EditorDocContext } from "@/editor/api";
 import { lspDoc } from "./lsp";
+import { insertTab, tabOut, tabOutOfScope } from "@/editor/core/cm/smartKeys";
 import {
   completionSymbolKind,
   identifierEnd,
@@ -15,6 +16,7 @@ import {
 import {
   applyLspCompletion,
   callParens,
+  offersPaths,
   commitsLookup,
   completionExtension,
   explicitCompletion,
@@ -144,6 +146,7 @@ describe("completion helpers", () => {
   it("finds identifier ends", () => {
     expect(identifierEnd("foo.barBaz(1)", 4)).toBe(10);
     expect(identifierEnd("x ", 1)).toBe(1);
+    expect(identifierEnd("a𐐀\u0301;", 1)).toBe(4);
   });
 });
 
@@ -155,10 +158,10 @@ describe("applying completions", () => {
   });
 
   /** `|` marks the caret where completion was requested; `typed` is typed afterwards. */
-  function setup(text: string, typed = "") {
+  function setup(text: string, typed = "", extensions: Extension[] = []) {
     const pos = text.indexOf("|");
     const doc = text.replace("|", "");
-    const state = EditorState.create({ doc, selection: { anchor: pos } });
+    const state = EditorState.create({ doc, selection: { anchor: pos }, extensions });
     view = new EditorView({ state, parent: document.body });
     const req = { doc: 1, path: "/p/a.ts", language: null, pos, text: view.state.doc };
     if (typed) view.dispatch({ changes: { from: pos, insert: typed }, selection: { anchor: pos + typed.length } });
@@ -173,6 +176,35 @@ describe("applying completions", () => {
     apply(view, makeCompletion(item({ insertText: "create" }), req), 8);
     expect(view.state.doc.toString()).toBe("service.createOrder()");
     expect(view.state.selection.main.head).toBe(14);
+  });
+
+  it("lets Tab step out of the parentheses a completion inserted", () => {
+    const { view, req } = setup("service.cr|", "", [tabOut]);
+    applyLspCompletion(view, makeCompletion(item(), req), 8, 10, "insert");
+    expect(view.state.doc.toString()).toBe("service.create()");
+    expect(view.state.selection.main.head).toBe(15);
+    expect(insertTab(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("service.create()");
+    expect(view.state.selection.main.head).toBe(16);
+  });
+
+  it("lets Tab step out of a call snippet without stops", async () => {
+    const { view, req } = setup("new Arr|", "", [tabOut]);
+    view.dispatch({ effects: StateEffect.appendConfig.of(lspDoc.of({ doc: 1 } as EditorDocContext)) });
+    apply(view, makeCompletion(item({ kind: "constructor", insertText: "ArrayList<>()", isSnippet: true }), req), 4);
+    expect(view.state.doc.toString()).toBe("new ArrayList<>()");
+    expect(view.state.selection.main.head).toBe(16);
+    expect(insertTab(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("new ArrayList<>()");
+    expect(view.state.selection.main.head).toBe(17);
+    // The parameter-info fallback also moves past `)`; let it settle before teardown.
+    await vi.waitFor(() => expect(view.state.selection.main.head).toBe(17));
+  });
+
+  it("does not register a scope when jumping outside closing brackets is off", () => {
+    const { view, req } = setup("service.cr|");
+    applyLspCompletion(view, makeCompletion(item(), req), 8, 10, "insert");
+    expect(tabOutOfScope(view)).toBe(false);
   });
 
   it("keeps overloads sharing a filterText apart", () => {
@@ -226,6 +258,44 @@ describe("applying completions", () => {
   });
 
   for (const mode of ["insert", "replace"] as const) {
+    for (const prefix of ["", "v"]) {
+      it(`${mode} leaves the caret after a field snippet accepted at root.${prefix}`, () => {
+        const { view, req, pos } = setup(`int a = root.${prefix}|Suffix`);
+        const start = "int a = root.".length;
+        const c = makeCompletion(
+          item({
+            label: "val",
+            kind: "field",
+            insertText: "val",
+            isSnippet: true,
+            replaceRange: { start: { line: 0, col: start }, end: { line: 0, col: pos } },
+          }),
+          req,
+        );
+        applyLspCompletion(view, c, start, pos, mode);
+        expect(view.state.doc.toString()).toBe(`int a = root.val${mode === "insert" ? "Suffix" : ""}`);
+        expect(view.state.selection.main.head).toBe(start + 3);
+      });
+    }
+
+    it(`${mode} places a fieldless snippet after imports and a cached UTF-16 prefix`, () => {
+      const { view, req, pos } = setup("\n/* 😀 */ root.|Suffix", "v");
+      const c = makeCompletion(
+        item({
+          label: "val",
+          kind: "field",
+          insertText: "val",
+          isSnippet: true,
+          replaceRange: { start: { line: 1, col: pos - 1 }, end: { line: 1, col: pos - 1 } },
+          additionalEdits: [{ range: { start: { line: 0, col: 0 }, end: { line: 0, col: 0 } }, new_text: "import X;" }],
+        }),
+        req,
+      );
+      applyLspCompletion(view, c, pos, pos + 1, mode);
+      expect(view.state.doc.toString()).toBe(`import X;\n/* 😀 */ root.val${mode === "insert" ? "Suffix" : ""}`);
+      expect(view.state.selection.main.head).toBe(pos + "import X;val".length);
+    });
+
     for (const shape of ["textEdit", "insertReplace", "noEdit"] as const) {
       for (const isSnippet of [false, true]) {
         it(`${mode} replaces a mixed-case prefix typed after a ${shape} request (snippet: ${isSnippet})`, () => {
@@ -373,8 +443,24 @@ describe("insert parentheses", () => {
 
   it("skips calls that already have parentheses and imports", () => {
     expect(callParens(item(), line("a.cr(x)"), 2, 4)).toBeNull();
+    expect(callParens(item(), line("cr'"), 0, 2)).toBeNull();
+    expect(callParens(item(), line('cr"'), 0, 2)).toBeNull();
     expect(callParens(item(), line("import { cr"), 9, 11)).toBeNull();
     expect(callParens(item(), line("use crate::cr"), 11, 13)).toBeNull();
+  });
+});
+
+describe("file paths in strings", () => {
+  it("are offered in PHP and Blade only once the string reads like a path", () => {
+    expect(offersPaths("php", "config('app.")).toBe(false);
+    expect(offersPaths("php", "User::create(['na")).toBe(false);
+    expect(offersPaths("php", "require './")).toBe(true);
+    expect(offersPaths("blade", "@include('partials/")).toBe(true);
+  });
+
+  it("are offered as before in other languages", () => {
+    expect(offersPaths("typescript", "import x from 'mod")).toBe(true);
+    expect(offersPaths("rust", 'include_str!("da')).toBe(true);
   });
 });
 
@@ -411,15 +497,27 @@ describe("lookup commit characters", () => {
 });
 
 describe("explicit completion", () => {
-  function editor(labels: string[]) {
+  function editor(labels: string[], doc = "pri|", serverItems = false) {
     const source: CompletionSource = (ctx) => {
       const word = ctx.matchBefore(/\w*/);
-      return { from: word?.from ?? ctx.pos, options: labels.map((label) => ({ label })) };
+      const from = word?.from ?? ctx.pos;
+      const options = labels.map((label) =>
+        serverItems
+          ? makeCompletion(item({ label, insertText: label, kind: "field" }), {
+              doc: 1,
+              path: "/p/a.ts",
+              language: "typescript",
+              pos: ctx.pos,
+              text: ctx.state.doc,
+            })
+          : { label },
+      );
+      return { from, options };
     };
     const view = new EditorView({
       state: EditorState.create({
-        doc: "pri",
-        selection: { anchor: 3 },
+        doc: doc.replace("|", ""),
+        selection: { anchor: doc.indexOf("|") },
         extensions: [completionExtension(), EditorState.languageData.of(() => [{ openideaCompletion: source }])],
       }),
       parent: document.body,
@@ -427,12 +525,34 @@ describe("explicit completion", () => {
     return view;
   }
 
-  it("inserts a sole candidate right away (IDEA)", async () => {
-    const view = editor(["println"]);
+  it.each([
+    ["pri|", "println"],
+    ["pri|;", "println;"],
+  ])("inserts a sole candidate right away at the end of a prefix (%s)", async (doc, expected) => {
+    const view = editor(["println"], doc);
     explicitCompletion(view);
-    await vi.waitFor(() => expect(view.state.doc.toString()).toBe("println"), { timeout: 2000 });
+    await vi.waitFor(() => expect(view.state.doc.toString()).toBe(expected), { timeout: 2000 });
     view.destroy();
   });
+
+  it.each(["first|Name", "fir|Name", "first|𐐀Name"])(
+    "leaves the lookup open inside an identifier (%s)",
+    async (reference) => {
+      const doc = `const person = { firstName: "Ada", lastName: "Lovelace" };\nconst value = person.${reference};`;
+      const view = editor(["firstName"], doc, true);
+      try {
+        explicitCompletion(view);
+        await vi.waitFor(() => expect(currentCompletions(view.state)).toHaveLength(1));
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(view.state.doc.toString()).toBe(doc.replace("|", ""));
+        expect(currentCompletions(view.state)).toHaveLength(1);
+        expect(runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Tab" }), "editor")).toBe(true);
+        expect(view.state.doc.toString()).toBe(doc.replace(reference, "firstName"));
+      } finally {
+        view.destroy();
+      }
+    },
+  );
 
   it("keeps a sole candidate in the list when auto-insert is off", async () => {
     useProject.setState({ settings: { editor: { completion: { autoInsertSingle: false } } } as unknown as Settings });
@@ -450,6 +570,45 @@ describe("explicit completion", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(view.state.doc.toString()).toBe("pri");
     view.destroy();
+  });
+});
+
+describe("completion footer", () => {
+  let view: EditorView | null = null;
+  afterEach(() => {
+    view?.destroy();
+    view = null;
+  });
+
+  it("stays below the list after CodeMirror rebuilds the options", async () => {
+    const source: CompletionSource = (ctx) => ({
+      from: ctx.pos,
+      options: [{ label: "println" }, { label: "print" }],
+    });
+    view = new EditorView({
+      state: EditorState.create({
+        doc: "pri",
+        selection: { anchor: 3 },
+        extensions: [completionExtension(), EditorState.languageData.of(() => [{ openideaCompletion: source }])],
+      }),
+      parent: document.body,
+    });
+    startCompletion(view);
+    await vi.waitFor(() =>
+      expect(document.querySelector(".cm-tooltip-autocomplete > .cm-lsp-completion-footer")).not.toBeNull(),
+    );
+    const tooltip = document.querySelector<HTMLElement>(".cm-tooltip-autocomplete")!;
+    const footer = tooltip.querySelector<HTMLElement>(":scope > .cm-lsp-completion-footer")!;
+    expect(footer.previousElementSibling?.tagName).toBe("UL");
+
+    // CodeMirror removes the <ul> and appends a fresh one when the results change.
+    tooltip.querySelector(":scope > ul")!.remove();
+    tooltip.appendChild(document.createElement("ul"));
+    expect(footer.previousElementSibling).toBeNull();
+
+    view.dispatch({});
+    await vi.waitFor(() => expect(footer.previousElementSibling?.tagName).toBe("UL"));
+    expect(tooltip.querySelectorAll(":scope > .cm-lsp-completion-footer")).toHaveLength(1);
   });
 });
 

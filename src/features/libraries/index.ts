@@ -30,6 +30,9 @@ const GROUP_ICONS: Record<string, string> = {
   gems: "file-ruby",
 };
 
+/** SDK groups, which IDEA writes in angle brackets (`< 21 >`); library groups (`Maven: g:a:v`) go without. */
+const SDK_KINDS = new Set(["jdk", "python", "ruby", "go", "rust"]);
+
 /** An archive's root (`/jdk/lib/src.zip!`): its entries live below `<archive>!/`. */
 const isArchiveRoot = (path: string) => path.endsWith("!");
 
@@ -75,7 +78,7 @@ export function librariesRoot(groups: readonly LibraryGroup[]): ProjectViewRootC
     order: 5,
     readOnly: true,
     children: groups.map((g) => ({
-      label: `< ${g.name} >`,
+      label: SDK_KINDS.has(g.kind) ? `< ${g.name} >` : g.name,
       icon: GROUP_ICONS[g.kind] ?? "library",
       children: g.roots.map((r) => ({
         label: r.name,

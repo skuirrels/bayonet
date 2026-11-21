@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main, master]
     types: [opened, synchronize, reopened]
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -13,8 +14,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # A newer push supersedes the run in progress, on main too.
-  cancel-in-progress: true
+  # A newer push supersedes a pull request's run in progress. Runs on main and in the merge
+  # queue finish, so a broken main shows up and the queue's required checks report.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,7 +26,7 @@ env:
 
 jobs:
   # Which parts a pull request touches, so jobs it can't affect skip and leave the
-  # shared runners to others. Pushes and manual runs always run everything.
+  # shared runners to others. Pushes, the merge queue and manual runs always run everything.
   changes:
     name: Changes
     runs-on: ubuntu-latest
@@ -247,11 +249,15 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: E2E
+    name: E2E (${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     timeout-minutes: 30
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # Browsers and their system libraries are preinstalled; keep the tag in step with @playwright/test.
     container: mcr.microsoft.com/playwright:v1.64.1-noble
     steps:
@@ -261,12 +267,12 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm e2e
+      - run: pnpm e2e --shard=${{ matrix.shard }}/2
         env:
           HOME: /root
       - uses: actions/upload-artifact@v6
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: playwright-report/
           retention-days: 7

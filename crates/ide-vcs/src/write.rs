@@ -307,18 +307,24 @@ pub(crate) fn discard(r: &Repo, paths: &[PathBuf]) -> IdeResult<()> {
     let rel = r.rel_paths(paths)?;
     // `git restore --worktree` refuses unmerged paths: roll those back to HEAD first.
     discard_unmerged(r, &rel)?;
-    let (mut tracked, mut untracked) = (Vec::new(), Vec::new());
+    let (mut tracked, mut untracked, mut submodules) = (Vec::new(), Vec::new(), Vec::new());
     {
         let repo = r.gix()?;
         let index = repo.index_or_empty().map_err(gx)?;
         for p in rel {
-            let exact = index.entry_index_by_path(BStr::new(p.as_bytes())).is_ok();
+            let exact = index.entry_index_by_path(BStr::new(p.as_bytes())).ok().map(|i| &index.entries()[i]);
             let dir_prefix = if p == "." { String::new() } else { format!("{}/", p.trim_end_matches('/')) };
-            let has_tracked_children = index.prefixed_entries(BStr::new(dir_prefix.as_bytes())).is_some();
-            if exact {
-                tracked.push(p);
+            let children = index.prefixed_entries(BStr::new(dir_prefix.as_bytes()));
+            if let Some(entry) = exact {
+                if entry.mode.is_submodule() {
+                    submodules.push(p);
+                } else {
+                    tracked.push(p);
+                }
             } else if r.abs_path(&p).is_dir() {
-                if has_tracked_children {
+                if let Some(children) = children {
+                    submodules
+                        .extend(children.iter().filter(|e| e.mode.is_submodule()).map(|e| e.path(&index).to_string()));
                     tracked.push(p.clone());
                 }
                 untracked.push(p);
@@ -328,6 +334,11 @@ pub(crate) fn discard(r: &Repo, paths: &[PathBuf]) -> IdeResult<()> {
         }
     }
     run_paths(r, &["restore", "--worktree"], &tracked)?;
+    // A plain restore leaves a submodule alone. This one checks out the commit the index
+    // records there and restores its tracked files, keeping its untracked ones.
+    if crate::execution_allowed() {
+        run_paths(r, &["restore", "--recurse-submodules", "--worktree"], &submodules)?;
+    }
     if !untracked.is_empty() {
         // `git clean` keeps ignored files and refuses paths outside the worktree.
         run_paths(r, &["clean", "-f", "-d", "-q"], &untracked)?;
@@ -849,16 +860,31 @@ fn check_rev(rev: &str) -> IdeResult<&str> {
     Ok(rev)
 }
 
+/// The short name of a full branch ref (`refs/heads/x`, `refs/remotes/origin/x`) when it
+/// names that same branch: git writes the name it is given into the merge message and the
+/// reflog. A name a tag shares stays a full ref, the case IDEA also passes in full.
+fn unambiguous_branch_name<'a>(r: &Repo, rev: &'a str) -> &'a str {
+    let Some(short) = rev.strip_prefix("refs/heads/").or_else(|| rev.strip_prefix("refs/remotes/")) else {
+        return rev;
+    };
+    // An ambiguous name prints nothing (git reports it on stderr).
+    let full = cli::run_raw(r.root(), &["rev-parse", "--verify", "-q", "--symbolic-full-name", short], None);
+    match full {
+        Ok(out) if out.code == Some(0) && out.stdout_str().trim() == rev => short,
+        _ => rev,
+    }
+}
+
 /// Local changes are stashed and restored around the merge (IDEA's "save local changes").
 pub(crate) fn merge(r: &Repo, branch: &str) -> IdeResult<()> {
-    let branch = check_rev(branch)?;
+    let branch = unambiguous_branch_name(r, check_rev(branch)?);
     crate::preserve::around(r, "Local changes saved before merge", || {
         run(r.root(), &["merge", "--no-edit", branch], None).map(|_| ())
     })
 }
 
 pub(crate) fn rebase(r: &Repo, onto: &str) -> IdeResult<()> {
-    let onto = check_rev(onto)?;
+    let onto = unambiguous_branch_name(r, check_rev(onto)?);
     crate::preserve::around(r, "Local changes saved before rebase", || {
         run(r.root(), &["rebase", onto], None).map(|_| ())
     })

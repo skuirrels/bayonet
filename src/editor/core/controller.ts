@@ -35,6 +35,7 @@ import {
   type TextEditorWrapperContribution,
 } from "@/workbench/contributions";
 import { useDistractionFree } from "@/workbench/distractionFree";
+import { restoreMaximizedToolWindow } from "@/workbench/toolwindows/store";
 import { ask } from "@/workbench/messages";
 import { t } from "@/platform/i18n";
 import { call, commands } from "@/platform/ipc";
@@ -55,6 +56,7 @@ import {
   enforceTabLimit,
   findTab,
   initialTabsState,
+  mergeSessionTabs,
   moveTab,
   moveTabToNewSplit,
   neighbourPane,
@@ -537,7 +539,9 @@ export class EditorController implements SlotHost {
     this.restoredTabs = new Set(Object.values(state.panes).flatMap((p) => p.tabs.map((t) => t.id)));
     this.restoring = true;
     try {
-      useTabs.setState(state, true);
+      // A restore landing after tabs were already opened (e.g. a launched file
+      // admitted while the transition was still in flight) must not wipe them.
+      useTabs.setState((current) => mergeSessionTabs(current, state), true);
     } finally {
       this.restoring = false;
     }
@@ -1077,6 +1081,7 @@ export class EditorController implements SlotHost {
     try {
       let s = useTabs.getState();
       const activate = this.isCurrentOpening(generation);
+      if (activate) restoreMaximizedToolWindow();
       const preview =
         !!o.preview &&
         editorPrefs().tabs.previewTab &&
@@ -1186,9 +1191,14 @@ export class EditorController implements SlotHost {
   }
 
   activate(paneId: string, tabId: string, focus = true) {
+    const restored = restoreMaximizedToolWindow();
     ++this.activationGeneration;
     useTabs.setState((s) => activateTab(setActivePane(s, paneId), paneId, tabId), true);
     if (focus) {
+      if (restored) {
+        requestAnimationFrame(() => this.focus());
+        return;
+      }
       const slot = this.slots.get(tabId);
       if (slot?.view) slot.focus();
       else if (slot) slot.wantsFocus = true;
@@ -1600,6 +1610,10 @@ export class EditorController implements SlotHost {
   // --- service helpers ------------------------------------------------------------------
 
   focus() {
+    if (restoreMaximizedToolWindow()) {
+      requestAnimationFrame(() => this.focus());
+      return;
+    }
     const tab = this.activeTabOf();
     if (!tab) {
       document.querySelector<HTMLElement>("[data-editor-area]")?.focus({ preventScroll: true });

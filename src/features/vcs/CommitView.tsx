@@ -52,7 +52,7 @@ import {
 import { applyStash, commitChanges, deleteFiles, dropStash, showUnstashDialog, stashChanges } from "./changeOps";
 import { CommitOptionsPopup } from "./CommitOptions";
 import { DEFAULT_LIST_NAME, useChangelists, withListDefaults } from "./changelists";
-import { commitFiles, moveToChangelist } from "./changelistsUi";
+import { addToChangelist, commitFiles } from "./changelistsUi";
 import { acceptSide } from "./conflictsUi";
 import { copyChangesAsPatch } from "./patches";
 import {
@@ -80,7 +80,7 @@ import { ShelfPanel, loadShelves, useShelf } from "./shelf";
 import { refreshNow, repoName, selectRepo, useVcs } from "./store";
 import styles from "./CommitView.module.css";
 
-/** MIME type of changed files dragged between change lists (absolute paths, newline-separated). */
+/** MIME type of files dragged onto a change list (absolute paths, newline-separated). */
 const CHANGES_MIME = "application/x-openidea-changes";
 
 /** Shown text of a node: group names are translated, except the names of user change lists. */
@@ -321,13 +321,15 @@ export function nodeMenu(
           },
         ]
       : []),
+    // Both destinations, as in the project view's Git menu.
     ...(toIgnore.length
       ? [
           {
-            kind: "action" as const,
-            action: "vcs.ignoreShared",
-            arg: toIgnore,
             label: "Add to .gitignore",
+            submenu: [
+              { kind: "action" as const, action: "vcs.ignoreShared", arg: toIgnore, label: ".gitignore" },
+              { kind: "action" as const, action: "vcs.ignoreLocal", arg: toIgnore, label: ".git/info/exclude" },
+            ],
           },
         ]
       : []),
@@ -507,10 +509,11 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
   const viewRef = useRef<HTMLButtonElement>(null);
 
   const repos = useVcs((s) => s.roots);
+  const heads = useVcs((s) => s.heads);
   const projectRoots = useEffectiveRoots();
   const roots = useMemo(
-    () => buildChangeTree(status, root, groupByDir, lists, repos, groupByStaging),
-    [status, root, groupByDir, lists, repos, groupByStaging],
+    () => buildChangeTree(status, root, groupByDir, lists, repos, groupByStaging, heads),
+    [status, root, groupByDir, lists, repos, groupByStaging, heads],
   );
   const [byKey, parents] = useMemo(() => {
     const m = new Map<string, ChangeNode>();
@@ -714,37 +717,38 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               </span>
             );
             // Pointer-driven (HTML5 drag and drop never reaches the Tauri webview):
-            // files and folders drag; any row takes them into its changelist.
+            // file and folder rows drag (unversioned ones onto a changelist, which
+            // adds them to Git); any row of a changelist takes dropped files into it.
             const list = n.changelist;
-            const dnd =
-              list === undefined
-                ? {}
-                : {
-                    ref: (el: HTMLSpanElement | null) =>
-                      el
-                        ? registerDropTarget(el, {
-                            accepts: (type) => type === CHANGES_MIME,
-                            over: () => setDropTarget(list),
-                            leave: () => setDropTarget(null),
-                            drop: (data) => {
-                              setDropTarget(null);
-                              moveToChangelist(data.payload.split("\n"), list);
-                            },
-                          })
-                        : undefined,
-                    ...(n.type !== "group" && {
-                      onPointerDown: (e: PointerEvent<HTMLSpanElement>) => {
-                        const paths =
-                          selected.has(n.key) && selected.size > 1
-                            ? filesOf(selectedNodes()).map((f) => f.path)
-                            : n.files.map((f) => f.path);
-                        startPointerDrag(e, e.currentTarget, {
-                          type: CHANGES_MIME,
-                          payload: paths.map(stripSlash).join("\n"),
-                        });
-                      },
-                    }),
-                  };
+            const dnd = {
+              ...(list !== undefined && {
+                ref: (el: HTMLSpanElement | null) =>
+                  el
+                    ? registerDropTarget(el, {
+                        accepts: (type) => type === CHANGES_MIME,
+                        over: () => setDropTarget(list),
+                        leave: () => setDropTarget(null),
+                        drop: (data) => {
+                          setDropTarget(null);
+                          void addToChangelist(data.payload.split("\n"), list);
+                        },
+                      })
+                    : undefined,
+              }),
+              ...(n.type !== "group" &&
+                n.files.length > 0 && {
+                  onPointerDown: (e: PointerEvent<HTMLSpanElement>) => {
+                    const paths =
+                      selected.has(n.key) && selected.size > 1
+                        ? filesOf(selectedNodes()).map((f) => f.path)
+                        : n.files.map((f) => f.path);
+                    startPointerDrag(e, e.currentTarget, {
+                      type: CHANGES_MIME,
+                      payload: paths.map(stripSlash).join("\n"),
+                    });
+                  },
+                }),
+            };
             return (
               <span
                 className={clsx(styles.nodeRow, n.type === "group" && dropTarget === n.changelist && styles.dropTarget)}
@@ -772,6 +776,7 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
                     <T>partial</T>
                   </span>
                 )}
+                {n.detail && n.detailIcon && <Icon name={n.detailIcon} size={14} className={styles.detailIcon} />}
                 {n.detail && <span className={styles.detail}>{n.detail}</span>}
               </span>
             );

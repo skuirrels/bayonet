@@ -15,8 +15,10 @@ import { Button, Spinner, T } from "@/ui";
 import { editorService, type EditorInput } from "@/workbench/contributions";
 import { blameSlot, toggleAnnotations } from "./blame";
 import { languageFor, viewerBase } from "./cm";
+import { ideaDiffConfig } from "./diffOptions";
 import { confirmDialog } from "./dialogs";
 import { focusedDiffNavigator, setFocusedDiffNavigator, type DiffNavigator } from "./diffNavigator";
+import { mergeDividers } from "./mergeDividers";
 import { syncMergeScroll } from "./mergeScroll";
 import { mergeTitles } from "./conflicts";
 import {
@@ -91,6 +93,10 @@ const writeAutoApply = (on: boolean) => {
   }
 };
 
+// Each side against the base is compared line by line, as in the diff viewer. The default diff
+// gives up on long files and marks the whole file as one changed block.
+const SIDE_DIFF = ideaDiffConfig("none", "words");
+
 export function MergeEditor({ input }: { input: EditorInput }) {
   const { path } = input.data as MergeData;
   const [state, setState] = useState<{
@@ -115,6 +121,8 @@ export function MergeEditor({ input }: { input: EditorInput }) {
   const oursRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const theirsRef = useRef<HTMLDivElement>(null);
+  const leftDividerRef = useRef<HTMLDivElement>(null);
+  const rightDividerRef = useRef<HTMLDivElement>(null);
   const resultView = useRef<EditorView | null>(null);
   const oursView = useRef<EditorView | null>(null);
   const theirsView = useRef<EditorView | null>(null);
@@ -175,7 +183,9 @@ export function MergeEditor({ input }: { input: EditorInput }) {
       EditorView.updateListener.of((u) => {
         if (u.selectionSet) refreshMergeActions(actionHost);
       }),
-      state.base !== null ? unifiedMergeView({ original: state.base, mergeControls: false, gutter: true }) : [],
+      state.base !== null
+        ? unifiedMergeView({ original: state.base, mergeControls: false, gutter: true, diffConfig: SIDE_DIFF })
+        : [],
       sideControls(which, controls),
       mergeStripe(which),
       mergeTheme,
@@ -220,8 +230,12 @@ export function MergeEditor({ input }: { input: EditorInput }) {
     }
     // Scroll the three panes together, lined up through their changes.
     const stopSync = syncMergeScroll({ ours, result, theirs });
+    const left = leftDividerRef.current;
+    const right = rightDividerRef.current;
+    const stopDividers = left && right ? mergeDividers({ ours, result, theirs }, { left, right }) : () => {};
     return () => {
       stopSync();
+      stopDividers();
       ours.destroy();
       theirs.destroy();
       result.destroy();
@@ -536,6 +550,10 @@ export function MergeEditor({ input }: { input: EditorInput }) {
   }, [actionHost]);
 
   const focusProps = {
+    // WebKit doesn't focus a clicked button: focus then moves to the nearest focusable
+    // ancestor, which must be this editor for the footer and toolbar buttons to keep it the
+    // focused merge editor their actions run in.
+    tabIndex: -1,
     onFocusCapture: (e: React.FocusEvent<HTMLDivElement>) => {
       const target = e.target as Node;
       if (oursRef.current?.contains(target)) paneRef.current = "left";
@@ -577,7 +595,7 @@ export function MergeEditor({ input }: { input: EditorInput }) {
 
   return (
     <div ref={rootRef} className={styles.root} {...focusProps}>
-      <MergeToolbar summary={summary} />
+      <MergeToolbar summary={summary} step={goto} run={(c) => void runAction(c)} />
       <div className={styles.labels}>
         <span>{txt(titles.yours)}</span>
         <span>
@@ -598,6 +616,7 @@ export function MergeEditor({ input }: { input: EditorInput }) {
           role="region"
           onContextMenu={(e) => oursView.current && showSideMenu(e, oursView.current, "left")}
         />
+        <div ref={leftDividerRef} className={styles.divider} aria-hidden />
         <div
           ref={resultRef}
           className={styles.pane}
@@ -605,6 +624,7 @@ export function MergeEditor({ input }: { input: EditorInput }) {
           role="region"
           onContextMenu={(e) => resultView.current && showResultMenu(e, resultView.current)}
         />
+        <div ref={rightDividerRef} className={styles.divider} aria-hidden />
         <div
           ref={theirsRef}
           className={styles.pane}
@@ -613,7 +633,7 @@ export function MergeEditor({ input }: { input: EditorInput }) {
           onContextMenu={(e) => theirsView.current && showSideMenu(e, theirsView.current, "right")}
         />
       </div>
-      <MergeFooter />
+      <MergeFooter run={(c) => void runAction(c)} />
     </div>
   );
 }

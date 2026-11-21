@@ -113,6 +113,15 @@ export function catalogState(
 
 const vendorOf = (authors: readonly string[]) => authors.join(", ");
 
+/** The marketplace's newer version of an installed plugin, if there is one this IDE can load. */
+function useMarketUpdate(plugin: PluginInfo): MarketPlugin | undefined {
+  return usePlugins((s) =>
+    plugin.source === "installed"
+      ? s.market?.find((m) => m.id === plugin.id && m.compatible && compareVersions(m.version, plugin.version) > 0)
+      : undefined,
+  );
+}
+
 function PluginIcon({ id, icon, large }: { id: string; icon: PluginIconData | null | undefined; large?: boolean }) {
   return (
     <span className={clsx(styles.icon, large && styles.iconLarge)} aria-hidden>
@@ -132,6 +141,7 @@ function ListHeader({ title, count }: { title: string; count: number }) {
 
 function InstalledRow({ plugin, selected, onSelect }: { plugin: PluginInfo; selected: boolean; onSelect: () => void }) {
   const busy = usePlugins((s) => !!s.busy[plugin.id]);
+  const update = useMarketUpdate(plugin);
   return (
     <li className={clsx(styles.row, selected && styles.rowSelected, !plugin.enabled && styles.rowDisabled)}>
       <button
@@ -152,16 +162,21 @@ function InstalledRow({ plugin, selected, onSelect }: { plugin: PluginInfo; sele
             )}
             {plugin.status === "failed" && (
               <Badge dot tone="danger">
-                <T>Failed</T>
+                {tx("Failed")}
               </Badge>
             )}
             {plugin.status === "needsConsent" && (
               <Badge dot tone="warning">
-                <T>Needs permission</T>
+                {tx("Needs permission")}
               </Badge>
             )}
           </span>
         </span>
+        {update && (
+          <Badge tone="accent" className={styles.rowBadge}>
+            {tx("Update")}
+          </Badge>
+        )}
       </button>
       <Checkbox
         className={styles.rowCheck}
@@ -326,6 +341,8 @@ function CapabilityList({ plugin, busy }: { plugin: PluginInfo; busy: boolean })
 
 function InstalledDetails({ plugin }: { plugin: PluginInfo }) {
   const busy = usePlugins((s) => !!s.busy[plugin.id]);
+  const installing = usePlugins((s) => s.installing);
+  const update = useMarketUpdate(plugin);
   const status = STATUS[plugin.status];
   const [confirmUninstall, setConfirmUninstall] = useState(false);
 
@@ -426,6 +443,16 @@ function InstalledDetails({ plugin }: { plugin: PluginInfo }) {
         </div>
         <div className={styles.headerActions}>
           {busy && <Spinner size={14} label="Working" />}
+          {update && (
+            <Button
+              size="small"
+              variant="primary"
+              disabled={busy || installing}
+              onClick={() => void installFromMarket(update.id)}
+            >
+              {tx`Update to ${update.version}`}
+            </Button>
+          )}
           <Button
             size="small"
             variant={plugin.enabled ? "secondary" : "primary"}

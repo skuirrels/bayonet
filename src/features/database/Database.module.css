@@ -128,6 +128,9 @@
   flex-direction: column;
   min-height: 0;
 }
+.resultTabs {
+  padding-inline: var(--space-2);
+}
 .toolbar {
   display: flex;
   align-items: center;
@@ -1230,6 +1233,12 @@
 .sqlInputText {
   color: transparent !important;
   caret-color: var(--fg-strong);
+}
+/* The input's own glyphs are transparent so the highlight layer below paints them; without
+   this the selection would be an empty highlight. */
+.sqlInputText::selection {
+  background: var(--bg-editor-selection);
+  color: var(--fg-strong);
 }
 .sqlHighlight {
   position: absolute;

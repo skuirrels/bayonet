@@ -108,10 +108,8 @@ pub fn create_host(app: &AppHandle, data_dir: &Path, project_host: &Arc<ide_host
     ide_language::set_external_syntax(Some(host.syntax_provider()));
     ide_run::set_external_detection(Some(host.run_detection()));
     host.set_workspace(Some(Arc::new(HostWorkspace(Arc::downgrade(project_host)))));
-    // Released builds list the official plugins (published with each release) until the user picks another index.
-    if !cfg!(debug_assertions) {
-        host.set_default_market_url(Some(ide_host::plugins::OFFICIAL_MARKET_INDEX.into()));
-    }
+    // The official plugins (published with each release) are listed until the user picks another index.
+    host.set_default_market_url(Some(ide_host::plugins::OFFICIAL_MARKET_INDEX.into()));
     #[cfg(target_os = "macos")]
     host.set_secret_store(Arc::new(KeychainSecrets));
     ide_host::plugins::set_editor_providers(Some(&host));
@@ -435,6 +433,54 @@ pub async fn plugin_view_event(
 ) -> IdeResult<()> {
     let plugins = state.plugins.clone();
     ide_host::plugins::views::event(&state.host, plugins, window.label(), plugin_id, view, event, doc, editor).await
+}
+
+/// The Services pane of node `key` of a plugin's `location = "services"` view.
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_service_detail(
+    window: Window,
+    state: State<'_, AppState>,
+    plugin_id: String,
+    view: String,
+    key: String,
+) -> IdeResult<Vec<ide_plugin::ServiceTab>> {
+    let plugins = state.plugins.clone();
+    ide_host::plugins::views::service_detail(&state.host, plugins, window.label(), plugin_id, view, key).await
+}
+
+/// Runs the program of the log tab `tab` of node `key`'s Services pane (with
+/// the toggles in `on`), streaming its output until it exits or `request` is
+/// cancelled; returns the exit code.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+pub async fn plugin_service_log(
+    window: Window,
+    state: State<'_, AppState>,
+    request: ide_core::RequestId,
+    plugin_id: String,
+    view: String,
+    key: String,
+    tab: String,
+    on: Vec<String>,
+    on_line: Channel<ide_host::plugins::PluginOutputLine>,
+) -> IdeResult<Option<i32>> {
+    let plugins = state.plugins.clone();
+    let on_line = super::sender(on_line);
+    ide_host::plugins::views::service_log(
+        &state.host,
+        plugins,
+        window.label(),
+        plugin_id,
+        view,
+        key,
+        tab,
+        on,
+        request,
+        on_line,
+    )
+    .await
 }
 
 /// The page of a plugin's web view or custom editor (`web = …`).

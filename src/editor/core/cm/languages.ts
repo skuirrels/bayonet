@@ -113,6 +113,10 @@ const OWN_MODES = [
       },
     }),
   ),
+  LanguageDescription.of({
+    name: "Angular TypeScript",
+    load: () => import("./angular/inline").then((m) => m.angularTypescript()),
+  }),
   LanguageDescription.of({ name: "Angular Template", load: () => import("./angular").then((m) => m.angular()) }),
   LanguageDescription.of({
     name: "ERB",
@@ -125,6 +129,12 @@ const OWN_MODES = [
     name: "Astro",
     extensions: ["astro"],
     load: () => import("./astro").then((m) => m.astro()),
+  }),
+  // Overrides the language-data Vue mode so `<style lang="scss">` highlights.
+  LanguageDescription.of({
+    name: "Vue",
+    extensions: ["vue"],
+    load: () => import("./vue").then((m) => m.vueLanguage()),
   }),
   LanguageDescription.of({
     name: "YAML",
@@ -267,6 +277,7 @@ export const JAVA_TAGS: Parameters<typeof styleTags>[0] = {
 const EXTRA_TAGS: Record<string, Parameters<typeof styleTags>[0]> = {
   JavaScript: JS_TAGS,
   TypeScript: JS_TAGS,
+  "Angular TypeScript": JS_TAGS,
   JSX: JS_TAGS,
   TSX: JS_TAGS,
   Java: JAVA_TAGS,

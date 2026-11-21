@@ -354,6 +354,7 @@ export const commands = {
 	/**  Spring Web mapping sources for the request-path index of Search Everywhere. */
 	springRouteSources: () => typedError<RouteSource[], IdeError>(__TAURI_INVOKE("spring_route_sources")),
 	findFiles: (query: string, limit: number) => typedError<FileMatch[], IdeError>(__TAURI_INVOKE("find_files", { query, limit })),
+	findFilesNamed: (name: string) => typedError<IpcPath[], IdeError>(__TAURI_INVOKE("find_files_named", { name })),
 	/**  Folders holding indexed files, for `@` references. */
 	findDirs: (query: string, limit: number) => typedError<FileMatch[], IdeError>(__TAURI_INVOKE("find_dirs", { query, limit })),
 	findSymbols: (query: string, filter: SymbolFilter, limit: number) => typedError<SymbolMatch[], IdeError>(__TAURI_INVOKE("find_symbols", { query, filter, limit })),
@@ -491,6 +492,8 @@ export const commands = {
 	/**  Re-emits the language servers' current diagnostics (the UI loaded after they arrived). */
 	lspResendDiagnostics: () => typedError<null, IdeError>(__TAURI_INVOKE("lsp_resend_diagnostics")),
 	lspRestart: (server: ServerId) => typedError<null, IdeError>(__TAURI_INVOKE("lsp_restart", { server })),
+	/**  Restarts the language servers named `name` in every open project (after a tool update). */
+	lspRestartNamed: (name: string) => typedError<null, IdeError>(__TAURI_INVOKE("lsp_restart_named", { name })),
 	/**  Applies a (previewed) workspace edit, e.g. after rename confirmation. */
 	applyWorkspaceEdit: (edit: WorkspaceEdit) => typedError<null, IdeError>(__TAURI_INVOKE("apply_workspace_edit", { edit })),
 	prepareWorkspaceEdit: (edit: WorkspaceEdit) => typedError<WorkspaceEdit, IdeError>(__TAURI_INVOKE("prepare_workspace_edit", { edit })),
@@ -749,6 +752,23 @@ export const commands = {
 	 */
 	mavenExcludeDependency: (pom: string, dependency: ArtifactKey, exclusion: ArtifactKey) => typedError<Location, IdeError>(__TAURI_INVOKE("maven_exclude_dependency", { pom, dependency, exclusion })),
 	/**
+	 *  The go-to-declaration target at `pos` of a Maven POM: the definition of the
+	 *  `${property}` at the caret, or the `<dependencyManagement>` / `<pluginManagement>`
+	 *  entry providing the dependency's / plugin's version, along the parent chain.
+	 */
+	mavenGotoDeclaration: (pom: string, pos: Pos) => typedError<{
+	/**
+	 *  Absolute path of the file with the declaration: the POM itself, or a parent
+	 *  POM of the local repository when the definition is inherited from one.
+	 */
+	path: string,
+	range: Range,
+	/**  What was found. */
+	kind: PomGotoKind,
+	/**  The declaration as named for the user (`example.version`, `com.example:example-lib`). */
+	label: string,
+} | null, IdeError>(__TAURI_INVOKE("maven_goto_declaration", { pom, pos })),
+	/**
 	 *  Build › Build Project / Rebuild Project / Build Module (`file`: a file or folder of the
 	 *  module) / Build Artifacts, streaming the console and messages on `on_event`; cancellable
 	 *  with `cancel_request(request)`. Diagnostics of `clear` (the files of the previous build)
@@ -942,12 +962,15 @@ export const commands = {
 	/**  A window vetoed the quit (user cancelled its unsaved-changes prompt). */
 	appCancelQuit: () => __TAURI_INVOKE<void>("app_cancel_quit"),
 	/**
-	 *  Sets the menu's labels / shortcut text and rebuilds it when they changed.
-	 *  Focusing another project window re-pushes the same shared menu; an identical
-	 *  config must not call `set_menu`, which redraws the macOS menu bar.
+	 *  Sets the menu's labels / shortcut text and updates the menu when the visible
+	 *  items changed. Shortcuts for actions that are not on the menu must not call
+	 *  `set_menu`, which redraws the macOS menu bar.
 	 */
 	menuConfigure: (config: MenuConfig) => __TAURI_INVOKE<void>("menu_configure", { config }),
-	/**  Rebuilds the menu (e.g. after the recent-projects list changed). */
+	/**
+	 *  Updates the menu after the recent-projects list changed. Only the Open Recent
+	 *  submenu is rewritten when the rest of the menu is unchanged.
+	 */
 	menuRefresh: () => __TAURI_INVOKE<void>("menu_refresh"),
 	/**  The menu bar for a title bar drawn by the frontend (Windows). */
 	menuModel: () => __TAURI_INVOKE<MenuNode[]>("menu_model"),
@@ -1274,6 +1297,14 @@ export const commands = {
 	language: string,
 	selections: Range[],
 } | null) => typedError<null, IdeError>(__TAURI_INVOKE("plugin_view_event", { pluginId, view, event, doc, editor })),
+	/**  The Services pane of node `key` of a plugin's `location = "services"` view. */
+	pluginServiceDetail: (pluginId: string, view: string, key: string) => typedError<ServiceTab[], IdeError>(__TAURI_INVOKE("plugin_service_detail", { pluginId, view, key })),
+	/**
+	 *  Runs the program of the log tab `tab` of node `key`'s Services pane (with
+	 *  the toggles in `on`), streaming its output until it exits or `request` is
+	 *  cancelled; returns the exit code.
+	 */
+	pluginServiceLog: (request: RequestId, pluginId: string, view: string, key: string, tab: string, on: string[], onLine: Channel<PluginOutputLine>) => typedError<number | null, IdeError>(__TAURI_INVOKE("plugin_service_log", { request, pluginId, view, key, tab, on, onLine })),
 	/**  The page of a plugin's web view or custom editor (`web = …`). */
 	pluginWebPage: (pluginId: string, view: string) => typedError<WebPage, IdeError>(__TAURI_INVOKE("plugin_web_page", { pluginId, view })),
 	/**
@@ -2019,6 +2050,8 @@ export type AppearanceSettings = {
 	menuIcons?: boolean,
 	/**  `hamburger` | `merged`: main menu presentation in the frameless title bar. */
 	mainMenuStyle?: string,
+	/**  A lone Alt press focuses or opens the main menu (IDEA `ide.windows.main.menu.focus.on.alt`). */
+	mainMenuAlt?: boolean,
 	/**  `subpixel` | `greyscale` | `none` */
 	ideAntialiasing?: string,
 	editorAntialiasing?: string,
@@ -6604,6 +6637,12 @@ export type PluginInfo = {
 	previousVersion: string | null,
 };
 
+/**  A line a view's `process` body printed. */
+export type PluginOutputLine = {
+	stderr: boolean,
+	text: string,
+};
+
 /**  A secret a plugin declares, and whether the user stored it. */
 export type PluginSecretState = {
 	name: string,
@@ -6668,6 +6707,29 @@ export type PluginsSnapshot = {
 	/**  UI contributions of live plugins, projected by the client. */
 	ui: UiContribution[],
 };
+
+/**  What a go-to-declaration in a POM found, and where. */
+export type PomGoto = {
+	/**
+	 *  Absolute path of the file with the declaration: the POM itself, or a parent
+	 *  POM of the local repository when the definition is inherited from one.
+	 */
+	path: string,
+	range: Range,
+	/**  What was found. */
+	kind: PomGotoKind,
+	/**  The declaration as named for the user (`example.version`, `com.example:example-lib`). */
+	label: string,
+};
+
+/**  The kind of declaration a POM go-to-declaration found. */
+export type PomGotoKind = 
+/**  A `<properties>` entry of the POM or one of its parents. */
+"property" | 
+/**  A `<dependencyManagement>` entry providing the dependency's version. */
+"managedDependency" | 
+/**  A `<pluginManagement>` entry providing the plugin's version. */
+"managedPlugin";
 
 /**  A 0-based line / UTF-16 column position. */
 export type Pos = {
@@ -7125,7 +7187,10 @@ export type RecentProject = {
 	path: IpcPath,
 	name: string,
 	openedAtMs: number | null,
-	/**  Current git branch when last opened, shown on the welcome screen. */
+	/**
+	 *  Git branch shown on the welcome screen. Persisted as of last open; [`RecentProjects::list_live`]
+	 *  refreshes it from `.git/HEAD` when the list is shown.
+	 */
 	branch: string | null,
 };
 
@@ -7797,6 +7862,32 @@ export type ServerStatus = "starting" | "ready" | "busy" | "crashed" | "stopped"
  */
 "misconfigured";
 
+export type ServiceLog = {
+	program: string,
+	args: string[],
+	toggles: ServiceLogToggle[],
+};
+
+/**  A switch above the log; when on, `args` are appended and the program restarts. */
+export type ServiceLogToggle = {
+	id: string,
+	label: string,
+	args: string[],
+};
+
+export type ServicePane = { kind: "message"; value: string } | 
+/**  Read-only text that can be selected and copied. */
+{ kind: "text"; value: string } | 
+/**  A program the IDE runs (with the plugin's `process:` grant), followed in a log. */
+{ kind: "log"; value: ServiceLog };
+
+/**  A tab of the Services pane of a plugin's node (`service-provider.detail`). */
+export type ServiceTab = {
+	id: string,
+	label: string,
+	body: ServicePane,
+};
+
 /**  Exception filters of one session (see [`DebugManager::exception_filters`]). */
 export type SessionExceptionFilters = {
 	session: DebugSessionId,
@@ -8387,7 +8478,7 @@ export type SyntaxErrors = {
 };
 
 /**  Highlight classes sent to the UI, which maps each onto a Lezer tag. */
-export type SyntaxHighlightKind = "keyword" | "string" | "stringSpecial" | "escape" | "regexp" | "atom" | "number" | "constant" | "comment" | "docComment" | "function" | "functionCall" | "builtin" | "type" | "namespace" | "variable" | "selfVariable" | "property" | "attribute" | "macro" | "label" | "tag" | "operator" | "punctuation";
+export type SyntaxHighlightKind = "keyword" | "string" | "stringSpecial" | "escape" | "regexp" | "atom" | "number" | "constant" | "comment" | "docComment" | "function" | "functionCall" | "builtin" | "type" | "namespace" | "variable" | "selfVariable" | "property" | "attribute" | "macro" | "label" | "tag" | "operator" | "punctuation" | "parameter";
 
 /**  Highlighted ranges of a whole document, packed like LSP semantic tokens. */
 export type SyntaxHighlights = {
@@ -8859,7 +8950,9 @@ export type VenvTool =
 /**  `uv venv <location> --python <base>` (uv must be on PATH). */
 "uv" | 
 /**  `poetry env use <base>` in the project, then `poetry env info --path`. */
-"poetry";
+"poetry" | 
+/**  `conda create -p <location> -y` (conda must be on PATH). */
+"conda";
 
 /**  What a view or custom editor shows. */
 export type View = {

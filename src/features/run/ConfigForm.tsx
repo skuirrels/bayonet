@@ -31,6 +31,7 @@ import {
 } from "@/ui";
 import { useContributions, type RunConfigTypeContribution } from "@/workbench/contributions";
 import { TASK_LABELS, taskLabel, type BeforeLaunchKind } from "./beforeLaunch";
+import { ExpandableTextarea } from "./ExpandableTextarea";
 import {
   commandLine,
   compoundCycle,
@@ -64,6 +65,7 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string }> = [
   { id: "codelldb", label: "CodeLLDB (Rust, C, C++)" },
   { id: "lldb-dap", label: "lldb-dap (C, C++, Swift)" },
   { id: "php-debug", label: "php-debug (PHP)" },
+  { id: "rdbg", label: "rdbg (Ruby)" },
 ];
 
 /** Options "Modify options" adds to the form: value fields (shown once added) and flags (chips). */
@@ -728,7 +730,6 @@ function TypeField({
   invalid: boolean;
   onChange: (value: string) => void;
 }) {
-  const tx = useTx();
   const root = useProject((s) => s.project?.root ?? null);
   const listId = `run-field-${field.key}`;
   const [loaded, setLoaded] = useState<ReadonlyArray<{ value: string; label: string; detail?: string }>>([]);
@@ -759,14 +760,13 @@ function TypeField({
     return <Checkbox checked={value === "true"} onChange={(on) => onChange(on ? "true" : "")} label={field.label} />;
   if (field.control === "textarea")
     return (
-      <textarea
-        className={clsx(styles.textarea, invalid && styles.textareaInvalid)}
-        aria-label={tx(field.label)}
-        spellCheck={false}
+      <ExpandableTextarea
+        label={field.label}
         value={value}
-        placeholder={tx(field.placeholder)}
-        rows={field.rows ?? 4}
-        onChange={(e) => onChange(e.target.value)}
+        placeholder={field.placeholder}
+        rows={field.rows}
+        invalid={invalid}
+        onChange={onChange}
       />
     );
   const suggestions = field.suggestions?.(all, params) ?? [];

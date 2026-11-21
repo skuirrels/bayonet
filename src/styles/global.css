@@ -20,6 +20,11 @@ body,
   margin: 0;
 }
 
+/* The page never scrolls: `clip` on the body leaves the viewport nothing to scroll into view. */
+html {
+  overflow: hidden;
+}
+
 body {
   background: var(--bg-frame);
   color: var(--fg);
@@ -27,7 +32,7 @@ body {
   font-size: var(--fs-ui);
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
+  overflow: clip;
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
@@ -36,6 +41,12 @@ body {
 html[data-selection-lock] *:not([data-selection-scope], [data-selection-scope] *) {
   -webkit-user-select: none !important;
   user-select: none !important;
+}
+/* WebKit keeps editable text selectable whatever its user-select, so a drag passing over a
+   text field would extend into it; take fields outside the scope out of hit testing instead. */
+html[data-selection-lock]
+  :is(input, textarea, [contenteditable]):not([data-selection-scope], [data-selection-scope] *) {
+  pointer-events: none !important;
 }
 
 input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]),

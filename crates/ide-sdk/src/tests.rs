@@ -139,6 +139,53 @@ fn jdtls_honors_the_configured_maven_local_repository() {
 }
 
 #[test]
+fn jdtls_m2e_gets_effective_settings_with_local_repository() {
+    fn user_settings(cfg: &LanguageServerConfig) -> Option<std::path::PathBuf> {
+        let opts = serde_json::to_value(cfg.initialization_options.clone()?).ok()?;
+        opts.pointer("/settings/java/configuration/maven/userSettings")?.as_str().map(std::path::PathBuf::from)
+    }
+
+    // Configured repository, no user settings: a derived file is passed (#1739).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("m2-repo");
+    let mut s = Settings::default();
+    s.languages.java.maven.local_repository = repo.to_string_lossy().into_owned();
+    let mut cfg = server("jdtls");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    let derived = tmp.path().join(".openidea").join("maven-settings.xml");
+    assert_eq!(user_settings(&cfg), Some(derived.clone()));
+    let text = std::fs::read_to_string(&derived).unwrap();
+    assert!(text.contains(&format!("<localRepository>{}</localRepository>", repo.to_string_lossy())));
+    // Stable across runs (no rewrite churn).
+    let mut cfg = server("jdtls");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    assert_eq!(user_settings(&cfg), Some(derived.clone()));
+
+    // User settings without `<localRepository>`: the derived copy keeps the
+    // user's mirrors and gains the configured repository.
+    let settings = tmp.path().join("mine.xml");
+    std::fs::write(&settings, "<settings><mirrors><mirror><id>m</id></mirror></mirrors></settings>").unwrap();
+    s.languages.java.maven.user_settings = settings.to_string_lossy().into_owned();
+    let mut cfg = server("jdtls");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    assert_eq!(user_settings(&cfg), Some(derived.clone()));
+    let text = std::fs::read_to_string(&derived).unwrap();
+    assert!(text.contains("<mirror><id>m</id></mirror>"));
+    assert!(text.contains(&format!("<localRepository>{}</localRepository>", repo.to_string_lossy())));
+
+    // User settings already declaring `<localRepository>`: passed through untouched.
+    std::fs::write(&settings, "<settings><localRepository>/user/repo</localRepository></settings>").unwrap();
+    let mut cfg = server("jdtls");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    assert_eq!(user_settings(&cfg), Some(settings.clone()));
+
+    // Neither configured: no userSettings at all.
+    let mut cfg = server("jdtls");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &Settings::default());
+    assert_eq!(user_settings(&cfg), None);
+}
+
+#[test]
 fn rust_analyzer_check_command_and_toolchain() {
     if cfg!(windows) {
         return; // Unix paths and shells
@@ -751,6 +798,16 @@ fn env_tools_are_reported_missing_before_they_run() {
     )
     .unwrap_err();
     assert!(poetry.message.contains("Poetry is not installed"), "{}", poetry.message);
+    let conda = crate::python::create_venv_with(
+        crate::python::VenvTool::Conda,
+        &base,
+        &location,
+        none,
+        &Default::default(),
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(conda.message.contains("conda is not installed"), "{}", conda.message);
     // An existing environment is refused before any tool runs.
     std::fs::create_dir_all(&location).unwrap();
     std::fs::write(location.join("pyvenv.cfg"), "home = /python").unwrap();
@@ -764,6 +821,28 @@ fn env_tools_are_reported_missing_before_they_run() {
     )
     .unwrap_err();
     assert!(again.message.contains("already contains a virtual environment"), "{}", again.message);
+}
+
+#[test]
+fn an_existing_conda_environment_is_not_recreated() {
+    // `conda-meta/` marks a conda prefix: refuse before `conda create` would fail obscurely.
+    let dir = tempfile::tempdir().unwrap();
+    let location = dir.path().join("envs").join("ds");
+    let base = dir.path().join("python");
+    std::fs::create_dir_all(location.join("conda-meta")).unwrap();
+    fn none(_: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+    let err = crate::python::create_venv_with(
+        crate::python::VenvTool::Conda,
+        &base,
+        &location,
+        none,
+        &Default::default(),
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(err.message.contains("already contains a conda environment"), "{}", err.message);
 }
 
 #[test]
@@ -826,6 +905,40 @@ fn custom_tool_path_replaces_the_command() {
     let mut cfg = server("zls");
     configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
     assert_eq!(cfg.command, "zls");
+}
+
+/// A server picked from a Node.js installation (nvm's `bin/tsc`, `bin/npx`) is a
+/// `#!/usr/bin/env node` script: it runs on that installation's Node, ahead of the
+/// project's Node.js interpreter.
+#[test]
+fn a_server_chosen_from_a_node_installation_runs_on_that_node() {
+    let tmp = tempfile::tempdir().unwrap();
+    let v26 = tmp.path().join("nvm/versions/node/v26.4.0/bin");
+    let v20 = tmp.path().join("node20/bin");
+    for dir in [&v26, &v20] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(exe("node")), "").unwrap();
+    }
+    std::fs::write(v26.join("tsc"), "#!/usr/bin/env node\n").unwrap();
+    let mut s = Settings::default();
+    s.languages.node.interpreter = v20.join(exe("node")).to_string_lossy().into_owned();
+    s.tools.insert(
+        "typescript-language-server".into(),
+        ide_core::settings::ToolSettings { path: v26.join("tsc").to_string_lossy().into_owned() },
+    );
+    let mut cfg = server("typescript-language-server");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    let path: Vec<std::path::PathBuf> = std::env::split_paths(&cfg.env["PATH"]).collect();
+    assert_eq!(path[..2], [v26.clone(), v20.clone()]);
+
+    // Elsewhere, the project's Node.js interpreter comes first.
+    s.tools.insert(
+        "typescript-language-server".into(),
+        ide_core::settings::ToolSettings { path: tmp.path().join("tools/tsc").to_string_lossy().into_owned() },
+    );
+    let mut cfg = server("typescript-language-server");
+    configure_server(&mut cfg, tmp.path(), tmp.path(), &s);
+    assert_eq!(std::env::split_paths(&cfg.env["PATH"]).next(), Some(v20));
 }
 
 #[test]
@@ -1330,6 +1443,37 @@ fn max_java_picks_an_older_jdk() {
     free.env.insert("JAVA_HOME".into(), j25.home.to_string_lossy().into_owned());
     crate::java::cap_java_home(&mut free, &jdks);
     assert_eq!(free.env["JAVA_HOME"], j25.home.to_string_lossy());
+}
+
+/// #3086: `gradle-wrapper.jar` excluded by a `*.jar` rule in `.gitignore`: `gradlew` can't
+/// start, so the distribution the wrapper already unpacked runs instead.
+#[test]
+fn gradle_wrapper_without_its_jar_runs_the_unpacked_distribution() {
+    use crate::apply::gradle_command;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let plain = if cfg!(windows) { "gradle.bat" } else { "gradle" };
+    let wrapper = root.join(if cfg!(windows) { "gradlew.bat" } else { "gradlew" });
+    std::fs::write(&wrapper, "").unwrap();
+    std::fs::create_dir_all(root.join("gradle/wrapper")).unwrap();
+    std::fs::write(
+        root.join("gradle/wrapper/gradle-wrapper.properties"),
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle-4.10-bin.zip\n",
+    )
+    .unwrap();
+    let mut settings = Settings::default();
+    settings.languages.java.gradle.user_home = "user-home".into();
+    let hash = root.join("user-home/wrapper/dists/gradle-4.10-bin/7ddd1b3f");
+    let gradle = hash.join("gradle-4.10/bin").join(plain);
+    std::fs::create_dir_all(gradle.parent().unwrap()).unwrap();
+    std::fs::write(&gradle, "").unwrap();
+    // Not marked complete: possibly half unpacked.
+    assert_eq!(gradle_command(root, root, &settings), wrapper);
+    std::fs::write(hash.join("gradle-4.10-bin.zip.ok"), "").unwrap();
+    assert_eq!(gradle_command(root, root, &settings), gradle);
+    // With its jar the wrapper runs as usual.
+    std::fs::write(root.join("gradle/wrapper/gradle-wrapper.jar"), "").unwrap();
+    assert_eq!(gradle_command(root, root, &settings), wrapper);
 }
 
 #[test]

@@ -9,6 +9,7 @@ import { call } from "@/platform/ipc";
 import { commands, type FileEntry, type OutlineItem } from "@/bindings";
 import { withDocument } from "@/editor/lsp/files";
 import { IpcError } from "@/platform/ipc";
+import { libraryEntryPaths } from "@/platform/virtualDocs";
 import {
   DEFAULT_TREE_OPTIONS,
   GROUP_PREFIX,
@@ -38,7 +39,7 @@ import { projectViewRoots, useProjectViewRoots, type ProjectViewRootContribution
 import { ancestorsWithin, isSameOrInside, nameOf, type PackageKind } from "./paths";
 
 export interface ViewOptions extends TreeOptions {
-  /** Select the active editor's file in the tree. */
+  /** Select the active editor's file in the tree (IDEA: Always Select Opened File). */
   autoscrollFromSource: boolean;
   /** Open the selected file while navigating the tree (preview, no focus change). */
   autoscrollToSource: boolean;
@@ -603,11 +604,15 @@ export function dropOutlines(paths: readonly string[]) {
 let revealSeq = 0;
 
 /** Expands the ancestors of `path` and selects it once visible. */
-export function revealPath(path: string, focus = false) {
+export function revealPath(requested: string, focus = false) {
   const { expanded } = get();
   const project = get().root;
-  const root = project ? (memberRootOf(path) ?? (isSameOrInside(path, project) ? project : extraRootOf(path))) : null;
-  if (!root) return false;
+  if (!project) return false;
+  const rootOf = (p: string) => memberRootOf(p) ?? (isSameOrInside(p, project) ? project : extraRootOf(p));
+  // Library documents (`jdt://`, `jar:` URIs) are shown as entries of their archive under External Libraries.
+  const path = [requested, ...libraryEntryPaths(requested)].find((p) => rootOf(p) !== null);
+  if (!path) return false;
+  const root = rootOf(path)!;
   // Library folders sit below group nodes (External Libraries › SDK), keyed in their own namespace.
   const model = currentModel();
   const rootKey = root === project ? root : (model.keyOfPath.get(root) ?? root);

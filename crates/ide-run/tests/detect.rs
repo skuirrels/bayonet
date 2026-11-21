@@ -280,6 +280,32 @@ fn spring_boot_application_of_a_repository_nested_one_or_two_levels_down() {
 }
 
 #[test]
+fn a_large_common_module_does_not_starve_later_app_modules() {
+    // More source files than one scan budget in `a-common` (no app class): the app in `b-app` must still be found.
+    let mut files: Vec<(String, String)> = vec![
+        ("pom.xml".into(), "<project><modules><module>a-common</module><module>b-app</module></modules></project>".into()),
+        ("a-common/pom.xml".into(), BOOT_POM.into()),
+        ("b-app/pom.xml".into(), BOOT_POM.into()),
+        (
+            "b-app/src/main/java/demo/App.java".into(),
+            "package demo;\n@SpringBootApplication\npublic class App {\n  public static void main(String[] args) {}\n}\n".into(),
+        ),
+    ];
+    for i in 0..401 {
+        files.push((format!("a-common/src/main/java/demo/C{i}.java"), format!("package demo;\nclass C{i} {{}}\n")));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for (path, content) in &files {
+        let p = dir.path().join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, content).unwrap();
+    }
+    let configs = detect(dir.path());
+    let app = find(&configs, "application:b-app:demo.App");
+    assert_eq!(app.kind, "spring-boot");
+}
+
+#[test]
 fn nested_builds_of_every_kind_and_depth() {
     let dir = project(&[
         ("services/api/settings.gradle.kts", "include(\"app\")"),
@@ -352,25 +378,108 @@ fn a_root_build_disables_the_nested_scan() {
 }
 
 #[test]
-fn spring_boot_applications_need_the_plugin_and_a_main() {
+fn spring_boot_applications_need_spring_boot_and_a_main() {
     let main =
         "package demo;\n@SpringBootApplication\npublic class App {\n  public static void main(String[] args) {}\n}\n";
-    // A library using Spring Boot without the plugin, a configuration class without `main`,
-    // the annotation in a comment, a parent POM.
+    // A module without Spring Boot in its build, a configuration class without `main`, the
+    // annotation in a comment, a parent POM.
     let dir = project(&[
-        ("lib/pom.xml", "<project><dependencies>spring-boot-starter</dependencies></project>"),
-        ("lib/src/main/java/demo/App.java", main),
+        ("plain/pom.xml", "<project><dependencies>commons-lang3</dependencies></project>"),
+        ("plain/src/main/java/demo/App.java", main),
         ("svc/pom.xml", BOOT_POM),
         ("svc/src/main/java/demo/Config.java", "package demo;\n@SpringBootApplication\npublic class Config {}\n"),
         (
             "svc/src/main/java/demo/Old.java",
             "package demo;\n// @SpringBootApplication\nclass Old { public static void main(String[] a) {} }\n",
         ),
-        ("gr/build.gradle", "dependencies { implementation 'org.springframework.boot:spring-boot-starter' }\n"),
+        ("gr/build.gradle", "dependencies { implementation 'com.google.guava:guava:33.0.0-jre' }\n"),
         ("gr/src/main/java/demo/App.java", main),
     ]);
     let c = detect(dir.path());
     assert!(!c.iter().any(|c| c.kind == "spring-boot"), "{:?}", ids(&c));
+}
+
+/// Spring Boot on the classpath is enough, as for IntelliJ IDEA: a module depending on a
+/// starter (directly or through its parent POM) without the packaging plugin, and Gradle's
+/// dependency on `org.springframework.boot:…`.
+#[test]
+fn spring_boot_applications_without_the_plugin() {
+    let main =
+        "package demo;\n@SpringBootApplication\npublic class App {\n  public static void main(String[] args) {}\n}\n";
+    let dir = project(&[
+        (
+            "lib/pom.xml",
+            "<project><dependencies><dependency><groupId>org.springframework.boot</groupId>\
+                         <artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>",
+        ),
+        ("lib/src/main/java/demo/App.java", main),
+        ("gr/build.gradle", "dependencies { implementation 'org.springframework.boot:spring-boot-starter' }\n"),
+        ("gr/src/main/java/demo/App.java", main),
+    ]);
+    let c = detect(dir.path());
+    assert_eq!(find(&c, "application:lib:demo.App").kind, "spring-boot");
+    assert_eq!(find(&c, "application:gr:demo.App").kind, "spring-boot");
+
+    let parent = "<project><packaging>pom</packaging><modules><module>job</module></modules>\
+                  <parent><groupId>org.springframework.boot</groupId>\
+                  <artifactId>spring-boot-starter-parent</artifactId></parent></project>";
+    let dir = project(&[
+        ("pom.xml", parent),
+        ("job/pom.xml", "<project><artifactId>job</artifactId></project>"),
+        ("job/src/main/java/demo/App.java", main),
+    ]);
+    assert_eq!(find(&detect(dir.path()), "application:job:demo.App").kind, "spring-boot");
+}
+
+#[test]
+fn spring_boot_modules_inherit_the_plugin_from_their_parent_build() {
+    let main = |pkg: &str, ann: &str, cls: &str| {
+        format!("package {pkg};\n{ann}\npublic class {cls} {{\n  public static void main(String[] a) {{}}\n}}\n")
+    };
+    let parent = "<project><packaging>pom</packaging><modules><module>order</module><module>user</module>\
+                  <module>gateway</module></modules><build><plugins><plugin>\
+                  <artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build></project>";
+    let order = main("shop.order", "@SpringBootApplication", "OrderApp");
+    let user = main("shop.user", "@SpringCloudApplication", "UserApp");
+    // A project annotation carrying @SpringBootApplication, declared in another module.
+    let gateway = main("shop.gateway", "@ShopApplication", "GatewayApp")
+        .replace("package shop.gateway;\n", "package shop.gateway;\nimport shop.common.ShopApplication;\n");
+    let annotation = "package shop.common;\n\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\n\
+                      @Target(ElementType.TYPE)\n@SpringBootApplication\npublic @interface ShopApplication {}\n";
+    let files = [
+        ("pom.xml", parent.to_owned()),
+        ("order/pom.xml", "<project><artifactId>order</artifactId></project>".to_owned()),
+        ("order/src/main/java/shop/order/OrderApp.java", order),
+        ("user/pom.xml", "<project><artifactId>user</artifactId></project>".to_owned()),
+        ("user/src/main/java/shop/user/UserApp.java", user),
+        ("gateway/pom.xml", "<project><artifactId>gateway</artifactId></project>".to_owned()),
+        ("gateway/src/main/java/shop/gateway/GatewayApp.java", gateway),
+        ("common/src/main/java/shop/common/ShopApplication.java", annotation.to_owned()),
+    ];
+    let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    let c = detect(project(&files).path());
+    for id in [
+        "application:order:shop.order.OrderApp",
+        "application:user:shop.user.UserApp",
+        "application:gateway:shop.gateway.GatewayApp",
+    ] {
+        assert_eq!(find(&c, id).kind, "spring-boot", "{id}");
+    }
+
+    // A parent that only manages the plugin doesn't apply it; Gradle applies it from `subprojects`.
+    let dir = project(&[
+        ("pom.xml", PARENT_POM),
+        ("app/pom.xml", "<project/>"),
+        ("app/src/main/java/demo/App.java", &main("demo", "@SpringBootApplication", "App")),
+    ]);
+    assert!(!detect(dir.path()).iter().any(|c| c.kind == "spring-boot"));
+    let dir = project(&[
+        ("settings.gradle", "include 'app'\n"),
+        ("build.gradle", "subprojects {\n  apply plugin: 'org.springframework.boot'\n}\n"),
+        ("app/build.gradle", "dependencies {}\n"),
+        ("app/src/main/java/demo/App.java", &main("demo", "@SpringBootApplication", "App")),
+    ]);
+    assert_eq!(find(&detect(dir.path()), "application:app:demo.App").kind, "spring-boot");
 }
 
 #[test]
@@ -868,6 +977,27 @@ fn php_phpunit_project() {
 }
 
 #[test]
+fn php_pest_project() {
+    let dir = project(&[
+        ("composer.json", r#"{"require-dev":{"pestphp/pest":"^3"}}"#),
+        ("phpunit.xml", "<phpunit/>"),
+        ("vendor/bin/phpunit", ""),
+        ("vendor/bin/phpunit.bat", ""),
+        ("vendor/bin/pest", ""),
+        ("vendor/bin/pest.bat", ""),
+    ]);
+    let c = detect(dir.path());
+    let pest = find(&c, "phpunit");
+    assert_eq!(pest.name, "Pest");
+    assert_eq!(cmdline(pest), if cfg!(windows) { "vendor/bin/pest.bat" } else { "vendor/bin/pest" });
+    assert_eq!(pest.kind, "phpunit");
+    assert!(pest.is_test);
+    assert_eq!(pest.debug_adapter.as_deref(), Some("php-debug"));
+    let dir = project(&[("composer.json", r#"{"require-dev":{"pestphp/pest":"^3"}}"#)]);
+    assert_eq!(find(&detect(dir.path()), "phpunit").name, "PHPUnit");
+}
+
+#[test]
 fn php_detection_needs_a_marker() {
     let dir = project(&[("index.php", "<?php")]);
     assert!(detect(dir.path()).is_empty());
@@ -932,6 +1062,7 @@ task default: :build
     assert_eq!(cmdline(find(&c, "rspec")), "bundle exec rspec");
     assert!(find(&c, "rspec").is_test);
     assert_eq!(find(&c, "rake:build").extras.folder.as_deref(), Some("Rake"));
+    assert!(c.iter().all(|c| c.debug_adapter.as_deref() == Some("rdbg")));
 }
 
 #[test]
@@ -946,6 +1077,7 @@ fn ruby_minitest_projects_get_a_test_runner() {
         ("bundle", &["exec", "ruby", "-Ilib", "-Itest"].map(String::from)[..])
     );
     assert_eq!(m.args.last().map(String::as_str), Some("test"));
+    assert_eq!(m.debug_adapter.as_deref(), Some("rdbg"));
     // A `test` Rake task or RSpec already runs the tests.
     let dir = project(&[("Rakefile", "task :test\n"), ("test/a_test.rb", "")]);
     assert!(!ids(&detect(dir.path())).contains(&"minitest"));

@@ -177,6 +177,14 @@ impl ClientHandler {
                         .find_map(|base| section.split('.').try_fold(base, |v, key| v.get(key)))
                         .cloned()
                         .unwrap_or(Value::Null),
+                    None if self.server.name == "eslint" => {
+                        let mut settings = options.clone();
+                        settings["workspaceFolder"] = json!({
+                            "uri": crate::uri::path_to_uri(&self.server.root),
+                            "name": self.server.root.file_name().map_or_else(|| "root".into(), |name| name.to_string_lossy().into_owned()),
+                        });
+                        settings
+                    }
                     None => options.clone(),
                 })
                 .collect(),
@@ -236,6 +244,10 @@ impl ClientHandler {
 }
 
 impl Handler for ClientHandler {
+    fn normalize_incoming(&self, message: &mut Value) {
+        crate::uri::encode_loose_file_uris(message);
+    }
+
     fn on_notification(&self, method: &str, params: Value) {
         let Some(mgr) = self.mgr.upgrade() else { return };
         match method {

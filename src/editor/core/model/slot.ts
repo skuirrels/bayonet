@@ -17,6 +17,7 @@ import {
   type ChangeSet,
   type TransactionSpec,
 } from "@codemirror/state";
+import { historyField } from "@codemirror/commands";
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from "@codemirror/view";
 import {
   _addEditor,
@@ -30,6 +31,7 @@ import {
 import { showContextMenu } from "@/ui";
 import { baseExtensions, compartments, contributionExtensions } from "../cm/setup";
 import { gutterMenuItems, inGutterMenuArea } from "../gutterMenu";
+import { offerMakeWritable } from "../fileAttributes";
 import type { DocModel } from "./document";
 import type { WorkspaceHistoryTarget } from "./workspaceHistory";
 import { isNavigation } from "./navHistory";
@@ -84,27 +86,36 @@ export class EditorSlot {
       },
     };
     const source = init?.from;
+    const secondary = !model.slots.size
+      ? [...model.attachments]
+          .map((attachment) => attachment.historyState?.())
+          .find((state) => state?.field(historyField, false))
+      : null;
+    const history = secondary?.field(historyField, false);
     this.state = EditorState.create({
       doc: model.sync.localText,
       selection: source ? source.currentState().selection : undefined,
-      extensions: baseExtensions({
-        ctx: model.ctx(),
-        settings: model.settings(),
-        info: model.info,
-        language: model.language,
-        docLength: model.sync.localText.length,
-        indent: model.effectiveIndent(),
-        formatIndent: model.formatIndent(),
-        wrapOverride: model.softWrapOverride,
-        extra: this.slotExtensions(),
-      }),
+      extensions: [
+        history ? historyField.init(() => history) : [],
+        baseExtensions({
+          ctx: model.ctx(),
+          settings: model.settings(),
+          info: model.info,
+          language: model.language,
+          docLength: model.sync.localText.length,
+          indent: model.effectiveIndent(),
+          formatIndent: model.formatIndent(),
+          wrapOverride: model.softWrapOverride,
+          extra: this.slotExtensions(),
+        }),
+      ],
     });
     this.contributionsVersion = model.manager.contributionsVersion;
     if (source?.view) this.scroll = source.view.scrollSnapshot();
     else if (source) this.scroll = source.scroll;
     if (init?.reveal) this.pendingReveal = init.reveal;
     model.addSlot(this);
-    this.detachHistory = model.manager.workspaceHistory.attach(this.historyTarget);
+    this.detachHistory = model.manager.workspaceHistory.attach(this.historyTarget, !history);
   }
 
   get ctx(): EditorDocContext {
@@ -113,6 +124,12 @@ export class EditorSlot {
 
   currentState(): EditorState {
     return this.view?.state ?? this.state;
+  }
+
+  private refuseReadOnlyEdit(e: Event): boolean {
+    if (!offerMakeWritable(this.model)) return false;
+    e.preventDefault();
+    return true;
   }
 
   private slotExtensions() {
@@ -132,6 +149,10 @@ export class EditorSlot {
           this.host.onContextMenu(this, e);
           return true;
         },
+        // Typing, pasting or dropping into a read-only file offers to make it writable.
+        beforeinput: (e) => this.refuseReadOnlyEdit(e),
+        paste: (e) => this.refuseReadOnlyEdit(e),
+        drop: (e) => this.refuseReadOnlyEdit(e),
       }),
       ViewPlugin.define((view) => {
         // Gutters sit outside the content DOM. Gutter extensions with their own menu (breakpoints,
@@ -193,6 +214,12 @@ export class EditorSlot {
 
   focus() {
     this.view?.focus();
+    if (this.view && !this.view.hasFocus && this.view.dom.offsetParent === null) {
+      this.view.dom
+        .closest("[data-pane-id]")
+        ?.querySelector<HTMLElement>('[role="document"]')
+        ?.focus({ preventScroll: true });
+    }
   }
 
   // --- transactions ---------------------------------------------------------

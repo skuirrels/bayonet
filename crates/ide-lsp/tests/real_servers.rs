@@ -64,6 +64,121 @@ fn lang(id: &str, ext: &str, server: LanguageServerConfig) -> LanguageConfig {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires kmp-lsp on PATH (or OPENIDEA_TEST_KMP_LSP)"]
+async fn kmp_lsp_java_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("Sample.java");
+    let source = "class Sample {\n    static String greet() { return \"Hello\"; }\n    void run() { greet(); }\n}\n";
+    std::fs::write(&path, source).unwrap();
+    let mut java = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("java")).unwrap();
+    java.language_servers.retain(|s| s.name == "kmp-lsp");
+    assert_eq!(java.language_servers.len(), 1);
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_KMP_LSP") {
+        java.language_servers[0].command = bin;
+    }
+    let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![java]));
+    let doc = DocId::next();
+    mgr.did_open(doc, &path, &LanguageId::new("java"), 1, source);
+    retry("kmp-lsp ready", Duration::from_secs(30), || {
+        let status = last_status(&events, "kmp-lsp");
+        if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &status {
+            panic!("kmp-lsp failed: {msg:?}");
+        }
+        async move { matches!(status, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
+    })
+    .await;
+    let hover = retry("Java hover", Duration::from_secs(30), || async {
+        mgr.hover(doc, Pos::new(2, 18), Default::default()).await.ok().flatten()
+    })
+    .await;
+    assert!(hover.contents.value.contains("greet"), "{}", hover.contents.value);
+    let defs = retry("Java definition", Duration::from_secs(30), || async {
+        mgr.goto(doc, Pos::new(2, 18), GotoKind::Definition).await.ok().filter(|d| !d.is_empty())
+    })
+    .await;
+    assert_eq!(defs[0].path, path);
+    assert_eq!(defs[0].range.start.line, 1);
+    retry("Java completion", Duration::from_secs(30), || async {
+        let list = mgr.completion(doc, Pos::new(2, 20), None, Default::default()).await.ok()?;
+        list.items.iter().any(|i| i.label.starts_with("greet")).then_some(())
+    })
+    .await;
+    let tokens = mgr.semantic_tokens(doc).await.unwrap().unwrap();
+    assert!(!tokens.data.is_empty() && tokens.data.len() % 5 == 0);
+    let error = mgr.java_debug_server(&path).await.unwrap_err();
+    assert_eq!(error.kind, ide_core::error::ErrorKind::Unavailable);
+    assert!(error.message.contains("jdtls"));
+    tokio::time::timeout(Duration::from_secs(10), mgr.shutdown_all()).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires jdtls on PATH and a compatible JDK"]
+async fn lombok_generated_members_appear_in_document_symbols() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let source = include_str!("fixtures/LombokSymbols.java");
+    let path = root.join("src/demo/LombokSymbols.java");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, source).unwrap();
+    let agent = dunce::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../java/lombok/lombok-1.18.48-openidea.3.jar"),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".project"),
+        "<projectDescription><name>lombok-symbols</name><buildSpec><buildCommand>\
+         <name>org.eclipse.jdt.core.javabuilder</name></buildCommand></buildSpec><natures>\
+         <nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>",
+    )
+    .unwrap();
+    let library = agent.to_string_lossy().replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+    std::fs::write(
+        root.join(".classpath"),
+        format!(
+            "<classpath><classpathentry kind=\"src\" path=\"src\"/>\
+             <classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/>\
+             <classpathentry kind=\"lib\" path=\"{library}\"/>\
+             <classpathentry kind=\"output\" path=\"bin\"/></classpath>"
+        ),
+    )
+    .unwrap();
+    let mut java = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("java")).unwrap();
+    java.language_servers.retain(|s| s.name == "jdtls");
+    let server = &mut java.language_servers[0];
+    if let Ok(bin) = std::env::var("OPENIDEA_TEST_JDTLS") {
+        server.command = bin;
+    }
+    server.args.extend([
+        "-data".into(),
+        root.join("workspace").to_string_lossy().into_owned(),
+        format!("--jvm-arg=-javaagent:{}", agent.display()),
+    ]);
+    let (mgr, _) = manager(&root, LanguageRegistry::from_configs(vec![java]));
+    let doc = DocId::next();
+    mgr.did_open(doc, &path, &LanguageId::new("java"), 1, source);
+    let expected: &[(&str, &[&str])] = &[
+        ("User", &["getName()", "setName(String)", "getAge()", "setAge(int)", "User(String, int)", "builder()"]),
+        ("UserBuilder", &["name(String)", "age(int)", "build()"]),
+        ("Profile", &["Profile(String)", "getId()", "getName()", "setName(String)"]),
+        ("Logged", &["log", "write()"]),
+        ("PlainUser", &["PlainUser(String)", "getName()", "setName(String)"]),
+    ];
+    fn has_members(items: &[ide_core::OutlineItem], owner: &str, names: &[&str]) -> bool {
+        items.iter().any(|item| {
+            (item.name == owner && names.iter().all(|n| item.children.iter().any(|c| c.name == *n)))
+                || has_members(&item.children, owner, names)
+        })
+    }
+    retry("Lombok document symbols", Duration::from_secs(120), || async {
+        let items = mgr.document_symbols(doc).await.ok().flatten()?;
+        expected.iter().all(|(owner, names)| has_members(&items, owner, names)).then_some(())
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(10), mgr.shutdown_all()).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires jdtls on PATH and a compatible JDK"]
 async fn intellij_java_formatter_preserves_manual_breaks_and_wraps_long_lines() {
     let dir = tempfile::tempdir().unwrap();
@@ -172,35 +287,54 @@ fn main() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires ty on PATH"]
 async fn ty_python_end_to_end() {
+    python_server_end_to_end("ty").await;
+}
+
+/// Pyright loads the workspace only after `workspace/didChangeConfiguration`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires pyright-langserver on PATH"]
+async fn pyright_python_end_to_end() {
+    python_server_end_to_end("pyright").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires basedpyright on PATH"]
+async fn basedpyright_python_end_to_end() {
+    python_server_end_to_end("basedpyright").await;
+}
+
+/// Definition and diagnostics from `name` alone, in a project without configuration.
+async fn python_server_end_to_end(name: &str) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let path = root.join("example.py");
     let source = "def greet(name: str) -> str:\n    return name\n\nresult = greet('Ada')\nbad: int = 'wrong'\n";
     std::fs::write(&path, source).unwrap();
     let mut python = LanguageRegistry::load(None).unwrap().get(&LanguageId::new("python")).unwrap();
-    python.language_servers.retain(|server| server.name == "ty");
+    python.language_servers.retain(|server| server.name == name);
     assert_eq!(python.language_servers.len(), 1);
+    python.language_servers[0].fallback = false;
     let (mgr, events) = manager(&root, LanguageRegistry::from_configs(vec![python]));
     let doc = DocId::next();
     mgr.did_open(doc, &path, &LanguageId::new("python"), 1, source);
-    retry("ty ready", Duration::from_secs(30), || {
-        let status = last_status(&events, "ty");
+    retry(&format!("{name} ready"), Duration::from_secs(30), || {
+        let status = last_status(&events, name);
         if let Some((ServerStatus::Crashed | ServerStatus::Missing | ServerStatus::Misconfigured, msg)) = &status {
-            panic!("ty failed: {msg:?}");
+            panic!("{name} failed: {msg:?}");
         }
         async move { matches!(status, Some((ServerStatus::Ready | ServerStatus::Busy, _))).then_some(()) }
     })
     .await;
-    let defs = retry("ty definition", Duration::from_secs(30), || {
+    let defs = retry(&format!("{name} definition"), Duration::from_secs(30), || {
         let mgr = mgr.clone();
         async move { mgr.goto(doc, Pos::new(3, 10), GotoKind::Definition).await.ok().filter(|d| !d.is_empty()) }
     })
     .await;
     assert_eq!(defs[0].path, path);
     assert_eq!(defs[0].range.start.line, 0);
-    retry("ty diagnostics", Duration::from_secs(30), || {
+    retry(&format!("{name} diagnostics"), Duration::from_secs(30), || {
         let found = events.lock().iter().any(
-            |event| matches!(event, IdeEvent::Diagnostics { source, items, .. } if source == "ty" && !items.is_empty()),
+            |event| matches!(event, IdeEvent::Diagnostics { source, items, .. } if source == name && !items.is_empty()),
         );
         async move { found.then_some(()) }
     })

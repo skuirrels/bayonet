@@ -1367,6 +1367,30 @@ fn status_reflects_external_changes_without_reopen() {
 }
 
 #[test]
+fn branches_in_newly_written_packs_stay_visible() {
+    let fx = Fixture::new();
+    fx.write("a", "1\n");
+    fx.commit_all("a");
+    let repo = fx.repo();
+    assert_eq!(repo.branches().unwrap().len(), 1);
+
+    // An external pull: objects move into a pack the IDE has never seen, then a
+    // new branch points at a commit living only in that pack.
+    fx.write("a", "2\n");
+    fx.commit_all("b");
+    fx.git(&["repack", "-adq"]);
+    fx.git(&["checkout", "-q", "-b", "uat"]);
+    let uat = fx.git(&["rev-parse", "uat"]);
+    assert!(std::fs::read_dir(fx.path(".git/objects/pack")).unwrap().count() >= 2);
+
+    let names: Vec<String> = repo.branches().unwrap().into_iter().map(|b| b.name).collect();
+    assert!(names.contains(&"uat".to_string()), "branches: {names:?}, want uat at {uat}");
+
+    // Status peels HEAD for the tree-index diff: the same failure drops it too.
+    assert!(repo.status().is_ok(), "status failed: {:?}", repo.status().unwrap_err());
+}
+
+#[test]
 fn linked_worktree_and_submodule() {
     let fx = Fixture::new();
     fx.write("a.txt", "a\n");
@@ -1856,4 +1880,25 @@ fn reword_refuses_commits_outside_the_current_branch() {
     let side = fx.commit_all("side");
     fx.git(&["checkout", "-q", "main"]);
     assert!(fx.repo().reword(&side, "other").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn status_skips_a_directory_it_cannot_read() {
+    // `git status` warns "could not open directory: Permission denied" and lists the rest.
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("a.txt", "a\n");
+    fx.commit_all("init");
+    fx.write("a.txt", "b\n");
+    fx.write("new.txt", "n\n");
+    let locked = fx.path("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(locked.join("inside.txt"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let st = fx.repo().status();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let st = st.unwrap();
+    assert_eq!(status_of(&st, "a.txt").unstaged, Some(ChangeKind::Modified));
+    assert_eq!(status_of(&st, "new.txt").unstaged, Some(ChangeKind::Untracked));
 }

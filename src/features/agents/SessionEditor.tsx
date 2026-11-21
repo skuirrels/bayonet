@@ -344,13 +344,13 @@ function Limit({ limit, now }: { limit: AgentLimit; now: number }) {
   );
 }
 
-/** Context window use: "12%", the numbers in the tooltip. */
+/** Context window use: "167k/1M (17%)", the exact counts in the tooltip. */
 function Usage({ usage }: { usage: AgentUsage }) {
   const label = usageLabel(usage);
   return (
     <span className={styles.meter} title={label.detail} aria-label={`Context ${label.short}, ${label.detail}`}>
       <span className={styles.usageBar} aria-hidden>
-        <span style={{ width: label.short }} />
+        <span style={{ width: `${label.percent}%` }} />
       </span>
       {label.short}
     </span>
@@ -1533,7 +1533,8 @@ function ChangesPane({
                 </span>
                 <span className={styles.changeDir}>{relativeDir(task.cwd, c.path)}</span>
                 <span className={styles.changeStat}>
-                  <span className={styles.added}>+{c.added}</span> <span className={styles.removed}>−{c.removed}</span>
+                  {c.added > 0 && <span className={styles.added}>+{c.added}</span>}{" "}
+                  {c.removed > 0 && <span className={styles.removed}>−{c.removed}</span>}
                 </span>
               </span>
             )}

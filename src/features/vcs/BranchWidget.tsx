@@ -442,7 +442,7 @@ function BranchesPanel({ onClose, actions: baseActions, root, fallback, onBack }
     <>
       <div className={styles.search}>
         <SearchField
-          className={root ? styles.searchGrow : undefined}
+          className={styles.searchGrow}
           data-autofocus
           value={query}
           onChange={(v) => {

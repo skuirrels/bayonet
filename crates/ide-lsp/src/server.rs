@@ -255,6 +255,16 @@ impl Server {
         self.phase.send_replace(Phase::Down);
     }
 
+    /// [`Self::announce_down`] for instance `generation`'s closed connection, unless a
+    /// newer instance has started since: its close handler runs on its own task, and a
+    /// restart must not wake on the old instance going away.
+    pub fn announce_closed(&self, generation: u64) {
+        let st = self.state.lock();
+        if st.generation == generation {
+            self.phase.send_replace(Phase::Down);
+        }
+    }
+
     pub fn running(&self) -> Option<Running> {
         match &self.state.lock().conn {
             Conn::Ready(r) => Some(r.clone()),

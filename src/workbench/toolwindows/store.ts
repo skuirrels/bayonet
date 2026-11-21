@@ -223,7 +223,7 @@ function persist() {
     distractionFreeStash,
   } = useToolWindowLayout.getState();
   // Distraction Free Mode is not saved: the layout to restore is.
-  const visible = distractionFreeStash ?? current;
+  const visible = withoutSessionWindows(distractionFreeStash ?? current);
   try {
     localStorage.setItem(
       storageKey(scope),
@@ -305,6 +305,17 @@ function sanitizeVisible(raw: unknown): SlotRecord {
   return out;
 }
 
+/** `visible` without the windows whose content doesn't outlive the project window (Run, Debug). */
+function withoutSessionWindows(visible: SlotRecord): SlotRecord {
+  const windows = useContributions.getState().toolWindows;
+  const out = { ...visible };
+  for (const slot of SLOTS) {
+    const id = out[slot];
+    if (id && windows.get(id)?.sessionContent) out[slot] = null;
+  }
+  return out;
+}
+
 /**
  * Moves visible windows recorded in an area they don't dock in (a layout
  * saved before a window became split, or before split areas existed) to
@@ -331,7 +342,7 @@ export function loadToolWindowLayout(scope: string) {
   const saved = readStorage(scope);
   const version = typeof saved?.v === "number" ? saved.v : 1;
   const placements = sanitizePlacements(saved?.placements, version);
-  let visible = sanitizeVisible(saved?.visible);
+  let visible = withoutSessionWindows(sanitizeVisible(saved?.visible));
   visible = reconcile(visible, placements) ?? visible;
   useToolWindowLayout.setState({
     ...initial(),
@@ -365,9 +376,13 @@ export function installToolWindowLayoutSync(): () => void {
 }
 
 function publishVisibility() {
-  const { visible, placements } = useToolWindowLayout.getState();
+  const { visible, placements, maximized } = useToolWindowLayout.getState();
   for (const tw of useContributions.getState().toolWindows.values()) {
-    setContext(`toolWindow.${tw.id}.visible`, visible[slotOf(placed(tw, placements))] === tw.id);
+    const window = placed(tw, placements);
+    setContext(
+      `toolWindow.${tw.id}.visible`,
+      (!maximized || maximized === window.anchor) && visible[slotOf(window)] === tw.id,
+    );
   }
 }
 
@@ -379,7 +394,8 @@ function update(patch: Partial<ToolWindowLayoutState>, save = true) {
 
 export function isToolWindowVisible(id: string): boolean {
   const slot = slotOfId(id);
-  return !!slot && useToolWindowLayout.getState().visible[slot] === id;
+  const { visible, maximized } = useToolWindowLayout.getState();
+  return !!slot && (!maximized || maximized === slotAnchor(slot)) && visible[slot] === id;
 }
 
 /** Last shown or focused tool window, kept after it is hidden (Jump to Last Tool Window). */
@@ -426,7 +442,10 @@ export function hideToolWindow(id: string) {
     maximized: s.maximized === slotAnchor(slot) && sideEmpty ? null : s.maximized,
     lastActive: s.lastActive === id ? null : s.lastActive,
   });
-  if (hadFocus) focusEditor();
+  if (hadFocus) {
+    if (s.maximized === slotAnchor(slot) && !sideEmpty) focusToolWindow(s.visible[partnerSlot(slot)]!);
+    else focusEditor();
+  }
 }
 
 /** Whether `tw` has a stripe button: the user's choice, else its default. */
@@ -552,7 +571,14 @@ export function toggleMaximizeToolWindow(id: string) {
   if (!a) return;
   if (!isToolWindowVisible(id)) showToolWindow(id, true);
   const s = useToolWindowLayout.getState();
-  update({ maximized: s.maximized === a ? null : a }, false);
+  update({ maximized: s.maximized === a ? null : a, focusRequest: { id, seq: ++focusSeq } }, false);
+}
+
+/** Reveals the editor when navigation opens or focuses an editor tab. */
+export function restoreMaximizedToolWindow() {
+  const maximized = !!useToolWindowLayout.getState().maximized;
+  if (maximized) update({ maximized: null }, false);
+  return maximized;
 }
 
 export function setFocusedToolWindow(id: string | null) {

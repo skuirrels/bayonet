@@ -285,7 +285,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 50%;
+  /* May use the whole subject cell when space allows (#2447); shrinks with
+     per-label ellipsis before crowding out the commit message. */
+  max-width: 100%;
   overflow: hidden;
   margin-left: auto;
 }
@@ -303,7 +305,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  max-width: 180px;
+  /* Sizes to content (#2447): truncates with ellipsis only when .refs runs
+     out of room; the full name stays available via the title tooltip. */
 }
 /* Outlined tag glyph in the ref's colour. */
 .ref::before {
@@ -415,6 +418,54 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+/* Go to a merge commit's file: parent 1 | merge result | parent 2, each pane scrolling itself. */
+.mergeDiff {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mergeDiffLabels {
+  flex: none;
+  height: var(--h-row);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-secondary);
+  font-size: var(--fs-small);
+}
+.mergeDiffLabels > span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mergeDiffLabels > span + span {
+  border-left: 1px solid var(--border);
+}
+.mergeDiffPanes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.mergeDiffPane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.mergeDiffPane + .mergeDiffPane {
+  border-left: 1px solid var(--border);
+}
+.mergeDiffPane > :global(.cm-editor) {
+  flex: 1;
+  min-width: 0;
 }
 .subjectLine {
   color: var(--fg-strong);
@@ -599,7 +650,6 @@
 .worktreeList {
   flex: 1;
   min-height: 0;
-  overflow: auto;
 }
 
 .colRepository {

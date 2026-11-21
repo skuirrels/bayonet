@@ -126,7 +126,9 @@ function paneMenu(e: MouseEvent, key: string) {
       icon: "close",
       run: () =>
         void requestCloseSession(key).then((closed) => {
-          if (closed) requestAnimationFrame(() => activeSession()?.focus());
+          if (!closed) return;
+          if (useTerminals.getState().tabs.length === 0) toolWindowService().hide("terminal");
+          else requestAnimationFrame(() => activeSession()?.focus());
         }),
     },
   ];
@@ -459,7 +461,7 @@ function GroupTabs({ group }: { group: string }) {
             />
             <IconButton
               ref={menuRef}
-              icon="chevron-down"
+              icon="toolbar-expand"
               size="small"
               title="More Terminal Options"
               aria-haspopup="menu"

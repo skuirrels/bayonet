@@ -126,7 +126,7 @@
   left: 0;
   min-width: 100%;
   padding: 0 12px;
-  line-height: 20px;
+  line-height: inherit;
   white-space: pre;
   tab-size: 4;
 }
@@ -284,6 +284,16 @@
 .widgetFilledStop:hover:not(:disabled) {
   background: var(--danger);
 }
+.widgetStopping {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  line-height: 0;
+  background: var(--warning);
+  color: var(--fg-on-accent);
+}
 .widgetFilled:hover:not(:disabled) {
   filter: brightness(0.94);
 }
@@ -420,10 +430,15 @@
   display: flex;
   height: 100%;
   min-height: min(520px, calc(100vh - 200px));
+  /* A cap, not just a floor: left list and right form scroll on their own
+     (IDEA), so the panes never grow the dialog body into one shared scroller.
+     vh − ~104px is what a full-height resized dialog's body can hold anyway. */
+  max-height: calc(100vh - 120px);
 }
 .editSidebar {
   flex: none;
   width: 250px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border-popup);
@@ -437,6 +452,7 @@
 }
 .editList {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 4px 0;
 }
@@ -574,6 +590,29 @@
   font-family: var(--font-mono);
   font-size: var(--fs-ui);
   outline: none;
+}
+.textareaWithButton {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+.textareaWithButton > textarea {
+  flex: 1;
+  min-width: 0;
+}
+.textareaWithButton > button {
+  flex-shrink: 0;
+}
+/* One visual line per line of text: a long argument scrolls instead of wrapping. */
+.expandedTextarea {
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  box-sizing: border-box;
+  resize: none;
+  white-space: pre;
+  overflow: auto;
 }
 .textarea:focus {
   box-shadow: inset 0 0 0 1px var(--focus-ring);

@@ -1,7 +1,7 @@
 /** Editor actions (ids from keymaps/intellij-macos.ts). */
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { indentSelection, moveLineDown, moveLineUp, toggleBlockComment } from "@codemirror/commands";
+import { indentSelection, moveLineDown, moveLineUp } from "@codemirror/commands";
 import { foldEffect, syntaxTree, toggleFold } from "@codemirror/language";
 import { acceptCompletion, completionStatus } from "@codemirror/autocomplete";
 import { executeAction, registerActions, type Action } from "@/platform/actions";
@@ -9,6 +9,7 @@ import { getContext } from "@/platform/context";
 import { editorController, useGotoLine, useTabs } from "./controller";
 import {
   addCaretsToLineEnds,
+  commentBlock,
   commentLine,
   completeStatement,
   deleteLine,
@@ -62,7 +63,7 @@ import { isColumnMode, toggleColumnMode } from "./cm/columnMode";
 import { cloneCaretAbove, cloneCaretBelow } from "./cm/verticalMotion";
 import { pasteAsPlainText, pasteFromHistory, unwrapAtCaret } from "./extras";
 import { cyclicExpandWord } from "./wordCompletion";
-import { copyReferenceToClipboard, qualifiedReference, referenceOffset } from "./copyReference";
+import { copyReferenceToClipboard, declaredName, qualifiedReference, referenceOffset } from "./copyReference";
 import { declarationChain } from "./view/outline";
 import { recordClipboard } from "./clipboardHistory";
 import { useDocMeta, useOutline } from "./model/document";
@@ -72,6 +73,8 @@ import { useProject } from "@/platform/project";
 import { call, commands } from "@/platform/ipc";
 import { editorPrefs } from "@/platform/editorSettings";
 import { notifications } from "@/workbench/contributions";
+import { togglePinSelectedContent } from "@/workbench/toolwindows/content";
+import { useToolWindowLayout } from "@/workbench/toolwindows/store";
 import { toggleReadOnly } from "./fileAttributes";
 import { openNavBarPopup } from "./view/NavBarPopup";
 import {
@@ -439,7 +442,7 @@ async function resolveReference(view: EditorView, slot: EditorSlot): Promise<str
         path: slot.model.path,
         root,
         text: state.doc.toString(),
-        chain: localChain.map((item) => item.name),
+        chain: localChain.map(declaredName),
         line: position.number - 1,
       });
     } else {
@@ -462,7 +465,7 @@ async function resolveReference(view: EditorView, slot: EditorSlot): Promise<str
               path: target.path,
               root,
               text: lines.join("\n"),
-              chain: chain.map((item) => item.name),
+              chain: chain.map(declaredName),
               line: pos.line,
             });
           }
@@ -573,7 +576,7 @@ export function registerEditorActions(): () => void {
       "color scheme",
     ]),
     text("code.commentLine", "Comment with Line Comment", (v) => commentLine(v)),
-    text("code.commentBlock", "Comment with Block Comment", (v) => toggleBlockComment(v)),
+    text("code.commentBlock", "Comment with Block Comment", (v) => commentBlock(v)),
     text("code.duplicateLine", "Duplicate Line or Selection", (v) => duplicateLineOrSelection(v)),
     text("code.deleteLine", "Delete Line", (v) => deleteLine(v)),
     text("code.moveLineUp", "Move Line Up", (v) => moveLineUp(v)),
@@ -929,8 +932,11 @@ export function registerEditorActions(): () => void {
       title: "Pin / Unpin Tab",
       category: "Window",
       icon: "pin",
-      when: TABS_WHEN,
+      // IDEA: in a focused tool window, its selected content tab (Find, Usages).
+      when: "editorTabsOpen || toolWindowFocus",
       run: () => {
+        const tw = useToolWindowLayout.getState().focused;
+        if (tw) return void togglePinSelectedContent(tw);
         const t = activePaneTab();
         if (t) ctrl.togglePin(t.paneId, t.tabId);
       },

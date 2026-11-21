@@ -313,8 +313,8 @@ export const viewerHighlight = HighlightStyle.define([
 export const viewerTheme = EditorView.theme(
   {
     ...overviewStyles,
+    "&.cm-editor": { height: "100%" },
     "&": {
-      height: "100%",
       backgroundColor: "var(--bg-app)",
       color: "var(--fg)",
       fontSize: "var(--openidea-editor-font-size, var(--fs-code))",
@@ -391,6 +391,8 @@ export const viewerTheme = EditorView.theme(
     "&.cm-merge-a .cm-changedLineGutter, .cm-deletedLineGutter": { background: "var(--gutter-deleted)" },
     "&.cm-merge-b .cm-changedLineGutter": { background: "var(--gutter-modified)" },
     ".cm-collapsedLines": {
+      WebkitUserSelect: "none",
+      userSelect: "none",
       padding: "2px 10px",
       background: "var(--bg-elev)",
       color: "var(--fg-subtle)",

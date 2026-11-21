@@ -198,6 +198,32 @@ describe("Spring mappings (Kotlin)", () => {
   });
 });
 
+describe("mapping conditions", () => {
+  it("keeps a value that has its own '='", () => {
+    const [controller] = springControllers(`package demo;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class ReportController {
+    @GetMapping(path = "/report", headers = "Accept=text/plain;charset=UTF-8", params = "range=a=b")
+    public String report() { return ""; }
+
+    @PostMapping(path = "/upload", headers = {"Content-Type=multipart/form-data; boundary=xyz", "X-Token=YWJj=="})
+    public void upload() {}
+}
+`);
+    const [report, upload] = controller!.endpoints;
+    expect(report).toMatchObject({
+      query: [{ name: "range", value: "a=b" }],
+      headers: [{ name: "Accept", value: "text/plain;charset=UTF-8" }],
+    });
+    expect(upload!.headers).toEqual([
+      { name: "Content-Type", value: "multipart/form-data; boundary=xyz" },
+      { name: "X-Token", value: "YWJj==" },
+    ]);
+  });
+});
+
 describe("non-controllers", () => {
   it("ignores classes that are not controllers and files without any", () => {
     expect(springControllers('@Service class A { @GetMapping("/x") void a() {} }')).toEqual([]);
@@ -251,6 +277,19 @@ describe("server address", () => {
     const fs: SourceReader = { read: async (p) => files[p] ?? null };
     expect(await findHost("/ws/api/src/main/java/a/A.java", "/ws", fs)).toBe("http://localhost:8001");
     expect(await findHost("/ws/other/A.java", "/ws", fs)).toBe("http://localhost:9000");
+  });
+
+  it("reads the active profiles' files over the base ones", async () => {
+    const files: Record<string, string> = {
+      "/ws/api/src/main/resources/application.yml":
+        "server:\n  port: 8001\n  servlet:\n    context-path: /api\nspring:\n  profiles:\n    active: ${PROFILE:local}, dev\n",
+      "/ws/api/src/main/resources/application-local.properties": "server.port=7000\n",
+      "/ws/api/src/main/resources/application-dev.yml": "server:\n  port: 9100\n",
+    };
+    const fs: SourceReader = { read: async (p) => files[p] ?? null };
+    expect(await findHost("/ws/api/src/main/java/a/A.java", "/ws", fs)).toBe("http://localhost:9100/api");
+    delete files["/ws/api/src/main/resources/application-dev.yml"];
+    expect(await findHost("/ws/api/src/main/java/a/A.java", "/ws", fs)).toBe("http://localhost:7000/api");
   });
 });
 

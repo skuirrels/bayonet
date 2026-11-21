@@ -277,11 +277,38 @@ fn resolve_gradle_command(root: &Path, build_dir: &Path, s: &Settings, use_wrapp
     }
     let wrapper = build_dir.join(if cfg!(windows) { "gradlew.bat" } else { "gradlew" });
     if use_wrapper && wrapper.is_file() {
+        // `gradlew` can't start without its jar, which `.gitignore`s with `*.jar` often leave
+        // out: run the distribution the wrapper already unpacked instead.
+        if build_dir.join("gradle/wrapper/gradle-wrapper.jar").is_file() {
+            return wrapper;
+        }
+        let home = setting_path(root, &g.user_home)
+            .or_else(|| std::env::var_os("GRADLE_USER_HOME").map(PathBuf::from))
+            .or_else(|| Some(crate::home_dir()?.join(".gradle")));
+        if let Some(gradle) = home.and_then(|home| unpacked_wrapper_distribution(build_dir, &home)) {
+            return gradle;
+        }
+        // Nothing to run instead: the wrapper's failure explains what is missing.
         return wrapper;
     }
     pinned::pinned_install(build_dir, Tool::Gradle)
         .map(|(home, _)| home.join("bin").join(name))
         .unwrap_or_else(|| name.into())
+}
+
+/// `bin/gradle` of the distribution `gradle/wrapper/gradle-wrapper.properties` names, once the
+/// wrapper has unpacked it in `<gradle_user_home>/wrapper/dists` (and marked it complete).
+fn unpacked_wrapper_distribution(build_dir: &Path, gradle_user_home: &Path) -> Option<PathBuf> {
+    let properties = std::fs::read_to_string(build_dir.join("gradle/wrapper/gradle-wrapper.properties")).ok()?;
+    let url = properties.lines().find_map(|line| line.trim().strip_prefix("distributionUrl="))?;
+    let zip = url.trim().replace("\\:", ":").rsplit('/').next()?.to_owned();
+    let name = zip.strip_suffix(".zip")?;
+    let gradle = if cfg!(windows) { "gradle.bat" } else { "gradle" };
+    // One directory per distribution URL hash, each holding the unpacked `gradle-<version>`.
+    let hashes = std::fs::read_dir(gradle_user_home.join("wrapper/dists").join(name)).ok()?;
+    hashes.flatten().map(|e| e.path()).filter(|dir| dir.join(format!("{zip}.ok")).is_file()).find_map(|dir| {
+        std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path().join("bin").join(gradle)).find(|p| p.is_file())
+    })
 }
 
 fn gradle_run_jdk<'a>(
@@ -508,6 +535,63 @@ pub fn maven_local_repository(root: &Path, s: &Settings) -> Option<PathBuf> {
     })
 }
 
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Inserts `<localRepository>` right after the `<settings>` open tag.
+fn inject_local_repository(settings_xml: &str, repo: &str) -> Option<String> {
+    let start = settings_xml.find("<settings")?;
+    let end = settings_xml[start..].find('>')? + start;
+    let mut out = String::with_capacity(settings_xml.len() + repo.len() + 40);
+    out.push_str(&settings_xml[..=end]);
+    out.push_str("<localRepository>");
+    out.push_str(&xml_escape(repo));
+    out.push_str("</localRepository>");
+    out.push_str(&settings_xml[end + 1..]);
+    Some(out)
+}
+
+fn write_m2e_settings(root: &Path, text: &str) -> Option<PathBuf> {
+    let file = ide_core::project_dir::path(root, "maven-settings.xml");
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    match std::fs::read_to_string(&file) {
+        Ok(existing) if existing == text => {}
+        _ => std::fs::write(&file, text).ok()?,
+    }
+    Some(file)
+}
+
+/// The user settings file m2e (the JDTLS Maven import) should read: the
+/// configured `settings.xml` when it already declares `<localRepository>`,
+/// else a derived copy under `<root>/.openidea/` with the configured local
+/// repository injected. m2e resolves the local repository from the settings
+/// XML, not from `-Dmaven.repo.local`, so without this the import downloads
+/// into `~/.m2/repository` even when the IDE's own `mvn` runs honor the
+/// configured path (#1739). `None` = m2e's default applies.
+pub fn maven_user_settings_for_m2e(root: &Path, s: &Settings) -> Option<PathBuf> {
+    let m = &s.languages.java.maven;
+    if let Some(file) = setting_path(root, &m.user_settings) {
+        let text = std::fs::read_to_string(&file).ok()?;
+        if crate::java::xml_value(&crate::lombok::strip_xml_comments(&text), "localRepository").is_some() {
+            return Some(file);
+        }
+        if let Some(repo) = setting_path(root, &m.local_repository) {
+            let merged = inject_local_repository(&text, &repo.to_string_lossy())?;
+            if let Some(derived) = write_m2e_settings(root, &merged) {
+                return Some(derived);
+            }
+        }
+        return Some(file);
+    }
+    let repo = setting_path(root, &m.local_repository)?;
+    let minimal =
+        format!("<settings><localRepository>{}</localRepository></settings>", xml_escape(&repo.to_string_lossy()));
+    write_m2e_settings(root, &minimal)
+}
+
 /// TypeScript `lib` directory for the selected version; `None` = the server's bundled one.
 pub fn tsdk(root: &Path, s: &Settings) -> Option<PathBuf> {
     match s.languages.typescript.version.trim() {
@@ -687,9 +771,10 @@ org.eclipse.jdt.core.compiler.problem.discouragedReference=warning\n";
         tracing::warn!("jdtls: cannot write compiler defaults: {e}");
         return;
     }
-    // jdtls accepts absolute filesystem paths as well as URLs (including paths
-    // containing spaces and Windows backslashes). Explicit server settings win later.
-    let defaults = json!({"settings": {"java": {"settings": {"url": file.to_string_lossy()}}}});
+    // A `file:` URI: jdtls parses the setting as a URI when matching watched-file
+    // changes, which fails on a bare path with spaces. Explicit server settings win later.
+    let url = url::Url::from_file_path(&file).map_or_else(|()| file.to_string_lossy().into_owned(), String::from);
+    let defaults = json!({"settings": {"java": {"settings": {"url": url}}}});
     let existing = cfg.initialization_options.clone();
     merge_init_options(cfg, defaults);
     if let Some(existing) = existing {
@@ -722,10 +807,15 @@ pub fn resolve_run_command(config: &mut RunConfig, root: &Path, s: &Settings) {
 }
 
 pub fn configure_server(cfg: &mut LanguageServerConfig, root: &Path, server_root: &Path, s: &Settings) {
+    let mut path_dirs: Vec<PathBuf> = Vec::new();
     if let Some(custom) = tool_command(root, s, &cfg.command) {
+        // An executable chosen from a Node.js installation (`~/.nvm/versions/node/v26/bin/tsc`,
+        // its `npx`) runs on that Node: its `#!/usr/bin/env node` finds the `node` beside it.
+        if let Some(bin) = custom.parent().filter(|bin| bin.join(exe("node")).is_file()) {
+            path_dirs.push(bin.to_path_buf());
+        }
         cfg.command = custom.to_string_lossy().into_owned();
     }
-    let mut path_dirs: Vec<PathBuf> = Vec::new();
     let name = cfg.name.clone();
     let name = name.as_str();
 
@@ -840,18 +930,22 @@ pub fn configure_server(cfg: &mut LanguageServerConfig, root: &Path, server_root
         // The jdtls launcher forwards `--jvm-arg=` values to the JVM it starts.
         let args = s.languages.java.jdtls_vm_args.split_whitespace().map(|a| format!("--jvm-arg={a}"));
         cfg.args.extend(args);
-        // m2e (the Maven import) reads mirrors, servers and `<localRepository>` from it.
-        if let Some(file) = setting_path(root, &s.languages.java.maven.user_settings) {
+        // m2e (the Maven import) reads mirrors, servers and `<localRepository>`
+        // from the settings file — never from `-Dmaven.repo.local`. The
+        // derived file carries the configured local repository so the import
+        // downloads where the IDE's own `mvn` runs do (#1739).
+        if let Some(file) =
+            maven_user_settings_for_m2e(root, s).or_else(|| setting_path(root, &s.languages.java.maven.user_settings))
+        {
             let file = file.to_string_lossy();
             merge_init_options(
                 cfg,
                 json!({ "settings": { "java": { "configuration": { "maven": { "userSettings": file } } } } }),
             );
         }
-        // m2e resolves and downloads into `maven.repo.local`; without it the
-        // embedded Maven falls back to ~/.m2 even when the IDE's own `mvn`
-        // runs honor the configured local repository. A `-Dmaven.repo.local`
-        // the user put in their own jdtls VM options wins.
+        // The JVM system property is still forwarded for JVM-level consumers,
+        // but it is the settings file above that m2e honors. A
+        // `-Dmaven.repo.local` the user put in their own jdtls VM options wins.
         if let Some(repo) = maven_local_repository(root, s) {
             let arg = format!("-Dmaven.repo.local={}", repo.to_string_lossy());
             let taken = cfg.args.iter().enumerate().any(|(i, a)| {
@@ -1441,13 +1535,18 @@ mod java_compiler_tests {
         serde_json::to_value(cfg.initialization_options.as_ref().unwrap()).unwrap()
     }
 
+    fn prefs_path(options: &Value) -> PathBuf {
+        let url = options.pointer("/settings/java/settings/url").unwrap().as_str().unwrap();
+        url::Url::parse(url).unwrap().to_file_path().unwrap()
+    }
+
     #[test]
     fn serial_version_inspection_sets_the_compiler_option() {
         let tmp = tempfile::tempdir().unwrap();
         let url = |inspections: &InspectionSettings| {
             let mut cfg = custom_server("jdtls", &LanguageServerSettings::default());
             configure_java_compiler(&mut cfg, tmp.path(), inspections);
-            options(&cfg).pointer("/settings/java/settings/url").unwrap().as_str().unwrap().to_owned()
+            prefs_path(&options(&cfg))
         };
         let set = |o: ide_core::settings::InspectionOverride| {
             let mut s = InspectionSettings::default();
@@ -1486,7 +1585,9 @@ mod java_compiler_tests {
         merge_init_options(&mut cfg, json!({"settings": {"java": {"format": {"tabSize": 4}}}}));
         configure_java_compiler(&mut cfg, &cache, &InspectionSettings::default());
         let options = options(&cfg);
-        let path = PathBuf::from(options.pointer("/settings/java/settings/url").unwrap().as_str().unwrap());
+        let url = options.pointer("/settings/java/settings/url").unwrap().as_str().unwrap();
+        assert!(url.starts_with("file://") && !url.contains(' '), "{url}");
+        let path = prefs_path(&options);
         assert!(path.starts_with(&cache));
         let prefs = std::fs::read_to_string(&path).unwrap();
         assert_eq!(prefs.lines().count(), 2);

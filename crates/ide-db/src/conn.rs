@@ -165,6 +165,16 @@ fn mssql_pool_err(e: bb8::RunError<tiberius::error::Error>) -> IdeError {
     }
 }
 
+/// Tiberius requires TLS when a TLS backend is enabled. `trust_cert` only skips
+/// certificate checks, so Disable has to turn encryption off.
+fn apply_sqlserver_ssl(config: &mut tiberius::Config, ssl: DbSslMode) {
+    match ssl {
+        DbSslMode::Disable => config.encryption(tiberius::EncryptionLevel::NotSupported),
+        DbSslMode::Prefer => config.trust_cert(),
+        DbSslMode::Require | DbSslMode::VerifyCa | DbSslMode::VerifyFull => {}
+    }
+}
+
 const DAYS_1900_01_01: i64 = 693_595;
 
 /// Formats a proleptic Gregorian date given days since `0001-01-01`.
@@ -463,6 +473,13 @@ fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
 }
 
+/// sqlx's handshake flags for `sql_mode`: with either enabled it sends
+/// `SET sql_mode=(SELECT CONCAT(...))`, a non-constant subquery that MySQL-protocol
+/// servers like StarRocks reject (#2452), so the StarRocks preset turns both off.
+fn mysql_mode_flags(vendor: &str) -> (bool, bool) {
+    if vendor == "starrocks" { (false, false) } else { (true, true) }
+}
+
 /// A MySQL `SET` value: numbers and keywords as they are, anything else quoted.
 fn mysql_value(v: &str) -> String {
     let keyword = ["ON", "OFF", "TRUE", "FALSE", "DEFAULT"].iter().any(|k| k.eq_ignore_ascii_case(v));
@@ -704,6 +721,8 @@ impl Pool {
                 if let Some(c) = &setup.collation {
                     opts = opts.collation(c);
                 }
+                let (pipes_as_concat, no_engine_substitution) = mysql_mode_flags(&source.vendor);
+                opts = opts.pipes_as_concat(pipes_as_concat).no_engine_substitution(no_engine_substitution);
                 if let Some(n) = setup.statement_cache {
                     opts = opts.statement_cache_capacity(n);
                 }
@@ -734,9 +753,7 @@ impl Pool {
                 if !source.database.is_empty() {
                     config.database(&source.database);
                 }
-                if matches!(source.ssl, DbSslMode::Disable | DbSslMode::Prefer) {
-                    config.trust_cert();
-                }
+                apply_sqlserver_ssl(&mut config, source.ssl);
                 let manager = MssqlConnectionManager(config);
                 let pool = bb8::Pool::builder()
                     .max_size(MAX)
@@ -1052,6 +1069,33 @@ mod tests {
     use super::*;
     use crate::source::{DbOptions, DbProperty};
 
+    fn sqlserver_debug(ssl: DbSslMode) -> String {
+        let mut config = tiberius::Config::new();
+        apply_sqlserver_ssl(&mut config, ssl);
+        format!("{config:?}")
+    }
+
+    #[test]
+    fn sqlserver_disable_does_not_require_tls() {
+        let debug = sqlserver_debug(DbSslMode::Disable);
+        assert!(debug.contains("encryption: NotSupported"), "{debug}");
+        assert!(debug.contains("bypass: false"), "{debug}");
+    }
+
+    #[test]
+    fn sqlserver_prefer_trusts_the_server_certificate() {
+        let debug = sqlserver_debug(DbSslMode::Prefer);
+        assert!(debug.contains("encryption: Required"), "{debug}");
+        assert!(debug.contains("bypass: true"), "{debug}");
+    }
+
+    #[test]
+    fn sqlserver_require_keeps_validated_tls() {
+        let debug = sqlserver_debug(DbSslMode::Require);
+        assert!(debug.contains("encryption: Required"), "{debug}");
+        assert!(debug.contains("bypass: false"), "{debug}");
+    }
+
     #[test]
     fn discarded_sqlserver_connections_are_broken() {
         let manager = MssqlConnectionManager(tiberius::Config::new());
@@ -1192,6 +1236,15 @@ mod tests {
         assert_eq!(setup.connect_timeout, Some(Duration::from_secs(5)));
         assert!(Setup::of(&DataSource { properties: vec![prop("a; drop", "1")], ..s.clone() }).is_err());
         assert!(Setup::of(&DataSource { properties: vec![prop("connect_timeout", "soon")], ..s }).is_err());
+    }
+
+    #[test]
+    fn starrocks_disables_the_non_constant_sql_mode_handshake() {
+        // MySQL and its other wire-compatible presets keep sqlx's defaults.
+        for vendor in ["", "mysql", "mariadb", "tidb"] {
+            assert_eq!(mysql_mode_flags(vendor), (true, true), "{vendor}");
+        }
+        assert_eq!(mysql_mode_flags("starrocks"), (false, false));
     }
 
     #[test]
