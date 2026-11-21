@@ -4296,7 +4296,6 @@ version = "0.1.47"
 dependencies = [
  "base64 0.22.1",
  "blake3",
- "dunce",
  "ed25519-dalek",
  "ide-core",
  "parking_lot",
@@ -4664,7 +4663,6 @@ name = "ide-search"
 version = "0.1.47"
 dependencies = [
  "criterion",
- "encoding_rs",
  "globset",
  "grep-matcher",
  "grep-regex",

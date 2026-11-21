@@ -249,7 +249,6 @@
   "menu.refactor.extractInterface": "Extract Interface…",
   "menu.refactor.extractSuperclass": "Extract Superclass…",
   "menu.refactor.extractField": "Introduce Field…",
-  "menu.refactor.extractInterface": "Extract Interface…",
   "menu.refactor.extractMethod": "Extract Method…",
   "menu.refactor.extractParameter": "Introduce Parameter…",
   "menu.refactor.extractVariable": "Introduce Variable…",

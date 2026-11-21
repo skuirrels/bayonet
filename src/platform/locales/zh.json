@@ -249,7 +249,6 @@
   "menu.refactor.extractInterface": "提取接口…",
   "menu.refactor.extractSuperclass": "提取超类…",
   "menu.refactor.extractField": "引入字段…",
-  "menu.refactor.extractInterface": "提取接口…",
   "menu.refactor.extractMethod": "提取方法…",
   "menu.refactor.extractParameter": "引入参数…",
   "menu.refactor.extractVariable": "引入变量…",
