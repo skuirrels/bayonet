@@ -1,8 +1,9 @@
 /** Solution edits: the open solution's projects, and which solution dialog is showing. */
 import { create } from "zustand";
 import { commands } from "@/bindings";
-import type { Solution, SolutionItem } from "@/bindings";
+import type { ProjectLanguage, Solution, SolutionItem } from "@/bindings";
 import { setContext } from "@/platform/context";
+import { setProjectFolderIcons } from "@/platform/projectPresentation";
 import { call } from "@/platform/ipc";
 import { tx } from "@/platform/i18n";
 import { notifications } from "@/workbench/contributions";
@@ -50,11 +51,26 @@ export function projectsOf(items: readonly SolutionItem[], folders: string[] = [
   });
 }
 
+const PROJECT_ICONS: Partial<Record<ProjectLanguage, string>> = {
+  csharp: "project-csharp",
+  fsharp: "project-fsharp",
+};
+
+/** Project tree icons of the solution's project folders, by folder. */
+export function projectFolderIcons(items: readonly SolutionItem[], icons = new Map<string, string>()) {
+  for (const i of items) {
+    if (i.kind === "folder") projectFolderIcons(i.items, icons);
+    else if (i.kind === "project" && !i.missing) icons.set(parentOf(i.path), PROJECT_ICONS[i.language] ?? "module");
+  }
+  return icons;
+}
+
 /** Context key: a .NET solution (or lone project) is loaded. */
 const SOLUTION_OPEN = "dotnet.solutionOpen";
 
 export function setSolution(solution: Solution | null) {
   setContext(SOLUTION_OPEN, !!solution);
+  setProjectFolderIcons(solution ? projectFolderIcons(solution.items) : new Map());
   useSolution.setState({
     solution,
     projects: solution ? projectsOf(solution.items).sort((a, b) => a.name.localeCompare(b.name)) : [],

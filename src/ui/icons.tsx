@@ -32,8 +32,8 @@ const RAW = import.meta.glob<string>(["./expui/**/*.svg", "./openidea/**/*.svg"]
 
 const ICONS = {
   // Files & folders
-  folder: "nodes/folder",
-  "folder-open": "nodes/folder",
+  folder: "openidea/nodes/folder",
+  "folder-open": "openidea/nodes/folder",
   "folder-source": "nodes/sourceRoot",
   "folder-test": "nodes/testRoot",
   "folder-resources": "nodes/resourcesRoot",
@@ -223,6 +223,7 @@ const ICONS = {
   "text-match": "openidea/nodes/textMatch",
   "project-csharp": "openidea/nodes/csharpProject",
   "project-fsharp": "openidea/nodes/fsharpProject",
+  solution: "openidea/nodes/solution",
   analyzer: "openidea/nodes/analyzer",
   "open-in-tool-window": "general/openInToolWindow",
   "preserve-case": "inline/preserveCase",
