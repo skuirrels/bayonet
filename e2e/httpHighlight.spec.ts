@@ -11,15 +11,16 @@ for (const theme of ["light", "dark"] as const) {
           .locator("#http .cm-line span")
           .filter({ hasText: new RegExp(`^${text}$`) })
           .first();
-      const keyword = theme === "light" ? "rgb(0, 51, 179)" : "rgb(207, 142, 109)";
-      const property = theme === "light" ? "rgb(135, 16, 148)" : "rgb(199, 125, 187)";
-      const string = theme === "light" ? "rgb(6, 125, 23)" : "rgb(106, 171, 115)";
+      const keyword = theme === "light" ? "rgb(15, 84, 214)" : "rgb(108, 149, 235)";
+      const property = theme === "light" ? "rgb(0, 147, 161)" : "rgb(102, 195, 204)";
+      const string = theme === "light" ? "rgb(140, 108, 65)" : "rgb(201, 162, 109)";
       for (const method of ["GRPC", "WEBSOCKET", "POST"]) await expect(token(method)).toHaveCSS("color", keyword);
       await expect(token('"name"')).toHaveCSS("color", property);
       await expect(token('"World"')).toHaveCSS("color", string);
-      await expect(token("12")).toHaveCSS("color", theme === "light" ? "rgb(23, 80, 235)" : "rgb(42, 172, 184)");
+      await expect(token("12")).toHaveCSS("color", theme === "light" ? "rgb(171, 47, 107)" : "rgb(237, 148, 192)");
       for (const literal of ["true", "false", "null"]) await expect(token(literal)).toHaveCSS("color", keyword);
       await expect(token("Content-Type")).toHaveCSS("color", property);
+      await expect(page.locator("#json .cm-line").filter({ hasText: '"name"' }).first()).toBeVisible();
       for (const text of ['"name"', '"World"', "12", "true", "false", "null", "{", "[", ":", ","]) {
         const color = async (editor: string) =>
           page.locator(`${editor} .cm-line`).evaluateAll((lines, target) => {

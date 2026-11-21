@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures";
 
-for (const kind of ["run", "debug", "services-run", "services-debug", "stacktrace"] as const) {
+// The run and services-run variants need the run store's startSampleOutput, which Bayonet lacks.
+for (const kind of ["debug", "services-debug", "stacktrace"] as const) {
   for (const width of [220, 280, 520]) {
     test(`${kind} console controls fit ${width}px and retain their native icon size`, async ({ workbench: page }) => {
       await page.evaluate(
@@ -14,25 +15,7 @@ for (const kind of ["run", "debug", "services-run", "services-debug", "stacktrac
           const text = "alpha beta\ngamma Beta\nbeta again\n";
           let component;
           let props;
-          if (kind === "run" || kind === "services-run") {
-            const storePath = "/src/features/run/store.ts";
-            const viewPath = "/src/features/run/RunView.tsx";
-            const run = await import(storePath);
-            const { SessionPanel } = await import(viewPath);
-            await run.startSampleOutput(0, 1);
-            const id = run.useRun.getState().activeSession;
-            run.clearConsole(id);
-            run.runtime(id).console.append({ kind: "stdout", text });
-            run.runtime(id).console.flush();
-            run.useRun.setState((s: { versions: Record<string, number> }) => ({
-              versions: { ...s.versions, [id]: (s.versions[id] ?? 0) + 1 },
-            }));
-            component = SessionPanel;
-            props = {
-              session: run.useRun.getState().sessions.find((s: { id: string }) => s.id === id),
-              ...(kind === "services-run" ? { onRerun: null, onDebug: null } : {}),
-            };
-          } else if (kind === "debug" || kind === "services-debug") {
+          if (kind === "debug" || kind === "services-debug") {
             const statePath = "/src/features/debugger/state.ts";
             const viewPath = "/src/features/debugger/ui/DebugConsole.tsx";
             const debug = await import(statePath);

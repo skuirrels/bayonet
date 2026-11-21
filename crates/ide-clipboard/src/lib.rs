@@ -151,6 +151,7 @@ mod imp {
         fn GetClipboardData(format: u32) -> Handle;
         fn SetClipboardData(format: u32, memory: Handle) -> Handle;
         fn IsClipboardFormatAvailable(format: u32) -> i32;
+        fn RegisterClipboardFormatW(name: *const u16) -> u32;
     }
 
     #[link(name = "kernel32")]
