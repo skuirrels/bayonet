@@ -1330,7 +1330,6 @@ mod tests {
                 preferred: false,
                 edits: vec![(path.into(), Vec::new())],
                 data: None,
-                file_action: false,
             };
             assert_eq!(code_action_to_wit(&action).edits[0].path, expected);
         }
